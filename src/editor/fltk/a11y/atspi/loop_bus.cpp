@@ -164,9 +164,9 @@ bool send_message(LoopBus &loop, sd_bus_message *message) {
 
 bool call_async(LoopBus &loop, sd_bus_message *message,
                 const std::uint64_t timeout_usec, ReplyHandler reply,
-                void *userdata) {
+                void *userdata, sd_bus_slot **slot) {
   if (!message) return false;
-  const int started = sd_bus_call_async(loop.bus(), nullptr, message, reply,
+  const int started = sd_bus_call_async(loop.bus(), slot, message, reply,
                                         userdata, timeout_usec);
   sd_bus_message_unref(message);
   loop.schedule();

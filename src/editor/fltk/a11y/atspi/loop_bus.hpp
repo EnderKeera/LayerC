@@ -79,10 +79,12 @@ private:
 [[nodiscard]] bool send_message(LoopBus &loop, sd_bus_message *message);
 
 // Starts an asynchronous call (never a blocking round trip) and arms the loop.
-// The reply handler runs on the FLTK thread; its sd_bus_slot is released when
-// the call finishes.
+// The reply handler runs on the FLTK thread. With a slot pointer the caller
+// owns the slot and must unref it once the reply has been handled: unreffing a
+// pending slot cancels the call, so its handler never runs. Without one the
+// call is floating and sd-bus releases the slot when it finishes.
 [[nodiscard]] bool call_async(LoopBus &loop, sd_bus_message *message,
                               std::uint64_t timeout_usec, ReplyHandler reply,
-                              void *userdata);
+                              void *userdata, sd_bus_slot **slot = nullptr);
 
 } // namespace layerc::editor::a11y::atspi

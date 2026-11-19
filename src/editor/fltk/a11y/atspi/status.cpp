@@ -51,6 +51,10 @@ constexpr const char *kSessionOwner =
   return error->name;
 }
 
+// Releases a call slot. A pending request is cancelled, so its reply handler
+// never runs: an answer nobody waits for must not publish a status.
+void cancel(sd_bus_slot *&slot) { slot = sd_bus_slot_unref(slot); }
+
 // Reads IsEnabled and ScreenReaderEnabled out of a property dictionary; a
 // missing entry leaves its flag alone.
 void read_status(sd_bus_message *message, bool &enabled, bool &screen_reader) {
@@ -125,8 +129,10 @@ void StatusWatch::probe() {
     unavailable("cannot query org.a11y.Status");
     return;
   }
+  cancel(call_slot_);
   probing_ = true;
-  if (!call_async(*session_, call, kQueryDeadlineUsec, on_answers, this))
+  if (!call_async(*session_, call, kQueryDeadlineUsec, on_answers, this,
+                  &call_slot_))
     unavailable("cannot query org.a11y.Status");
 }
 
@@ -135,6 +141,9 @@ void StatusWatch::ask_address() {
     unavailable("the session bus is unavailable");
     return;
   }
+  // At most one address request is in flight: an earlier one is cancelled
+  // rather than raced.
+  cancel(address_slot_);
   sd_bus_message *call = nullptr;
   if (sd_bus_message_new_method_call(session_->bus(), &call, "org.a11y.Bus",
                                      "/org/a11y/bus", "org.a11y.Bus",
@@ -143,7 +152,8 @@ void StatusWatch::ask_address() {
     return;
   }
   sd_bus_message_set_auto_start(call, 0);
-  if (!call_async(*session_, call, kQueryDeadlineUsec, on_address, this))
+  if (!call_async(*session_, call, kQueryDeadlineUsec, on_address, this,
+                  &address_slot_))
     unavailable("cannot ask org.a11y.Bus for an address");
 }
 
@@ -152,10 +162,12 @@ void StatusWatch::apply() {
   // inside a Flatpak sandbox: the flags live on a bus this process cannot see,
   // so the address alone decides that accessibility is wanted.
   if (const char *address = env_address()) {
+    cancel(address_slot_);
     publish(StatusReport{StatusState::on, {}, address});
     return;
   }
   if (!enabled_ && !screen_reader_) {
+    cancel(address_slot_);
     publish(StatusReport{StatusState::off, {}, {}});
     return;
   }
@@ -209,6 +221,10 @@ int StatusWatch::on_owner(sd_bus_message *message, void *data, sd_bus_error *) {
     watch->enabled_ = false;
     watch->screen_reader_ = false;
     watch->answered_ = false;
+    watch->answering_ = false;
+    cancel(watch->call_slot_);
+    cancel(watch->address_slot_);
+    watch->probing_ = false;
     if (const char *address = env_address())
       watch->publish(StatusReport{StatusState::on, {}, address});
     else
@@ -222,6 +238,10 @@ int StatusWatch::on_owner(sd_bus_message *message, void *data, sd_bus_error *) {
   watch->enabled_ = false;
   watch->screen_reader_ = false;
   watch->answering_ = false;
+  // Answers addressed to the previous owner are no longer wanted.
+  cancel(watch->call_slot_);
+  cancel(watch->address_slot_);
+  watch->probing_ = false;
   watch->probe();
   return 0;
 }
@@ -229,6 +249,8 @@ int StatusWatch::on_owner(sd_bus_message *message, void *data, sd_bus_error *) {
 int StatusWatch::on_answers(sd_bus_message *message, void *data,
                             sd_bus_error *) {
   auto *watch = static_cast<StatusWatch *>(data);
+  // sd-bus holds its own reference for the duration of the callback.
+  cancel(watch->call_slot_);
   watch->probing_ = false;
   if (sd_bus_message_is_method_error(message, nullptr)) {
     if (!missing_service(message)) {
@@ -261,6 +283,8 @@ int StatusWatch::on_answers(sd_bus_message *message, void *data,
 int StatusWatch::on_address(sd_bus_message *message, void *data,
                             sd_bus_error *) {
   auto *watch = static_cast<StatusWatch *>(data);
+  // sd-bus holds its own reference for the duration of the callback.
+  cancel(watch->address_slot_);
   watch->answering_ = false;
   if (sd_bus_message_is_method_error(message, nullptr)) {
     if (launcher_absent(message)) {

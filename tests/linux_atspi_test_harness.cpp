@@ -22,8 +22,9 @@ static int get_screen_reader(sd_bus *, const char *, const char *,
 }
 
 static int bus_get_address(sd_bus_message *message, void *data, sd_bus_error *) {
-  const auto *harness = static_cast<const Harness *>(data);
+  auto *harness = static_cast<Harness *>(data);
   harness->note_address_read();
+  if (harness->hold_address(message)) return 1;
   if (harness->address_error())
     return sd_bus_reply_method_errorf(message, SD_BUS_ERROR_FAILED,
                                       "the accessibility bus is unavailable");

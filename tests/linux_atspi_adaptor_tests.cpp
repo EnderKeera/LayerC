@@ -25,6 +25,9 @@ void a_registry_spelled_registration_reaches_the_text_events();
 void a_registry_spelled_listener_signal_turns_events_on();
 void a_departed_listener_is_removed_with_its_bus();
 void a_pattern_deregistration_removes_the_listeners_it_covers();
+void a_late_address_reply_does_not_override_disabling();
+void a_late_working_address_does_not_override_disabling();
+void only_the_latest_address_request_answers();
 } // namespace
 
 namespace layerc::test::atspi_fixture {
@@ -549,6 +552,106 @@ void the_status_watch_reports_why_accessibility_is_unavailable() {
   }
 }
 
+// --- case q ---------------------------------------------------------------
+
+void a_late_address_reply_does_not_override_disabling() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.hold_address_replies(true);
+  harness.set_flags(true, false);
+  expect(harness.spin_until([&] { return harness.held_address_requests() > 0; },
+                            ms(3000)),
+         "the enabled status asks for an address");
+  harness.set_flags(false, false);
+  expect(harness.spin_until(
+             [&] {
+               return adaptor.status().state == atspi::StatusState::off;
+             },
+             ms(3000)),
+         "disabling turns accessibility off");
+  harness.set_address_error(true);
+  expect(harness.release_address_replies(), "the held request is answered");
+  harness.spin(ms(300));
+  expect(adaptor.status().state == atspi::StatusState::off,
+         "a late address fault does not override the newer status");
+  expect(adaptor.status().reason.empty(), "the off status names no fault");
+  expect(!adaptor.connected(), "nothing connects on the late answer");
+  expect(harness.embeds() == 0, "nothing embeds on the late answer");
+}
+
+// --- case r ---------------------------------------------------------------
+
+void a_late_working_address_does_not_override_disabling() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.hold_address_replies(true);
+  harness.set_flags(true, false);
+  expect(harness.spin_until([&] { return harness.held_address_requests() > 0; },
+                            ms(3000)),
+         "the enabled status asks for an address");
+  harness.set_flags(false, false);
+  expect(harness.spin_until(
+             [&] {
+               return adaptor.status().state == atspi::StatusState::off;
+             },
+             ms(3000)),
+         "disabling turns accessibility off");
+  expect(harness.release_address_replies(), "the held request is answered");
+  harness.spin(ms(300));
+  expect(adaptor.status().state == atspi::StatusState::off,
+         "a late usable address does not override the newer status");
+  expect(adaptor.status().reason.empty(), "the off status names no fault");
+  expect(!adaptor.connected(), "nothing connects on the late answer");
+  expect(harness.embeds() == 0, "nothing embeds on the late answer");
+}
+
+// --- case s ---------------------------------------------------------------
+
+void only_the_latest_address_request_answers() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.hold_address_replies(true);
+  harness.set_flags(true, false);
+  expect(harness.spin_until([&] { return harness.held_address_requests() > 0; },
+                            ms(3000)),
+         "the enabled status asks for an address");
+  // The screen reader still wants accessibility, so the question is asked
+  // again and the answer to the first question is no longer wanted.
+  harness.set_flags(false, true);
+  harness.spin(ms(200));
+  expect(harness.held_address_requests() >= 1,
+         "the status asks again while the consumer still listens");
+  expect(harness.release_address_replies(), "the held requests are answered");
+  expect(harness.spin_until(
+             [&] { return adaptor.status().state == atspi::StatusState::on; },
+             ms(3000)),
+         "the answer to the latest request turns accessibility on");
+  harness.spin(ms(300));
+  expect(adaptor.connected(), "the application connects to that bus");
+  expect(harness.embeds() == 1, "exactly one application embeds");
+}
+
 } // namespace layerc::test::atspi_fixture
 
 using namespace layerc::test::atspi_fixture;
@@ -584,4 +687,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(a_registry_spelled_registration_reaches_the_text_events),
     LAYERC_TEST_CASE(a_registry_spelled_listener_signal_turns_events_on),
     LAYERC_TEST_CASE(a_departed_listener_is_removed_with_its_bus),
-    LAYERC_TEST_CASE(a_pattern_deregistration_removes_the_listeners_it_covers))
+    LAYERC_TEST_CASE(a_pattern_deregistration_removes_the_listeners_it_covers),
+    LAYERC_TEST_CASE(a_late_address_reply_does_not_override_disabling),
+    LAYERC_TEST_CASE(a_late_working_address_does_not_override_disabling),
+    LAYERC_TEST_CASE(only_the_latest_address_request_answers))

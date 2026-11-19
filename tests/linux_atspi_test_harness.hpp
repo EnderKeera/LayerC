@@ -150,6 +150,7 @@ public:
     sd_bus_slot_unref(registry_slot_);
     sd_bus_slot_unref(match_slot_);
     sd_bus_message_unref(held_registered_);
+    for (sd_bus_message *held : held_address_) sd_bus_message_unref(held);
     if (bus_) sd_bus_flush_close_unref(bus_);
   }
 
@@ -235,6 +236,50 @@ public:
     sd_bus_message_unref(held);
     sd_bus_flush(bus_);
     return appended >= 0;
+  }
+
+  // Holds GetAddress answers, so a request can be answered after the status
+  // that caused it is already out of date.
+  void hold_address_replies(const bool hold) { hold_address_ = hold; }
+
+  // How many GetAddress requests wait for release_address_replies().
+  [[nodiscard]] std::size_t held_address_requests() const {
+    return held_address_.size();
+  }
+
+  // Returns true when the answer must wait for release_address_replies().
+  bool hold_address(sd_bus_message *message) {
+    if (!hold_address_) return false;
+    held_address_.push_back(sd_bus_message_ref(message));
+    return true;
+  }
+
+  // Answers every held request with what the harness says now: the fault and
+  // the address are read at release time, not when the request arrived.
+  bool release_address_replies() {
+    auto held = std::exchange(held_address_, {});
+    if (held.empty()) return false;
+    bool answered = true;
+    for (sd_bus_message *request : held) {
+      sd_bus_message *reply = nullptr;
+      int built = 0;
+      if (address_error_)
+        built = sd_bus_message_new_method_errorf(
+            request, &reply, SD_BUS_ERROR_FAILED,
+            "the accessibility bus is unavailable");
+      else
+        built = sd_bus_message_new_method_return(request, &reply);
+      if (built >= 0 && !address_error_)
+        built = sd_bus_message_append(reply, "s", reported_address().c_str());
+      if (built >= 0 &&
+          sd_bus_send(sd_bus_message_get_bus(request), reply, nullptr) < 0)
+        built = -EIO;
+      if (built < 0) answered = false;
+      sd_bus_message_unref(reply);
+      sd_bus_message_unref(request);
+    }
+    sd_bus_flush(bus_);
+    return answered;
   }
 
   // Withdraws or restores org.a11y.Bus to model a session without it.
@@ -578,6 +623,8 @@ private:
   std::string embed_error_;
   bool hold_registered_{};
   sd_bus_message *held_registered_{};
+  bool hold_address_{};
+  std::vector<sd_bus_message *> held_address_;
   std::vector<Signal> signals_;
   std::vector<OwnerChange> owners_;
   std::string embed_name_, embed_path_, deregistered_;
