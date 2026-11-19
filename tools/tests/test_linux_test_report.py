@@ -76,6 +76,22 @@ class LinuxTestReportTests(unittest.TestCase):
         self.assertEqual(["capture"], report["missingExecuted"])
         self.assertEqual(1, report["skipped"])
 
+    def test_editor_gate_rejects_a_skipped_atspi_suite(self) -> None:
+        gate = linux_test_report.load_gate(linux_test_report.DEFAULT_POLICY, "linux-editor")
+        atspi = "layerc_linux_atspi_adaptor_tests"
+        self.assertIn(atspi, gate.required)
+        names = sorted(gate.required)
+        report = self.check(
+            registration(*((name, ["editor"]) for name in names)),
+            junit(*(f'<testcase name="{name}">'
+                    + ("<skipped/>" if name == atspi else "")
+                    + "</testcase>" for name in names)),
+            gate,
+        )
+        self.assertEqual("fail", report["result"])
+        self.assertEqual([], report["missingExecuted"])
+        self.assertIn(f"unexpected skipped suites: {atspi}", report["problems"])
+
     def test_reports_why_a_suite_skipped(self) -> None:
         report = self.check(
             registration(("x11", ["x11"])),

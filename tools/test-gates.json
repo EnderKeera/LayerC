@@ -125,10 +125,7 @@
         "layerc_linux_editor_autosave_tests",
         "layerc_linux_editor_platform_tests",
         "layerc_linux_editor_widget_tests"
-      ],
-      "allowSkip": {
-        "layerc_linux_atspi_adaptor_tests": "dbus-run-session missing; unavailable AT-SPI bus coverage, not a pass"
-      }
+      ]
     },
     "linux-dbus": {
       "description": "Isolated session-bus fakes (fake Shell1/KWin, GNOME bridge, portal consent, daemon provider precedence and idle quiescence); registered with the optional sd-bus lane (libsystemd or libelogind) and selected only where it is built (CTest label dbus).",
