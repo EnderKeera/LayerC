@@ -23,7 +23,7 @@ HRESULT range_array(const std::shared_ptr<Context> &context, const NodeId id,
   return S_OK;
 }
 
-class TextProvider final : public ITextProvider {
+class TextProvider final : public ITextProvider2 {
 public:
   TextProvider(std::shared_ptr<Context> context, NodeId id)
       : context_(std::move(context)), id_(id) {}
@@ -31,8 +31,9 @@ public:
     if (result == nullptr) return E_POINTER;
     *result = nullptr;
     if (!IsEqualIID(iid, IID_IUnknown) && !IsEqualIID(iid, IID_IAgileObject) &&
-        !IsEqualIID(iid, IID_ITextProvider)) return E_NOINTERFACE;
-    *result = static_cast<ITextProvider *>(this);
+        !IsEqualIID(iid, IID_ITextProvider) && !IsEqualIID(iid, IID_ITextProvider2))
+      return E_NOINTERFACE;
+    *result = static_cast<ITextProvider2 *>(this);
     AddRef();
     return S_OK;
   }
@@ -121,6 +122,27 @@ public:
     if (result == nullptr) return E_POINTER;
     *result = SupportedTextSelection_Single;
     return context_->connected.load() ? S_OK : UIA_E_ELEMENTNOTAVAILABLE;
+  }
+  // ITextProvider2: the frontend publishes no annotations, so only the caret
+  // range is answerable, and it is active exactly while its field has focus.
+  HRESULT STDMETHODCALLTYPE GetCaretRange(BOOL *active,
+                                          ITextRangeProvider **result) override {
+    if (active == nullptr || result == nullptr) return E_POINTER;
+    *active = FALSE;
+    *result = nullptr;
+    return guarded([&]() -> HRESULT {
+      const auto info = text_info(context_, id_);
+      if (!info) return UIA_E_ELEMENTNOTAVAILABLE;
+      *active = info->node.states.focused ? TRUE : FALSE;
+      *result = make_range(context_, id_, {info->caret, info->caret});
+      return *result != nullptr ? S_OK : E_OUTOFMEMORY;
+    });
+  }
+  HRESULT STDMETHODCALLTYPE RangeFromAnnotation(IRawElementProviderSimple *,
+                                                ITextRangeProvider **result) override {
+    if (result == nullptr) return E_POINTER;
+    *result = nullptr;
+    return context_->connected.load() ? E_INVALIDARG : UIA_E_ELEMENTNOTAVAILABLE;
   }
 private:
   std::atomic<ULONG> references_{1};

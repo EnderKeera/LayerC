@@ -44,6 +44,9 @@ struct Text {
   std::size_t caret{}, anchor{};
   std::vector<TextRun> runs{};
   Bounds caret_bounds{};
+  // A field whose lines break at '\n'; an insertion point after the document's
+  // last newline sits on the next line, not at that glyph's right edge.
+  bool multiline{};
 };
 
 struct Range {

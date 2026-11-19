@@ -34,7 +34,8 @@ std::optional<Text> field_text(const Fl_Input_ &field) {
   } restore;
   fl_font(FieldAccess::font_of(field), FieldAccess::size_of(field));
   const double height = fl_height();
-  const bool multiline = field.input_type() == FL_MULTILINE_INPUT;
+  const bool multiline = (field.input_type() & FL_INPUT_TYPE) == FL_MULTILINE_INPUT;
+  text.multiline = multiline;
   // FLTK 1.4's stock input drawtext() adds this text inset after box_dx().
   // This mirrors caret geometry; it does not introduce a LayerE layout metric.
   const double left = field.x() + Fl::box_dx(field.box()) + 3 - FieldAccess::scroll_x(field);

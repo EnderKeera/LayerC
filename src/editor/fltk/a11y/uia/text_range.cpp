@@ -49,29 +49,44 @@ bool inside(const Bounds &bounds, const Bounds &clip) {
          bounds.top + bounds.height <= clip.top + clip.height;
 }
 
+// The zero-width insertion point at an offset. The widget's own caret bounds
+// answer the caret itself and every empty document; elsewhere a glyph that
+// starts at the offset owns its left edge, and a glyph that ends there owns its
+// right edge unless it is a multiline newline: the caret after it is on the
+// next line, which that glyph's box cannot describe.
+std::optional<Bounds> insertion(const TextInfo &info, std::size_t offset) {
+  if (offset == info.caret) return info.node.text->caret_bounds;
+  const Glyph *ending{};
+  for (const auto &glyph : info.glyphs) {
+    if (glyph.begin == offset)
+      return Bounds{glyph.bounds.left, glyph.bounds.top, 1, glyph.bounds.height};
+    if (glyph.end == offset) ending = &glyph;
+  }
+  if (ending == nullptr) return std::nullopt;
+  if (info.node.text->multiline && offset > 0 && offset <= info.value.size() &&
+      info.value[offset - 1] == L'\n')
+    return std::nullopt;
+  return Bounds{ending->bounds.left + ending->bounds.width, ending->bounds.top, 1,
+                ending->bounds.height};
+}
+
+// An insertion point is zero-width, so a caret exactly on the viewport's right
+// edge is still inside it; only its vertical extent must lie within the clip.
+bool holds(const Bounds &caret, const Bounds &clip) {
+  return caret.left >= clip.left && caret.left <= clip.left + clip.width &&
+         caret.top >= clip.top && caret.top + caret.height <= clip.top + clip.height;
+}
+
 // Only a widget that already shows the whole range can claim it was revealed.
 // Every text unit must be covered by a glyph inside the clip; an insertion
-// point uses the glyph that starts at the offset, or the right edge of the
-// glyph that ends the document, because a caret left of a horizontally
+// point uses the geometry above, because a caret left of a horizontally
 // scrolled viewport is offscreen too.
 bool visible(const TextInfo &info, const Span span) {
   if (!info.node.states.showing) return false;
   const auto &clip = info.node.bounds;
   if (span.begin == span.end) {
-    if (info.value.empty()) return true;
-    const Glyph *starting{};
-    const Glyph *ending{};
-    for (const auto &glyph : info.glyphs) {
-      if (glyph.begin == span.begin) { starting = &glyph; break; }
-      if (glyph.end == span.begin) ending = &glyph;
-    }
-    if (starting != nullptr)
-      return inside({starting->bounds.left, starting->bounds.top, 1,
-                      starting->bounds.height}, clip);
-    if (ending != nullptr)
-      return inside({ending->bounds.left + ending->bounds.width,
-                      ending->bounds.top, 1, ending->bounds.height}, clip);
-    return false; // No glyph covers this insertion point: nothing to reveal.
+    const auto caret = insertion(info, span.begin);
+    return caret ? holds(*caret, clip) : false;
   }
   std::size_t unit = span.begin;
   for (const auto &glyph : info.glyphs) {
@@ -118,18 +133,8 @@ std::vector<Bounds> rectangles(const TextInfo &info, const Span span) {
     result.push_back({left, top, right - left, bottom - top});
   };
   if (span.begin == span.end) {
-    auto caret = info.node.text->caret_bounds;
-    if (span.begin != info.caret) {
-      for (const auto &glyph : info.glyphs) {
-        if (glyph.begin == span.begin) {
-          caret = glyph.bounds; caret.width = 1; break;
-        }
-        if (glyph.end == span.begin) {
-          caret = glyph.bounds; caret.left += caret.width; caret.width = 1;
-        }
-      }
-    }
-    append(caret);
+    const auto caret = insertion(info, span.begin);
+    if (caret) append(*caret);
   } else {
     for (const auto &glyph : info.glyphs)
       if (glyph.end > span.begin && glyph.begin < span.end) append(glyph.bounds);

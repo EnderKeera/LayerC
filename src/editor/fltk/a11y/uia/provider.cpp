@@ -98,6 +98,18 @@ public:
       if (pattern == UIA_TextPatternId && current->text &&
           !current->states.password)
         return make_text_pattern(context_, id_, result);
+      // The same object also serves ITextProvider2, which adds the caret range;
+      // a client that asks for it gets the object through QueryInterface.
+      if (pattern == UIA_TextPattern2Id && current->text &&
+          !current->states.password) {
+        IUnknown *text = nullptr;
+        const auto status = make_text_pattern(context_, id_, &text);
+        if (FAILED(status)) return status;
+        const auto query =
+            text->QueryInterface(IID_ITextProvider2, reinterpret_cast<void **>(result));
+        text->Release();
+        return query;
+      }
       // UI Automation's RadioButton control type never supports Toggle; a
       // radio's checked state is its SelectionItem state instead.
       if (pattern == UIA_TogglePatternId && current->states.checkable &&

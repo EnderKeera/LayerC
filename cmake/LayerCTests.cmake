@@ -74,6 +74,10 @@ if(TARGET layerc_editor_fltk_uia)
     layerc_add_test(layerc_windows_fltk_patterns_tests WIN32
         SOURCES tests/windows_fltk_patterns_tests.cpp
         LINK layerc_editor_fltk_uia TIMEOUT 90 LABELS required editor)
+    # The Text pattern and its insertion-point geometry, driven by a real client.
+    layerc_add_test(layerc_windows_fltk_text_tests WIN32
+        SOURCES tests/windows_fltk_text_tests.cpp
+        LINK layerc_editor_fltk_uia TIMEOUT 90 LABELS required editor)
     # The shared FLTK tree pass; Linux registers the same suite with its display lock.
     layerc_add_test(layerc_fltk_accessibility_tree_tests WIN32
         SOURCES tests/fltk_accessibility_tree_tests.cpp
