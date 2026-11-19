@@ -453,9 +453,12 @@ private authenticated Xvfb display (1600x1000), Openbox, a private D-Bus
 session, private HOME/XDG roots, the X11 smoke fixture as the game, `layerd`
 and `layere`. It never addresses the user's display, bus, daemon, control
 socket or profiles. Its clicks and keys are synthesized with `xdotool` only
-inside that private display, as test input; `layerd` and `layere` never
-synthesize input, and `tools/linux-gui` is not installed by CMake, the `.deb`
-or the Flatpak. Every helper is owned, stopped and joined; a missing
+inside that private display, as test input. Before typing, the runner uses
+`xmodmap` (`x11-xserver-utils`) and `libxkbcommon0` to bind characters missing
+from the keymap to spare keys for the session, so queued input never depends
+on a transient binding. Neither `layerd` nor `layere` synthesizes input, and
+`tools/linux-gui` is not installed by CMake, the `.deb` or the Flatpak.
+Every helper is owned, stopped and joined; a missing
 dependency or build output fails the run rather than skipping it. The Python
 AT-SPI checks also need `python3-gi`, `python3-pyatspi` and the matching
 `gir1.2-atspi-2.0` metadata from the same AT-SPI installation (2.62 or later).

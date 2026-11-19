@@ -4,9 +4,47 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "linux-gui"))
 import bridge  # noqa: E402
+
+# xmodmap -pk prints the numeric forms regardless of the spelling of a keysym.
+XMODMAP_SAMPLE = """\
+There are 7 KeySyms per KeyCode; KeyCodes range from 8 to 255.
+
+    KeyCode     Keysym (Keysym)
+      8
+      9         0xff1b (Escape)
+     10         0x0031 (1)      0x0021 (exclam)
+     38         0x0061 (a)      0x0041 (A)
+     47         0x00e9 (eacute)
+     52         0x07eb (Greek_lambda)
+    248
+    250         0x0000 (NoSymbol)
+    254         unparsed
+    255
+"""
+
+
+def fake_keysym_to_utf32(symbol: int) -> int:
+    if 0x01000000 <= symbol <= 0x0110FFFF:
+        return symbol & 0x00FFFFFF
+    if symbol == 0x07EB:
+        return ord("λ")
+    return symbol if symbol <= 0xFF else 0
+
+
+class KeysymPlanTests(unittest.TestCase):
+    def test_legacy_and_unicode_syms_are_reused_and_missing_chars_are_bound_once(self) -> None:
+        keymap = XMODMAP_SAMPLE.replace("    248\n", "    248     0x101f642 (U0001F642)\n")
+        plan = bridge.plan_keysym_bindings(keymap, "A!éλ中🙂中\t\n文", fake_keysym_to_utf32)
+        self.assertEqual(plan, [(255, "U4E2D"), (250, "U6587")])
+
+    def test_keeps_one_spare_without_replacing_existing_keys(self) -> None:
+        keymap = "8\n9 0xff1b (Escape)\n254 unparsed\n255\n"
+        with self.assertRaisesRegex(bridge.Rejected, "leaving one spare"):
+            bridge.plan_keysym_bindings(keymap, "中文", fake_keysym_to_utf32)
 
 
 class FakeConnection:
@@ -34,6 +72,7 @@ class FakeConnection:
 class BridgeLogicTests(unittest.TestCase):
     def setUp(self) -> None:
         self.commands: list[list[str]] = []
+        self.keymaps: list[str] = []
         self.fail_on: str | None = None
         self.original_run = bridge.run
 
@@ -41,6 +80,8 @@ class BridgeLogicTests(unittest.TestCase):
             self.commands.append(command)
             if self.fail_on and self.fail_on in command:
                 raise RuntimeError("injected failure")
+            if command == ["xmodmap", "-pk"]:
+                return self.keymaps.pop(0)
             return ""
 
         bridge.run = fake_run
@@ -51,6 +92,7 @@ class BridgeLogicTests(unittest.TestCase):
         instance.width, instance.height = 1600, 1000
         instance.sequence, instance.shot_index = 0, 1
         instance.latest = {"id": 1, "sequence": 0}
+        instance.keysym_checked = {chr(code) for code in range(32, 127)}
         instance.token = "a" * 64
         instance.actions = io.StringIO()
         self.confirmations = 0
@@ -67,6 +109,32 @@ class BridgeLogicTests(unittest.TestCase):
         typed = self.commands[-1]
         self.assertEqual(typed[:2], ["xdotool", "type"])
         self.assertEqual(typed[-2:], ["--", "--file=/etc/passwd"])
+
+    def test_typing_verifies_persistent_key_before_emitting_input_and_caches_it(self) -> None:
+        self.keymaps = [XMODMAP_SAMPLE, XMODMAP_SAMPLE.replace(
+            "    255\n", "    255     0x1004e2d (U4E2D)    0x1004e2d (U4E2D)\n")]
+        with mock.patch.object(bridge, "load_keysym_decoder", return_value=fake_keysym_to_utf32):
+            self.bridge.handle({"op": "type", "screenshot": 1, "text": "中"})
+            self.bridge.latest = {"id": 2, "sequence": 1}
+            self.bridge.handle({"op": "type", "screenshot": 2, "text": "中"})
+        self.assertEqual(self.commands[:3], [
+            ["xmodmap", "-pk"], ["xmodmap", "-e", "keycode 255 = U4E2D U4E2D"],
+            ["xmodmap", "-pk"]])
+        self.assertEqual(len(self.commands), 5)
+        self.assertTrue(all(cmd[:2] == ["xdotool", "type"] and cmd[-2:] == ["--", "中"]
+                            for cmd in self.commands[3:]))
+        self.assertGreaterEqual(self.confirmations, len(self.commands) + 2)
+
+    def test_failed_keymap_verification_never_types_or_caches_the_character(self) -> None:
+        self.keymaps = [XMODMAP_SAMPLE, XMODMAP_SAMPLE]
+        with (
+            mock.patch.object(bridge, "load_keysym_decoder", return_value=fake_keysym_to_utf32),
+            self.assertRaisesRegex(bridge.Rejected, "did not retain the text key bindings"),
+        ):
+            self.bridge.handle({"op": "type", "screenshot": 1, "text": "中"})
+        self.assertEqual(self.bridge.sequence, 1)
+        self.assertNotIn("中", self.bridge.keysym_checked)
+        self.assertEqual([cmd[0] for cmd in self.commands], ["xmodmap"] * 3)
 
     def test_partial_failure_still_consumes_freshness(self) -> None:
         self.fail_on = "type"

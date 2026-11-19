@@ -22,6 +22,7 @@ runner (tools/test-linux-gui.ps1 -Mode Call) and the scripted walkthrough use
 the same protocol, so an agent and the walkthrough exercise identical paths.
 """
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -34,6 +35,9 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
+from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 
 from template_alpha import png_alpha_summary
@@ -63,6 +67,49 @@ XEV_BUTTON = re.compile(r"\bbutton (\d+)\b")
 
 class Rejected(Exception):
     """A request the bridge refuses; reported to the caller and logged."""
+
+
+_KEYMAP_ROW = re.compile(r"^([0-9]+)(?:\s+(.*))?$")
+_KEYSYM_FIELD = re.compile(r"0x([0-9a-fA-F]+)\s+\(")
+
+
+@cache
+def load_keysym_decoder() -> Callable[[int], int]:
+    # Use the same conversion as xdotool, including legacy keysyms (e.g. eacute).
+    # Load only for the Linux bridge; other commands and unit tests need no XKB.
+    try:
+        decode = ctypes.CDLL("libxkbcommon.so.0").xkb_keysym_to_utf32
+    except (OSError, AttributeError) as error:
+        raise Rejected("typing requires libxkbcommon.so.0") from error
+    decode.argtypes = [ctypes.c_uint32]
+    decode.restype = ctypes.c_uint32
+    return decode
+
+
+def typing_characters(text: str) -> str:
+    return "".join(dict.fromkeys(char for char in text if unicodedata.category(char) != "Cc"))
+
+
+def plan_keysym_bindings(keymap: str, text: str,
+                         decode: Callable[[int], int]) -> list[tuple[int, str]]:
+    """Plan persistent bindings from the numeric keycodes and keysyms of xmodmap -pk."""
+    available = set()
+    unused = []
+    for line in keymap.splitlines():
+        row = _KEYMAP_ROW.fullmatch(line.strip())
+        if not row or not 8 <= (keycode := int(row[1])) <= 255:
+            continue
+        fields = row[2] or ""
+        symbols = {int(value, 16) for value in _KEYSYM_FIELD.findall(fields)}
+        if not fields or symbols == {0}:
+            unused.append(keycode)
+        available.update(decode(symbol) for symbol in symbols if symbol)
+
+    missing = [char for char in typing_characters(text) if ord(char) not in available]
+    free = sorted(unused, reverse=True)
+    if len(missing) > max(0, len(free) - 1):
+        raise Rejected("not enough unused keycodes to bind text while leaving one spare")
+    return [(free[index], f"U{ord(char):04X}") for index, char in enumerate(missing)]
 
 
 class DisplayLost(Exception):
@@ -152,6 +199,7 @@ class Bridge:
         self.sequence = 0          # Actions begun; each consumes freshness.
         self.shot_index = 0
         self.latest = None         # {"id", "sequence"}
+        self.keysym_checked = set()
         self.token = secrets.token_hex(32)
         self.deadline = time.monotonic() + OPERATION_SECONDS
         self.display_number = self.pin_display(args.display, args.xvfb_pid)
@@ -462,7 +510,27 @@ class Bridge:
             raise Rejected(f"text must be a string of at most {MAX_TEXT} characters")
         return text
 
+    def ensure_keysyms(self, text):
+        unchecked = "".join(char for char in typing_characters(text)
+                            if char not in self.keysym_checked)
+        if not unchecked:
+            return
+        decode = load_keysym_decoder()
+        bindings = plan_keysym_bindings(self.bounded(["xmodmap", "-pk"]), unchecked, decode)
+        if bindings:
+            # xdotool normally reverts a temporary binding before a busy client
+            # can translate the queued KeyPress. Keep spare keys bound until
+            # this private display shuts down, without changing any existing key.
+            command = ["xmodmap"]
+            for keycode, keysym in bindings:
+                command += ["-e", f"keycode {keycode} = {keysym} {keysym}"]
+            self.bounded(command)
+            if plan_keysym_bindings(self.bounded(["xmodmap", "-pk"]), unchecked, decode):
+                raise Rejected("the private display did not retain the text key bindings")
+        self.keysym_checked.update(unchecked)
+
     def type_text(self, text):
+        self.ensure_keysyms(text)
         # "--" keeps leading-dash text literal (never an xdotool option).
         self.bounded(["xdotool", "type", "--clearmodifiers", "--delay", str(TYPE_DELAY_MS),
                       "--", text], timeout=5 + len(text) * TYPE_DELAY_MS / 1000 * 2)

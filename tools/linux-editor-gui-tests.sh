@@ -380,7 +380,7 @@ trap 'exit 143' TERM
 
 display_commands=(Xvfb xauth openbox)
 [[ $mode != wayland ]] || display_commands=(sway Xwayland foot)
-for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xev stdbuf xdotool import convert python3 \
+for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xev stdbuf xdotool xmodmap import convert python3 \
     dbus-run-session gdbus pgrep sha256sum timeout; do
   if ! command -v "$command" >/dev/null; then
     setup_error="missing required dependency: $command"
