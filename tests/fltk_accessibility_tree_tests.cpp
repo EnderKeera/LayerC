@@ -3,6 +3,7 @@
 #include "a11y/fltk_tree.hpp"
 #include "a11y/model.hpp"
 #include "a11y/input.hpp"
+#include "a11y/text_metrics.hpp"
 #include "a11y/window_geometry.hpp"
 #include "accessible_widgets.hpp"
 #include "test_support.hpp"
@@ -13,10 +14,12 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Graphics_Driver.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Radio_Button.H>
 #include <FL/Fl_Round_Button.H>
 #include <FL/Fl_Scroll.H>
@@ -28,6 +31,8 @@
 #include <cstddef>
 #include <limits>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 namespace a11y = layerc::editor::a11y;
@@ -689,7 +694,298 @@ void fltk_accessibility_expansion_and_scroll() {
   a11y::set_popup_menus(a11y::PopupMenus{});
 }
 
+namespace {
+
+bool same_bounds(const a11y::Bounds &left, const a11y::Bounds &right) {
+  return left.left == right.left && left.top == right.top && left.width == right.width &&
+         left.height == right.height;
+}
+
+bool same_text(const a11y::Text &left, const a11y::Text &right) {
+  if (left.value != right.value || left.caret != right.caret || left.anchor != right.anchor ||
+      left.multiline != right.multiline || left.runs.size() != right.runs.size() ||
+      !same_bounds(left.caret_bounds, right.caret_bounds))
+    return false;
+  for (std::size_t index = 0; index < left.runs.size(); ++index) {
+    if (left.runs[index].begin != right.runs[index].begin ||
+        left.runs[index].end != right.runs[index].end ||
+        !same_bounds(left.runs[index].bounds, right.runs[index].bounds))
+      return false;
+  }
+  return true;
+}
+
+// One measured pass over the field: its cached geometry must equal the direct
+// measurement exactly.
+bool equivalent_pass(Fl_Input_ &field, a11y::TextMetrics &metrics) {
+  const auto direct = a11y::field_text(field);
+  a11y::TextMetrics::Pass pass(metrics);
+  const auto cached = a11y::field_text(field, &metrics);
+  if (direct.has_value() != cached.has_value()) return false;
+  return !direct || same_text(*direct, *cached);
+}
+
+std::size_t measured_pass(Fl_Input_ &field, a11y::TextMetrics &metrics) {
+  a11y::TextMetrics::Pass pass(metrics);
+  (void)a11y::field_text(field, &metrics);
+  return metrics.measured();
+}
+
+// FLTK keeps the vertical scroll offset protected; deriving is the one access
+// route it documents, and taking the accessor's address avoids casting a widget.
+struct ScrolledText : Fl_Input_ {
+  static void scroll_y(Fl_Input_ &field, int offset) {
+    (field.*(static_cast<void (Fl_Input_::*)(int)>(&ScrolledText::yscroll)))(offset);
+  }
+};
+
+// The driver scale divides every advance, so a field measured at two scales
+// must follow the current one.
+struct ScaleGuard {
+  float scale{fl_graphics_driver->scale()};
+  ~ScaleGuard() { fl_graphics_driver->scale(scale); }
+};
+
+std::string automation_document() {
+  std::string document = "{\n  \"rules\": [\n";
+  for (int index = 0; index < 24; ++index) {
+    document += "    {\n      \"name\": \"rule " + std::to_string(index) +
+                " \xce\xbb\",\n      \"trigger\": \"key\",\n      \"cooldown_ms\": " +
+                std::to_string(1000 + index) + "\n    }" + (index == 23 ? "\n" : ",\n");
+  }
+  return document + "  ]\n}";
+}
+
+} // namespace
+
+// The incremental geometry must reproduce the direct measurement exactly for
+// every glyph class, caret position and field state.
+void fltk_accessibility_field_text_equivalence() {
+  Fl_Window window(0, 0, 480, 320, "Metrics probe");
+  Fl_Input single(10, 10, 400, 24, "Single");
+  Fl_Multiline_Input multi(10, 40, 400, 240, "Multi");
+  window.add(single);
+  window.add(multi);
+  window.end();
+  window.show();
+  Fl::check();
+  a11y::TextMetrics metrics;
+
+  const std::vector<std::string> samples{
+      "",
+      "ascii text",
+      "two \xc3\xa9 bytes",
+      "three \xe2\x82\xac bytes",
+      "four \xf0\x9f\x99\x82 bytes",
+      "\tone\ttwo\t\tthree\t",
+      "control \x01\x02\x7f bytes",
+      "line one\nline two\n",
+      "\n\n\n",
+      "trailing newline\n",
+      "tail without newline",
+      "unicode \xce\xbb automation"};
+  bool equal = true;
+  for (const auto &sample : samples) {
+    for (Fl_Input_ *field : {static_cast<Fl_Input_ *>(&single), static_cast<Fl_Input_ *>(&multi)}) {
+      field->value(sample.c_str());
+      for (const std::size_t caret : {std::size_t{0}, sample.size() / 2, sample.size()}) {
+        field->insert_position(static_cast<int>(caret), 0);
+        field->mark(static_cast<int>(caret));
+        equal = equivalent_pass(*field, metrics) && equal;
+        field->mark(0);
+        equal = equivalent_pass(*field, metrics) && equal;
+      }
+    }
+  }
+  expect(equal, "a cached text geometry equals the direct measurement over the sample matrix");
+
+  Fl_Input_ &field = multi;
+  const auto edit = [&](const std::string &value, std::size_t caret) {
+    field.value(value.c_str());
+    field.insert_position(static_cast<int>(caret), 0);
+    equal = equivalent_pass(field, metrics) && equal;
+  };
+  const std::string start = "alpha beta\ngamma\n\tdelta";
+  edit(start, 0);
+  edit(start + " tail", start.size() + 5);
+  std::string inserted = start;
+  inserted.insert(6, "ZZ");
+  edit(inserted, 6);
+  std::string erased = inserted;
+  erased.erase(3, 2);
+  edit(erased, 3);
+  std::string split = erased;
+  split.insert(11, "\n");
+  edit(split, 11);
+  const auto second = split.find('\n', 12);
+  std::string joined = split;
+  if (second != std::string::npos) joined.erase(second, 1);
+  edit(joined, 12);
+  edit("pasted\nlines\nhere\nand more\n\n", 7);
+  ScrolledText::scroll_y(field, 11);
+  equal = equivalent_pass(field, metrics) && equal;
+  ScrolledText::scroll_y(field, 0);
+  field.textsize(18);
+  equal = equivalent_pass(field, metrics) && equal;
+  field.textfont(FL_TIMES);
+  equal = equivalent_pass(field, metrics) && equal;
+  field.textfont(FL_HELVETICA);
+  field.textsize(14);
+  equal = equivalent_pass(field, metrics) && equal;
+  expect(equal, "the cached geometry survives edits, scrolling, font and size changes");
+
+  // A monospace face is wider than the proportional default for narrow glyphs,
+  // and renaming a face behind one font id changes every advance, so the cache
+  // must key on the resolved face and not only on the font id.
+  single.value("iiiiiiiiii");
+  equal = equivalent_pass(single, metrics) && equal;
+  // FLTK stores the pointer it is given, so the previous name is played back
+  // rather than copied: a temporary would leave the face table dangling.
+  const char *const default_face = Fl::get_font(FL_HELVETICA);
+  const auto proportional = a11y::field_text(single);
+#ifdef _WIN32
+  constexpr const char *monospace_face = "Courier New";
+#else
+  constexpr const char *monospace_face = "monospace";
+#endif
+  Fl::set_font(FL_HELVETICA, monospace_face);
+  const auto monospace = a11y::field_text(single);
+  if (expect(proportional && monospace && !proportional->runs.empty() &&
+                 proportional->runs.size() == monospace->runs.size(),
+             "a renamed face measures the same glyphs"))
+    expect(proportional->runs.back().bounds.width != monospace->runs.back().bounds.width,
+           "a monospace face measures the same glyphs differently");
+  equal = equivalent_pass(single, metrics) && equal;
+  if (default_face != nullptr) Fl::set_font(FL_HELVETICA, default_face);
+  equal = equivalent_pass(single, metrics) && equal;
+  expect(equal, "a font face change re-measures the field");
+
+  {
+    const ScaleGuard guard;
+    single.value("scale probe");
+    equal = equivalent_pass(single, metrics) && equal;
+    fl_graphics_driver->scale(guard.scale * 2.0f);
+    equal = equivalent_pass(single, metrics) && equal;
+  }
+  equal = equivalent_pass(single, metrics) && equal;
+  expect(equal, "a driver scale change re-measures the field");
+
+  // The scroll offsets shift the text origin; it is read from the widget on
+  // every pass, cached or not.
+  ScrolledText::scroll_y(single, 9);
+  equal = equivalent_pass(single, metrics) && equal;
+  ScrolledText::scroll_y(single, 0);
+  equal = equivalent_pass(single, metrics) && equal;
+  expect(equal, "a vertically scrolled field measures the same geometry");
+}
+
+// The reuse must be incremental: only the glyphs that changed are measured.
+void fltk_accessibility_field_text_work_bound() {
+  Fl_Window window(0, 0, 480, 320, "Metrics bound");
+  Fl_Input single(10, 10, 400, 24, "Single");
+  Fl_Multiline_Input multi(10, 40, 400, 240, "Multi");
+  window.add(single);
+  window.add(multi);
+  window.end();
+  window.show();
+  Fl::check();
+  a11y::TextMetrics metrics;
+
+  std::string line;
+  for (int index = 0; index < 40; ++index) line += static_cast<char>('a' + index % 26);
+  single.value(line.c_str());
+  single.insert_position(0, 0);
+  expect(measured_pass(single, metrics) == 40, "a first pass measures every glyph");
+  expect(measured_pass(single, metrics) == 0, "an unchanged second pass measures no glyph");
+
+  single.value((line + "x").c_str());
+  expect(measured_pass(single, metrics) == 1, "appending one glyph measures one glyph");
+
+  single.value(line.c_str());
+  (void)measured_pass(single, metrics);
+  std::string inserted = line;
+  inserted.insert(10, "Z");
+  single.value(inserted.c_str());
+  expect(measured_pass(single, metrics) == 31,
+         "inserting a glyph mid-line measures the 31 glyphs after it");
+
+  std::string document;
+  for (int row = 0; row < 20; ++row) {
+    if (row != 0) document += '\n';
+    for (int column = 0; column < 20; ++column)
+      document += static_cast<char>('A' + (row + column) % 26);
+  }
+  multi.value(document.c_str());
+  expect(measured_pass(multi, metrics) == 400, "a twenty-line document measures every glyph once");
+  expect(measured_pass(multi, metrics) == 0, "an unchanged document measures no glyph");
+
+  std::string split = document;
+  split.insert(10 * 21 + 10, "\n");
+  multi.value(split.c_str());
+  expect(measured_pass(multi, metrics) == 10,
+         "splitting a line measures only the new line's tail");
+
+  multi.textsize(18);
+  expect(measured_pass(multi, metrics) == 400, "a size change measures every glyph once");
+  multi.textsize(14);
+
+  a11y::TextMetrics memory;
+  multi.value("one\ntwo\nthree");
+  expect(measured_pass(multi, memory) == 11, "a three-line field measures its eleven glyphs");
+  expect(memory.cached_lines() == 3, "the cache holds the three lines of the pass");
+  multi.value("four\nfive");
+  expect(measured_pass(multi, memory) == 8, "replacing the document measures the new lines");
+  expect(memory.cached_lines() == 2, "replacing every line leaves only the new lines cached");
+}
+
+// A tree snapshot built from the cache must equal one built from direct
+// measurements, before and after edits.
+void fltk_accessibility_field_text_snapshot() {
+  Fl_Window window(0, 0, 480, 320, "Metrics snapshot");
+  Fl_Input name(10, 10, 440, 24, "Name");
+  Fl_Multiline_Input json(10, 40, 440, 260, "JSON");
+  window.add(name);
+  window.add(json);
+  window.end();
+  window.show();
+  Fl::check();
+  name.value("Native \xce\xbb automation");
+  json.value(automation_document().c_str());
+
+  a11y::FltkTree tree;
+  const auto compare = [&](a11y::FltkTree &direct_tree, const a11y::Snapshot &direct) {
+    const auto warm = tree.snapshot();
+    if (warm.nodes.size() != direct.nodes.size()) return false;
+    bool equal = true;
+    for (Fl_Input_ *field : {static_cast<Fl_Input_ *>(&name), static_cast<Fl_Input_ *>(&json)}) {
+      const auto *left = node_of(warm, tree.id_for(*field));
+      const auto *right = node_of(direct, direct_tree.id_for(*field));
+      if (left == nullptr || right == nullptr) return false;
+      if (left->text.has_value() != right->text.has_value()) return false;
+      if (left->text && !same_text(*left->text, *right->text)) equal = false;
+    }
+    return equal;
+  };
+  const auto compare_fresh = [&] {
+    a11y::FltkTree fresh;
+    return compare(fresh, fresh.snapshot());
+  };
+  expect(compare_fresh(), "a warm snapshot equals a snapshot built from direct measurements");
+  expect(compare_fresh(), "a cached second pass equals a snapshot built from direct measurements");
+  json.value((automation_document() + "  ").c_str());
+  expect(compare_fresh(), "a snapshot after an edit equals a snapshot built from direct measurements");
+  json.value("single line now");
+  expect(compare_fresh(),
+         "a snapshot after replacing the document equals a snapshot built from direct measurements");
+  name.textsize(18);
+  expect(compare_fresh(), "a snapshot after a size change equals a snapshot built from direct measurements");
+  name.textsize(14);
+}
+
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots),
                  LAYERC_TEST_CASE(fltk_accessibility_expansion_and_scroll),
                  LAYERC_TEST_CASE(fltk_accessibility_actions),
-                 LAYERC_TEST_CASE(fltk_accessibility_button_roles))
+                 LAYERC_TEST_CASE(fltk_accessibility_button_roles),
+                 LAYERC_TEST_CASE(fltk_accessibility_field_text_equivalence),
+                 LAYERC_TEST_CASE(fltk_accessibility_field_text_work_bound),
+                 LAYERC_TEST_CASE(fltk_accessibility_field_text_snapshot))

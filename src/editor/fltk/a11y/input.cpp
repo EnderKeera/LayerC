@@ -1,11 +1,16 @@
 #include "input.hpp"
+#include "text_metrics.hpp"
 
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
 #include <FL/fl_utf8.h>
 
 #include <algorithm>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace layerc::editor::a11y {
 namespace {
@@ -19,9 +24,54 @@ struct FieldAccess : Fl_Input_ {
   static Fl_Font font_of(const Fl_Input_ &field) { return field.textfont(); }
   static Fl_Fontsize size_of(const Fl_Input_ &field) { return field.textsize(); }
 };
-} // namespace
 
-std::optional<Text> field_text(const Fl_Input_ &field) {
+// One glyph of one source line: its byte range in the value and the byte end of
+// its expansion in the line's drawn text. A line break draws a caret run.
+struct Glyph {
+  std::size_t offset{};
+  std::size_t end{};
+  std::size_t expanded_end{};
+  bool line_break{};
+};
+
+struct Line {
+  std::size_t index{};
+  double top{};
+  std::string expanded;
+  std::vector<Glyph> glyphs;
+  std::vector<std::size_t> ends;
+};
+
+// Measures every advance of one expanded line itself.
+struct DirectAdvances {
+  std::vector<double> widths;
+
+  const std::vector<double> &operator()(std::size_t, std::string_view expanded,
+                                        std::span<const std::size_t> ends) {
+    widths.clear();
+    widths.reserve(ends.size());
+    for (const auto end : ends) {
+      widths.push_back(fl_width(expanded.data(), static_cast<int>(end)));
+    }
+    return widths;
+  }
+};
+
+// Measures only the advances a metrics pass has not measured yet.
+struct CachedAdvances {
+  TextMetrics &metrics;
+  const Fl_Input_ *field;
+  int font;
+  int size;
+
+  const std::vector<double> &operator()(std::size_t index, std::string_view expanded,
+                                        std::span<const std::size_t> ends) {
+    return metrics.line(field, font, size, index, expanded, ends);
+  }
+};
+
+template <typename Advances>
+std::optional<Text> text_of(const Fl_Input_ &field, Advances advances) {
   if (field.value() == nullptr) return std::nullopt;
   Text text;
   text.value.assign(field.value(), static_cast<std::size_t>(field.size()));
@@ -40,23 +90,24 @@ std::optional<Text> field_text(const Fl_Input_ &field) {
   // This mirrors caret geometry; it does not introduce a LayerE layout metric.
   const double left = field.x() + Fl::box_dx(field.box()) + 3 - FieldAccess::scroll_x(field);
   double top = field.y() + Fl::box_dy(field.box()) - FieldAccess::scroll_y(field);
-  double advance{};
   std::size_t column{};
+  std::vector<Line> lines;
+  std::vector<Glyph> glyphs;
+  std::vector<std::size_t> ends;
   std::string expanded;
-  text.caret_bounds = {left, top, 1, height};
   for (std::size_t offset = 0; offset < text.value.size();) {
     const int encoded_size = fl_utf8len(static_cast<unsigned char>(text.value[offset]));
     const auto length = static_cast<std::size_t>(std::max(encoded_size, 1));
     const auto end = std::min(offset + length, text.value.size());
     const char character = text.value[offset];
-    const double begin = advance;
-    if (offset == text.caret) text.caret_bounds = {left + begin, top, 1, height};
     if (character == '\n' && multiline) {
-      text.runs.push_back({offset, end, {left + begin, top, 1, height}});
-      top += height;
-      advance = 0;
-      column = 0;
+      glyphs.push_back({offset, end, expanded.size(), true});
+      lines.push_back({lines.size(), top, std::move(expanded), std::move(glyphs), std::move(ends)});
       expanded.clear();
+      glyphs.clear();
+      ends.clear();
+      top += height;
+      column = 0;
     } else {
       if (character == '\t') {
         const auto spaces = 8 - column % 8;
@@ -70,14 +121,45 @@ std::optional<Text> field_text(const Fl_Input_ &field) {
         expanded.append(text.value, offset, end - offset);
         ++column;
       }
-      advance = fl_width(expanded.c_str(), static_cast<int>(expanded.size()));
-      text.runs.push_back(
-          {offset, end, {left + begin, top, std::max(advance - begin, 1.0), height}});
+      glyphs.push_back({offset, end, expanded.size(), false});
+      ends.push_back(expanded.size());
     }
     offset = end;
   }
-  if (text.caret == text.value.size()) text.caret_bounds = {left + advance, top, 1, height};
+  lines.push_back({lines.size(), top, std::move(expanded), std::move(glyphs), std::move(ends)});
+
+  text.caret_bounds = {left, lines.front().top, 1, height};
+  double advance{};
+  double line_top = lines.front().top;
+  for (const Line &line : lines) {
+    const auto &widths = advances(line.index, line.expanded, line.ends);
+    for (std::size_t index = 0; index < line.glyphs.size(); ++index) {
+      const Glyph &glyph = line.glyphs[index];
+      const double begin = index == 0 ? 0.0 : widths[index - 1];
+      if (glyph.offset == text.caret) text.caret_bounds = {left + begin, line.top, 1, height};
+      if (glyph.line_break) {
+        text.runs.push_back({glyph.offset, glyph.end, {left + begin, line.top, 1, height}});
+      } else {
+        const double after = widths[index];
+        text.runs.push_back({glyph.offset, glyph.end,
+                             {left + begin, line.top, std::max(after - begin, 1.0), height}});
+      }
+    }
+    advance = widths.empty() ? 0.0 : widths.back();
+    line_top = line.top;
+  }
+  if (text.caret == text.value.size()) text.caret_bounds = {left + advance, line_top, 1, height};
   return text;
+}
+} // namespace
+
+std::optional<Text> field_text(const Fl_Input_ &field) { return text_of(field, DirectAdvances{}); }
+
+std::optional<Text> field_text(const Fl_Input_ &field, TextMetrics *metrics) {
+  if (metrics == nullptr) return text_of(field, DirectAdvances{});
+  CachedAdvances advances{*metrics, &field, static_cast<int>(FieldAccess::font_of(field)),
+                          static_cast<int>(FieldAccess::size_of(field))};
+  return text_of(field, advances);
 }
 
 Text Input::accessible_text() const {

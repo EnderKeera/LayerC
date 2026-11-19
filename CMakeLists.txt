@@ -158,6 +158,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/fltk/a11y/fltk_semantics.cpp
         src/editor/fltk/a11y/fltk_tree.cpp
         src/editor/fltk/a11y/input.cpp
+        src/editor/fltk/a11y/text_metrics.cpp
         src/editor/fltk/accessible_widgets.cpp
         src/editor/fltk/editor_scroll.cpp)
 endif()

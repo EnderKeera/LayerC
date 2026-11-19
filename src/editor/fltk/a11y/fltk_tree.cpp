@@ -1,6 +1,7 @@
 #include "fltk_tree.hpp"
 
 #include "input.hpp"
+#include "text_metrics.hpp"
 #include "window_geometry.hpp"
 
 #include "layerc/core/utf8.hpp"
@@ -72,6 +73,9 @@ struct FltkTree::Impl {
   // Last pass in traversal order; FLTK reorders its window list on activation,
   // so the previous pass's order keeps surviving children in place.
   std::vector<std::pair<Target, NodeId>> previous;
+  // Advances already measured for the texts this tree exports; a pass drops
+  // whatever it did not use, so only the current fields stay cached.
+  TextMetrics metrics;
   NodeId root{};
   NodeId next_id{1};
 
@@ -151,7 +155,7 @@ struct FltkTree::Impl {
     node.actions = action_names(target);
     if (target.kind == TargetKind::widget) {
       if (auto *field = dynamic_cast<Fl_Input_ *>(target.widget))
-        node.text = exportable(node.states, field_text(*field));
+        node.text = exportable(node.states, field_text(*field, &metrics));
       if (auto *valuator = dynamic_cast<Fl_Valuator *>(target.widget)) node.range = range_of(*valuator);
       node.scroll = scroll_of(target);
     }
@@ -195,8 +199,10 @@ FltkTree::FltkTree() : impl_(std::make_unique<Impl>()) {}
 FltkTree::~FltkTree() = default;
 
 Snapshot FltkTree::snapshot() {
-  // One pass: every menu's size is walked once, not once per question.
+  // One pass: every menu's size is walked once, not once per question, and
+  // every exported field's text geometry once per glyph.
   TreePass pass;
+  TextMetrics::Pass measure(impl_->metrics);
   impl_->spaces.clear();
   Snapshot snapshot;
   snapshot.root = impl_->root_id();
@@ -232,6 +238,7 @@ void FltkTree::clear() {
   impl_->widgets.clear();
   impl_->previous.clear();
   impl_->spaces.clear();
+  impl_->metrics = TextMetrics{};
   impl_->root = no_node;
 }
 } // namespace layerc::editor::a11y
