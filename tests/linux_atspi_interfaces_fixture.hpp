@@ -92,20 +92,20 @@ inline std::optional<std::pair<std::int32_t, std::int32_t>>
 parse_pair(sd_bus_message *message) {
   std::int32_t first = 0;
   std::int32_t second = 0;
-  if (message == nullptr || sd_bus_message_read(message, "ii", &first, &second) < 0)
+  if (message == nullptr || sd_bus_message_read(message, "ii", &first, &second) <= 0)
     return std::nullopt;
   return std::pair{first, second};
 }
 
-// A rect reply arrives as one (iiii) struct.
+// Component sends a struct, while Text sends four separate outputs.
 inline std::optional<layerc::editor::a11y::Bounds>
-parse_rect(sd_bus_message *message) {
+parse_rect(sd_bus_message *message, const char *signature) {
   std::int32_t x = 0;
   std::int32_t y = 0;
   std::int32_t width = 0;
   std::int32_t height = 0;
   if (message == nullptr ||
-      sd_bus_message_read(message, "(iiii)", &x, &y, &width, &height) < 0)
+      sd_bus_message_read(message, signature, &x, &y, &width, &height) <= 0)
     return std::nullopt;
   return layerc::editor::a11y::Bounds{static_cast<double>(x),
                                       static_cast<double>(y),
@@ -128,17 +128,6 @@ inline std::optional<TextSpan> parse_span(sd_bus_message *message) {
   if (sd_bus_message_read(message, "sii", &text, &start, &end) < 0)
     return std::nullopt;
   return TextSpan{text != nullptr ? text : "", start, end};
-}
-
-// A (ii) struct reply: a selection range arrives as one struct.
-inline std::optional<std::pair<std::int32_t, std::int32_t>>
-parse_struct_pair(sd_bus_message *message) {
-  if (message == nullptr ||
-      sd_bus_message_enter_container(message, SD_BUS_TYPE_STRUCT, "ii") < 0)
-    return std::nullopt;
-  const auto pair = parse_pair(message);
-  sd_bus_message_exit_container(message);
-  return pair;
 }
 
 // A double held in a property variant.

@@ -6,6 +6,7 @@
 
 #include <systemd/sd-bus.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -71,18 +72,23 @@ int set_text_contents(sd_bus_message *message, void *data,
 int insert_text(sd_bus_message *message, void *data, sd_bus_error *error) {
   const auto &source = *static_cast<ObjectSource *>(data);
   std::int32_t offset = 0;
+  std::int32_t length = 0;
   const char *text = nullptr;
-  if (sd_bus_message_read(message, "is", &offset, &text) < 0)
-    return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
-                             "InsertText needs an offset and text");
+  if (sd_bus_message_read(message, "isi", &offset, &text, &length) <= 0 ||
+      text == nullptr || length < 0)
+    return sd_bus_error_set_const(error, SD_BUS_ERROR_INVALID_ARGS,
+                                  "InsertText needs an offset, text and a nonnegative byte count");
   const Node *node = editable_node(source, message, error);
   if (!node) return -ENOENT;
   const auto at = byte_of(node->text->value, offset);
   if (!at) return -EINVAL;
   const auto target = target_of(source, *node);
   if (!target) return -EPERM;
-  return reply_bool(message, a11y::insert_text(*target, *at,
-                                               text != nullptr ? text : ""));
+  // Positions count characters, but the client limits this UTF-8 string in
+  // bytes. The action rejects a prefix ending inside a code point.
+  std::string_view prefix{text};
+  prefix = prefix.substr(0, std::min(prefix.size(), static_cast<std::size_t>(length)));
+  return reply_bool(message, a11y::insert_text(*target, *at, prefix));
 }
 
 int delete_text(sd_bus_message *message, void *data, sd_bus_error *error) {
@@ -103,9 +109,13 @@ int delete_text(sd_bus_message *message, void *data, sd_bus_error *error) {
   return reply_bool(message, a11y::delete_text(*target, *from, *to));
 }
 
-// The ATK interface this replaces left copy, cut and paste unset, so AT-SPI
-// clients asked for operations the editor never performed. Answering false
-// keeps that contract rather than adding a clipboard route the editor lacks.
+// Preserve the old adaptor's lack of clipboard operations. CopyText has no
+// boolean result on the wire; an error reports refusal without claiming a copy.
+int refuse_copy(sd_bus_message *, void *, sd_bus_error *error) {
+  return sd_bus_error_set_const(error, SD_BUS_ERROR_NOT_SUPPORTED,
+                                "Accessible clipboard copy is not supported");
+}
+
 int refuse(sd_bus_message *message, void *, sd_bus_error *) {
   return reply_bool(message, false);
 }
@@ -115,9 +125,9 @@ const sd_bus_vtable kEditable[] = {
     SD_BUS_PROPERTY("version", "u", get_version, 0,
                     SD_BUS_VTABLE_PROPERTY_CONST),
     SD_BUS_METHOD("SetTextContents", "s", "b", set_text_contents, 0),
-    SD_BUS_METHOD("InsertText", "is", "b", insert_text, 0),
+    SD_BUS_METHOD("InsertText", "isi", "b", insert_text, 0),
     SD_BUS_METHOD("DeleteText", "ii", "b", delete_text, 0),
-    SD_BUS_METHOD("CopyText", "ii", "b", refuse, 0),
+    SD_BUS_METHOD("CopyText", "ii", "", refuse_copy, 0),
     SD_BUS_METHOD("CutText", "ii", "b", refuse, 0),
     SD_BUS_METHOD("PasteText", "i", "b", refuse, 0),
     SD_BUS_VTABLE_END};

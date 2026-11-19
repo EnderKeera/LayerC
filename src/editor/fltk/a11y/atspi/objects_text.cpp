@@ -101,7 +101,7 @@ int reply_rect(sd_bus_message *message, const Bounds &bounds) {
   const auto y = static_cast<std::int32_t>(std::lround(bounds.top));
   const auto width = static_cast<std::int32_t>(std::lround(bounds.width));
   const auto height = static_cast<std::int32_t>(std::lround(bounds.height));
-  int appended = sd_bus_message_append(reply, "(iiii)", x, y, width, height);
+  const int appended = sd_bus_message_append(reply, "iiii", x, y, width, height);
   if (appended < 0) {
     sd_bus_message_unref(reply);
     return -ENOMEM;
@@ -518,7 +518,7 @@ int get_selection(sd_bus_message *message, void *data, sd_bus_error *error) {
   const auto end = static_cast<std::int32_t>(std::max(anchor, caret));
   sd_bus_message *reply = nullptr;
   if (sd_bus_message_new_method_return(message, &reply) < 0) return -ENOMEM;
-  const int appended = sd_bus_message_append(reply, "(ii)", start, end);
+  const int appended = sd_bus_message_append(reply, "ii", start, end);
   if (appended < 0) {
     sd_bus_message_unref(reply);
     return -ENOMEM;
@@ -612,14 +612,14 @@ const sd_bus_vtable kText[] = {
     SD_BUS_METHOD("GetAttributeValue", "is", "s", get_attribute_value, 0),
     SD_BUS_METHOD("GetAttributes", "i", "a{ss}ii", get_attributes, 0),
     SD_BUS_METHOD("GetDefaultAttributes", "", "a{ss}", get_attribute_set, 0),
-    SD_BUS_METHOD("GetCharacterExtents", "iu", "(iiii)", get_character_extents, 0),
+    SD_BUS_METHOD("GetCharacterExtents", "iu", "iiii", get_character_extents, 0),
     SD_BUS_METHOD("GetOffsetAtPoint", "iiu", "i", get_offset_at_point, 0),
     SD_BUS_METHOD("GetNSelections", "", "i", get_n_selections, 0),
-    SD_BUS_METHOD("GetSelection", "i", "(ii)", get_selection, 0),
+    SD_BUS_METHOD("GetSelection", "i", "ii", get_selection, 0),
     SD_BUS_METHOD("AddSelection", "ii", "b", add_selection, 0),
     SD_BUS_METHOD("RemoveSelection", "i", "b", remove_selection, 0),
     SD_BUS_METHOD("SetSelection", "iii", "b", set_selection, 0),
-    SD_BUS_METHOD("GetRangeExtents", "iiu", "(iiii)", get_range_extents, 0),
+    SD_BUS_METHOD("GetRangeExtents", "iiu", "iiii", get_range_extents, 0),
     SD_BUS_METHOD("GetBoundedRanges", "iiiiuuu", "a(iisv)", get_bounded_ranges, 0),
     SD_BUS_METHOD("GetAttributeRun", "ib", "a{ss}ii", get_attribute_run, 0),
     SD_BUS_METHOD("GetDefaultAttributeSet", "", "a{ss}", get_attribute_set, 0),

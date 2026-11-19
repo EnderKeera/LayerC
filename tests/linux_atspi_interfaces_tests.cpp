@@ -209,7 +209,7 @@ void component_geometry_follows_the_coordinate_type() {
                     "GetExtents", [&](sd_bus_message *call) {
                       return sd_bus_message_append(call, "u", coordinate);
                     })
-            .reply);
+            .reply, "(iiii)");
   };
   const auto screen = extent(0);
   const auto window_space = extent(1);
@@ -218,7 +218,7 @@ void component_geometry_follows_the_coordinate_type() {
       harness.embed_name(), window, "org.a11y.atspi.Component", "GetExtents",
       [](sd_bus_message *call) {
         return sd_bus_message_append(call, "u", 0U);
-      }).reply);
+      }).reply, "(iiii)");
   if (!expect(screen && window_space && parent_space && window_extents,
               "every coordinate type answers extents"))
     return;

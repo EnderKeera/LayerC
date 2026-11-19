@@ -199,7 +199,7 @@ void text_offsets_are_characters_and_geometry_is_real() {
   expect(reply_i32(harness.get(field, kTextInterface, "GetNSelections").reply) ==
              std::optional<std::int32_t>{1},
          "the field has one selection");
-  const auto chosen = parse_struct_pair(
+  const auto chosen = parse_pair(
       text_call(harness, field, kTextInterface, "GetSelection",
                 [](sd_bus_message *call) {
                   return sd_bus_message_append(call, "i", 0);
@@ -227,7 +227,7 @@ void text_offsets_are_characters_and_geometry_is_real() {
                   [&](sd_bus_message *call) {
                     return sd_bus_message_append(call, "iu", 0, coordinate);
                   })
-            .reply);
+            .reply, "iiii");
   };
   const auto screen_rect = extents(0);
   const auto window_rect = extents(1);
@@ -264,7 +264,7 @@ void text_offsets_are_characters_and_geometry_is_real() {
                 [](sd_bus_message *call) {
                   return sd_bus_message_append(call, "iiu", 0, 3, 0U);
                 })
-          .reply);
+          .reply, "iiii");
   expect(range_rect && range_rect->width > screen_rect->width,
          "a range is wider than one character");
 
@@ -346,8 +346,8 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
   mark = harness.signals().size();
   expect(parse_bool(text_call(harness, field, kEditableInterface, "InsertText",
                               [](sd_bus_message *call) {
-                                return sd_bus_message_append(call, "is", 0,
-                                                             "\xc3\xa9");
+                                return sd_bus_message_append(call, "isi", 0,
+                                                             "\xc3\xa9" "tail", 2);
                               })
                         .reply) == std::optional<bool>{true},
          "an insertion at the start is accepted");
@@ -357,7 +357,7 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
                               "\xc3\xa9"
                               "fresh"; },
              ms(2000)),
-         "the widget gained the inserted character");
+         "the specified byte prefix inserts one complete character and no suffix");
   expect(text_change(mark, "insert"), "an insertion reports a text change");
   expect(caret_offset(harness, field) == std::optional<std::int32_t>{1},
          "the caret follows the inserted character");
@@ -378,10 +378,23 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
 
   expect(text_call(harness, field, kEditableInterface, "InsertText",
                    [](sd_bus_message *call) {
-                     return sd_bus_message_append(call, "is", 99, "x");
+                     return sd_bus_message_append(call, "isi", 99, "x", 1);
                    })
              .failed,
-         "an insertion past the end is refused");
+          "an insertion past the end is refused");
+  const auto split = text_call(harness, field, kEditableInterface, "InsertText",
+                               [](sd_bus_message *call) {
+                                 return sd_bus_message_append(call, "isi", 0, "\xc3\xa9", 1);
+                               });
+  expect(parse_bool(split.reply) == std::optional<bool>{false},
+          "a length splitting a multibyte character is refused");
+  expect(text_call(harness, field, kEditableInterface, "InsertText",
+                   [](sd_bus_message *call) {
+                     return sd_bus_message_append(call, "isi", 0, "x", -1);
+                   }).failed,
+          "a negative insertion length is refused");
+  expect(node_text(harness, field) == std::optional<std::string>{"fresh"},
+          "invalid insertion lengths leave the text unchanged");
   const auto deleted = text_call(harness, field, kEditableInterface,
                                  "DeleteText",
                                  [](sd_bus_message *call) {
@@ -396,8 +409,8 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
                               [](sd_bus_message *call) {
                                 return sd_bus_message_append(call, "ii", 0, 2);
                               });
-  expect(parse_bool(copy.reply) == std::optional<bool>{false},
-         "copy is not an editor route");
+  expect(copy.failed && copy.error == SD_BUS_ERROR_NOT_SUPPORTED,
+         "copy is explicitly unsupported, not a private boolean reply");
   const auto paste = text_call(harness, field, kEditableInterface, "PasteText",
                                [](sd_bus_message *call) {
                                  return sd_bus_message_append(call, "i", 0);
@@ -410,8 +423,8 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
   if (!expect(notes.has_value(), "the multi-line field has a path")) return;
   expect(parse_bool(text_call(harness, *notes, kEditableInterface, "InsertText",
                               [](sd_bus_message *call) {
-                                return sd_bus_message_append(call, "is", 12,
-                                                             "\nthird");
+                                return sd_bus_message_append(call, "isi", 12,
+                                                             "\nthird", 20);
                               })
                         .reply) == std::optional<bool>{true},
          "a multi-line field takes an insertion at its end");

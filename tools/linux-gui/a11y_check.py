@@ -151,12 +151,39 @@ def main():
         executable = find("Executable name", "entry")
         until(lambda: state(executable, pyatspi.STATE_FOCUSED), "keyboard Tab focus reflected")
 
-        name.queryEditableText().setTextContents(REPLACEMENT)
+        editable = name.queryEditableText()
+        editable.setTextContents(REPLACEMENT)
         until(lambda: text.getText(0, -1) == REPLACEMENT, "UTF-8 field edit readable")
         assert text.characterCount == len(REPLACEMENT)
         assert text.getText(7, 11) == REPLACEMENT[7:11]
         assert text.setCaretOffset(8) and text.caretOffset == 8
         checks.append("Unicode character offsets and caret")
+
+        # Exercise the wire contract through libatspi, independently of the
+        # in-process sd-bus fixtures. Restore the fixture value before Save.
+        assert text.addSelection(1, 3)
+        until(lambda: text.getNSelections() == 1 and text.getSelection(0) == (1, 3),
+              "libatspi decodes the selection range")
+        assert text.removeSelection(0)
+        char_rect = text.getCharacterExtents(0, pyatspi.XY_SCREEN)
+        range_rect = text.getRangeExtents(0, 3, pyatspi.XY_SCREEN)
+        assert char_rect[2] > 0 and char_rect[3] > 0, char_rect
+        assert range_rect[2] > char_rect[2] and range_rect[3] >= char_rect[3], range_rect
+        checks.append("libatspi decodes character and range extents")
+
+        end = len(REPLACEMENT)
+        assert editable.insertText(end, "é-tail", len("é".encode()))
+        until(lambda: text.getText(0, -1) == REPLACEMENT + "é",
+              "libatspi inserts the specified UTF-8 byte prefix")
+        assert editable.deleteText(end, end + 1)
+        until(lambda: text.getText(0, -1) == REPLACEMENT, "libatspi removes the test insertion")
+        try:
+            copied = editable.copyText(0, 1)
+        except GLib.Error as error:
+            assert "Accessible clipboard copy" in str(error), error
+        else:
+            assert not copied, "the editor must not expose clipboard copying through AT-SPI"
+        checks.append("libatspi observes refusal of accessible clipboard copying")
         until(lambda: frame.name.endswith("*"), "unsaved title exported")
         undo = find("Undo", "button")
         until(lambda: state(undo, pyatspi.STATE_ENABLED), "Undo enablement exported")
