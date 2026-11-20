@@ -172,10 +172,11 @@ OverlayDisplayList build_overlay_display_list(const OverlayFrame &frame) {
   if (list.bounds.width <= 0 || list.bounds.height <= 0) return list;
   const auto &panel = frame.panel;
   const bool bar_style = panel.style == PanelStyle::bar;
-  const auto background = bar_style ? panel.bar.background_color : 0x272D35U;
-  const auto border = bar_style ? panel.bar.border_color : 0x50BAC8U;
-  const auto fill = bar_style ? panel.bar.fill_color : 0x50BAC8U;
-  const auto text_color = bar_style ? panel.bar.text_color : 0xE4E8ECU;
+  const auto &palette = overlay_palette;
+  const auto background = bar_style ? panel.bar.background_color : palette.card_background;
+  const auto border = bar_style ? panel.bar.border_color : palette.card_border;
+  const auto fill = bar_style ? panel.bar.fill_color : palette.card_border;
+  const auto text_color = bar_style ? panel.bar.text_color : palette.card_text;
   const bool show_text = !bar_style || panel.bar.show_text;
   const int font_px = scaled_pixels(overlay_font_dip, frame.dpi);
   list.ops.push_back({OverlayOpKind::fill_rect,

@@ -71,17 +71,18 @@ bool OverlayWindow::ensure_render_resources() {
   }
 
   const bool is_bar = panel_.style == layerc::core::PanelStyle::bar;
+  const auto &palette = layerc::core::overlay_palette;
   const auto background_color =
-      is_bar ? panel_.bar.background_color : 0x272D35U;
-  const auto border_color = is_bar ? panel_.bar.border_color : 0x50BAC8U;
+      is_bar ? panel_.bar.background_color : palette.card_background;
+  const auto border_color = is_bar ? panel_.bar.border_color : palette.card_border;
   const auto fill_color = is_bar ? panel_.bar.fill_color : border_color;
-  const auto text_color = is_bar ? panel_.bar.text_color : 0xE4E8ECU;
+  const auto text_color = is_bar ? panel_.bar.text_color : palette.card_text;
 
   font_ =
       CreateFontW(font_height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-  window_brush_ = CreateSolidBrush(native_color_ref(0x151A20U));
+  window_brush_ = CreateSolidBrush(native_color_ref(palette.window_backdrop));
   panel_brush_ = CreateSolidBrush(native_color_ref(background_color));
   fill_brush_ = CreateSolidBrush(native_color_ref(fill_color));
   border_pen_ =

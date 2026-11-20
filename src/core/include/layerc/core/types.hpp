@@ -271,6 +271,17 @@ struct OverlayMetrics {
 };
 inline constexpr OverlayMetrics overlay_metrics{};
 
+// Shared overlay colors (0xRRGGBB) with the same single owner: card panels
+// always paint the card palette, bar panels their BarAppearance colors. The
+// Windows overlay window shows its backdrop behind cards and grouped bars.
+struct OverlayPalette {
+  std::uint32_t card_background{0x272D35};
+  std::uint32_t card_border{0x50BAC8};
+  std::uint32_t card_text{0xE4E8EC};
+  std::uint32_t window_backdrop{0x151A20};
+};
+inline constexpr OverlayPalette overlay_palette{};
+
 struct OverlayGridExtent {
   std::size_t columns{};
   std::size_t rows{};

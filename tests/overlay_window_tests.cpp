@@ -587,10 +587,11 @@ void typed_rows_render_and_resize() {
   fixture.cooldowns.front().active_duration = Milliseconds{2'000};
   fixture.panel.cooldown_ids.clear();
   fixture.panel.items = std::vector<OverlayItem>{
-      {.id = "cooldown", .content = CooldownItem{"dash"}},
-      {.id = "active", .content = CooldownActiveTimerItem{"dash"}},
-      {.id = "counter", .content = CounterItem{"count", 8., CounterDisplay::pips}},
-      {.id = "flag", .content = IndicatorItem{"flag", 2.}}};
+      {.id = "cooldown", .label = {}, .content = CooldownItem{"dash"}},
+      {.id = "active", .label = {}, .content = CooldownActiveTimerItem{"dash"}},
+      {.id = "counter", .label = {},
+       .content = CounterItem{"count", 8., CounterDisplay::pips}},
+      {.id = "flag", .label = {}, .content = IndicatorItem{"flag", 2.}}};
   AutomationProfile graph;
   graph.profile_id = "fixture";
   graph.variables = {{"count", AutomationValueType::integer, AutomationValue(std::int64_t{2})},

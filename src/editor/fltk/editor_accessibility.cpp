@@ -1,6 +1,7 @@
 // Accessibility bus publication through the editor's own AT-SPI adaptor.
 #include "editor_accessibility.hpp"
 
+#include "a11y/atspi/adaptor.hpp"
 #include "a11y/fltk_tree.hpp"
 
 #include <FL/Fl.H>
@@ -10,14 +11,28 @@
 
 namespace layerc::editor {
 
-std::string accessibility_status_line(const a11y::atspi::AdaptorStatus &status) {
+namespace {
+AccessibilityStatus neutral_status(const a11y::atspi::AdaptorStatus &status) {
   switch (status.state) {
   case a11y::atspi::StatusState::on:
-    return "Accessibility: AT-SPI bridge active";
+    return {AccessibilityStatusState::active, {}};
   case a11y::atspi::StatusState::off:
-    return "Accessibility: AT-SPI bridge waiting for a screen reader";
+    return {AccessibilityStatusState::waiting, {}};
   case a11y::atspi::StatusState::unavailable:
-    break;
+    return {AccessibilityStatusState::unavailable, status.reason};
+  }
+  return {AccessibilityStatusState::unavailable, status.reason};
+}
+} // namespace
+
+std::string accessibility_status_line(const AccessibilityStatus &status) {
+  switch (status.state) {
+  case AccessibilityStatusState::active:
+    return "Accessibility: AT-SPI bridge active";
+  case AccessibilityStatusState::waiting:
+    return "Accessibility: AT-SPI bridge waiting for a screen reader";
+  case AccessibilityStatusState::unavailable:
+    return "Accessibility unavailable: " + status.reason;
   }
   return "Accessibility unavailable: " + status.reason;
 }
@@ -43,14 +58,14 @@ struct EditorAccessibility::Impl {
   }
   static void deliver(void *data) {
     auto &self = *static_cast<Impl *>(data);
-    if (self.handler) self.handler(self.adaptor.status());
+    if (self.handler) self.handler(neutral_status(self.adaptor.status()));
   }
   void set_handler(StatusHandler next) {
     handler = std::move(next);
     adaptor.on_status_change(handler ? &Impl::deliver : nullptr, handler ? this : nullptr);
     // A late caller renders the current line without waiting for the next
     // change; this runs on the FLTK thread, outside any bus dispatch.
-    if (handler) handler(adaptor.status());
+    if (handler) handler(neutral_status(adaptor.status()));
   }
 };
 
@@ -58,8 +73,8 @@ EditorAccessibility::EditorAccessibility(EditorApp &app)
     : impl_(std::make_unique<Impl>(app)) {}
 EditorAccessibility::~EditorAccessibility() = default;
 
-a11y::atspi::AdaptorStatus EditorAccessibility::status() const {
-  return impl_->adaptor.status();
+AccessibilityStatus EditorAccessibility::status() const {
+  return neutral_status(impl_->adaptor.status());
 }
 
 void EditorAccessibility::set_status_handler(StatusHandler handler) {

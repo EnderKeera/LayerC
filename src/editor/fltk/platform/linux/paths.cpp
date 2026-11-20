@@ -16,10 +16,20 @@ std::string file_chooser_start_directory() {
   return home != nullptr ? std::string(home) : std::string{};
 }
 
+std::string profile_directory_unavailable_reason() {
+  return "No profiles folder: HOME is not an absolute path.";
+}
+
 std::filesystem::path editor_appearance_path() {
   const auto roots = platform::profile_store_roots();
   if (roots.config_profiles.empty()) return {};
   return roots.config_profiles.parent_path() / "editor-appearance.json";
 }
+
+bool editor_appearance_file_supported() noexcept { return true; }
+
+std::string editor_appearance_file_unavailable_reason() { return {}; }
+
+std::string_view folder_opener_name() noexcept { return "xdg-open"; }
 
 } // namespace layerc::editor

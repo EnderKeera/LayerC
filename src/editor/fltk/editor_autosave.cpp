@@ -17,7 +17,6 @@ EditorApp::~EditorApp() {
   session.set_change_listener({});
   stop_edit_services();
   stop_opener();
-  live_draft_watch_.reset();
   live_draft_.reset(); // the only join: bounded, and only at shutdown
 }
 
@@ -57,6 +56,13 @@ void EditorApp::sync_edit_services() {
     return;
   }
   schedule_autosave(session.last_edit_was_text());
+  if (!standalone_live_drafts()) {
+    end_live_draft();
+    live_draft_text_.clear();
+    live_draft_kind_ = StatusKind::none;
+    update_daemon_status();
+    return;
+  }
   const auto &document = session.document();
   const bool allowed = (!document.legacy_base_schema() && !document.legacy_visual_schema()) ||
                        document.upgrade_acknowledged();
@@ -68,9 +74,14 @@ void EditorApp::sync_edit_services() {
     return;
   }
   if (!live_draft_) {
-    live_draft_ = std::make_unique<LiveDraftClient>();
-    live_draft_watch_ =
-        std::make_unique<LiveDraftWatch>(*live_draft_, [this] { live_draft_ready(); });
+    auto created = make_standalone_live_drafts([this] { live_draft_ready(); });
+    if (const auto *unavailable = std::get_if<StandaloneLiveDraftsUnavailable>(&created)) {
+      live_draft_kind_ = StatusKind::warning;
+      live_draft_text_ = "unavailable — " + unavailable->reason;
+      update_daemon_status();
+      return;
+    }
+    live_draft_ = std::get<std::unique_ptr<StandaloneLiveDrafts>>(std::move(created));
   }
   // The worker ends another profile's lease before publishing this one.
   live_draft_sequence_ =

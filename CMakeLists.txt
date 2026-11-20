@@ -607,6 +607,7 @@ endif()
 # history, commit pipeline, and profile/automation helpers. It has no toolkit
 # or platform headers; the platform library supplies the profile store.
 if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
+    include(cmake/EditorFLTKSources.cmake)
     add_library(layerc_editor_core STATIC
         src/editor/common/automation_graph.cpp
         src/editor/common/automation_presets.cpp
@@ -637,11 +638,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
             src/editor/fltk/platform/linux/live_draft_client.cpp
             src/editor/fltk/platform/linux/paths.cpp
             src/editor/fltk/platform/linux/folder_opener.cpp
-            src/editor/fltk/lease_worker.cpp
-            src/editor/fltk/editor_session.cpp
-            src/editor/fltk/profile_mutations.cpp
-            src/editor/fltk/editor_appearance.cpp
-            src/editor/fltk/task_list.cpp)
+            ${LAYERC_EDITOR_FLTK_PORTABLE_SUPPORT_SOURCES})
         target_include_directories(layerc_editor_linux PUBLIC src/editor/fltk)
         target_include_directories(layerc_editor_linux PRIVATE src/platform/linux)
         find_package(Threads REQUIRED)
@@ -650,12 +647,6 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         layerc_enable_warnings(layerc_editor_linux)
         if(LAYERC_BUILD_EDITOR AND LAYERC_HAVE_X11)
             include(cmake/LinuxEditorGUI.cmake)
-            if(TARGET layerc_editor_fltk)
-                # The FLTK-only accessible text registry (DesignSystem.md, Screen
-                # readers) belongs to the GUI library the include defines.
-                target_sources(layerc_editor_fltk PRIVATE
-                    src/editor/fltk/accessible_widgets.cpp)
-            endif()
         elseif(LAYERC_REQUIRE_EDITOR)
             message(FATAL_ERROR "Linux LayerE required but not buildable: X11 development files were not found")
         endif()

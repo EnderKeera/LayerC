@@ -117,38 +117,14 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/a11y/atspi/objects_services.cpp
     src/editor/fltk/a11y/atspi/objects_text.cpp
     src/editor/fltk/a11y/atspi/status.cpp
+    ${LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES}
     src/editor/fltk/editor_accessibility.cpp
-    src/editor/fltk/editor_app.cpp
-    src/editor/fltk/editor_style.cpp
-    src/editor/fltk/editor_popup.cpp
-    src/editor/fltk/editor_color_chooser.cpp
-    src/editor/fltk/editor_autosave.cpp
-    src/editor/fltk/diagnostics_window.cpp
-    src/editor/fltk/appearance_window.cpp
-    src/editor/fltk/editor_tools.cpp
-    src/editor/fltk/editor_placement.cpp
-    src/editor/fltk/tasks_window.cpp
     src/editor/fltk/platform/linux/tasks.cpp
-    src/editor/fltk/automation_editor.cpp
-    src/editor/fltk/visual_editor.cpp
-    src/editor/fltk/calibration_window.cpp
-    src/editor/fltk/calibration_preview.cpp
-    src/editor/fltk/editor_forms.cpp
-    src/editor/fltk/editor_geometry.cpp
-    src/editor/fltk/editor_import.cpp
-    src/editor/fltk/cooldown_groups_window.cpp
-    src/editor/fltk/export_selection_window.cpp
-    src/editor/fltk/editor_commands.cpp
-    src/editor/fltk/editor_pages.cpp
-    src/editor/fltk/panel_item_dialog.cpp
-    src/editor/fltk/panel_items_controls.cpp
-    src/editor/fltk/editor_menus.cpp
-    src/editor/fltk/editor_preview.cpp
-    src/editor/fltk/binding_capture.cpp
     src/editor/fltk/platform/linux/binding_events.cpp
     src/editor/fltk/platform/linux/calibration_source.cpp
     src/editor/fltk/platform/linux/desktop_font.cpp
-    src/editor/fltk/platform/linux/live_draft_watch.cpp)
+    src/editor/fltk/platform/linux/live_draft_watch.cpp
+    src/editor/fltk/platform/linux/overlay_preview.cpp)
 target_include_directories(layerc_editor_fltk PRIVATE src/platform/linux)
 if(LAYERC_EDITOR_SYSROOT)
     # fltk-config omits /usr/include when it is the compiler's default root.

@@ -17,7 +17,7 @@
 
 namespace layerc::editor {
 namespace {
-constexpr int width = 680, height = 480, margin = 10;
+constexpr int diagnostics_width = 680, diagnostics_height = 480, margin = 10;
 constexpr int button_height = editor_button_height;
 
 // The window stretches its content; the action row stretches only its spacer.
@@ -83,20 +83,21 @@ void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text) {
 }
 
 DiagnosticsWindow::DiagnosticsWindow()
-    : window_(std::make_unique<Fl_Double_Window>(width, height, "Runtime diagnostics — LayerE")) {
+    : window_(std::make_unique<Fl_Double_Window>(diagnostics_width, diagnostics_height,
+                                                 "Runtime diagnostics — LayerE")) {
   window_->begin();
-  text_ = new EditorField<Fl_Multiline_Output>(margin, margin, width - 2 * margin,
-                                  height - 3 * margin - button_height, "Runtime diagnostics");
+  text_ = new EditorField<Fl_Multiline_Output>(margin, margin, diagnostics_width - 2 * margin,
+      diagnostics_height - 3 * margin - button_height, "Runtime diagnostics");
   text_->wrap(1);
   text_->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE);
   text_->labeltype(FL_NO_LABEL);
   text_->textfont(FL_COURIER);
-  const int y = height - margin - button_height;
+  const int y = diagnostics_height - margin - button_height;
   auto *refresh_button = new Fl_Button(margin, y, 110, button_height, "&Refresh");
   refresh_button->callback(on_refresh, this);
   auto *copy = new Fl_Button(margin + 120, y, 150, button_height, "&Copy raw JSON");
   copy->callback(on_copy, this);
-  auto *close = new Fl_Button(width - margin - 110, y, 110, button_height, "Close");
+  auto *close = new Fl_Button(diagnostics_width - margin - 110, y, 110, button_height, "Close");
   primary_button(*close);
   close->callback(on_close, this);
   window_->resizable(text_);

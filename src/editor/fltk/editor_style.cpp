@@ -211,7 +211,7 @@ void EditorChoice::draw() {
     selected.font = textfont();
     selected.size = textsize();
     selected.color = active_r() ? textcolor() : fl_inactive(textcolor());
-    selected.type = item->labeltype();
+    selected.type = static_cast<uchar>(item->labeltype());
     const auto shortcuts = fl_draw_shortcut;
     fl_draw_shortcut = 0;
     selected.draw(x() + 6, y() + 2, std::max(0, w() - 28), std::max(0, h() - 4),

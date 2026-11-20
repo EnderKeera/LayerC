@@ -211,10 +211,10 @@ std::optional<EditorBounds> ContextBrowser::row_bounds(int row,
   int left{}, top{}, width{}, height{};
   bbox(left, top, width, height);
   if (width <= 0 || height <= 0) return std::nullopt;
-  const auto first = static_cast<std::size_t>(row - 1);
-  if (tops.size() <= first + 1) return std::nullopt;
-  const int visible_top = std::max(top, tops[first]);
-  const int bottom = std::min(top + height, tops[first + 1]);
+  const auto index = static_cast<std::size_t>(row - 1);
+  if (tops.size() <= index + 1) return std::nullopt;
+  const int visible_top = std::max(top, tops[index]);
+  const int bottom = std::min(top + height, tops[index + 1]);
   if (bottom <= visible_top) return std::nullopt;
   return EditorBounds{left, visible_top, width, bottom - visible_top};
 }

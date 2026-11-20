@@ -15,6 +15,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 // The frontend's platform boundary. Reuse the toolkit-free contracts rather
@@ -31,20 +33,33 @@ namespace layerc::editor {
 // Where a file chooser starts before the user has picked a folder: the home
 // directory in the encoding FLTK's choosers take, or empty when unknown.
 [[nodiscard]] std::string file_chooser_start_directory();
+[[nodiscard]] std::string profile_directory_unavailable_reason();
 
-// Calls ready on the frontend loop whenever the client may hold an update;
-// ready must drain take_update(). Destroy the watch before its client.
-class LiveDraftWatch final {
-public:
-  LiveDraftWatch(const LiveDraftClient &client, std::function<void()> ready);
-  ~LiveDraftWatch();
-  LiveDraftWatch(const LiveDraftWatch &) = delete;
-  LiveDraftWatch &operator=(const LiveDraftWatch &) = delete;
-
-private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+struct StandaloneLiveDraftsUnavailable {
+  std::string reason;
 };
+
+class StandaloneLiveDrafts {
+public:
+  virtual ~StandaloneLiveDrafts() = default;
+  [[nodiscard]] virtual std::uint64_t publish(std::string profile_id,
+                                               std::string profile_json) = 0;
+  virtual void end() = 0;
+  [[nodiscard]] virtual std::optional<LiveDraftUpdate> take_update() = 0;
+};
+
+using StandaloneLiveDraftsResult =
+    std::variant<std::unique_ptr<StandaloneLiveDrafts>, StandaloneLiveDraftsUnavailable>;
+
+// Linux uses a standalone daemon lease. Other platforms report an explicit
+// unavailable result until their edit-session service is wired.
+[[nodiscard]] bool standalone_live_drafts() noexcept;
+[[nodiscard]] StandaloneLiveDraftsResult
+make_standalone_live_drafts(std::function<void()> ready);
+
+[[nodiscard]] bool editor_appearance_file_supported() noexcept;
+[[nodiscard]] std::string editor_appearance_file_unavailable_reason();
+[[nodiscard]] std::string_view folder_opener_name() noexcept;
 
 // A bounded, demand-opened scan. Matching excludes this editor's own process.
 [[nodiscard]] std::vector<TaskCandidate> scan_tasks(std::string &error);
@@ -82,8 +97,9 @@ private:
 };
 
 struct FolderOpenExit {
-  // Empty when the launcher could not be reaped normally.
+  // Empty when no child exists or its exit status cannot be read.
   std::optional<int> code;
+  bool accepted_without_process{};
 };
 
 // The external file manager starts in its own session. Closing the editor

@@ -97,7 +97,7 @@ void EditorApp::build() {
   accessibility = std::make_unique<EditorAccessibility>(*this);
   // The visible line follows every change, including the one that happens
   // while the editor is already open.
-  accessibility->set_status_handler([this](const a11y::atspi::AdaptorStatus &status) {
+  accessibility->set_status_handler([this](const AccessibilityStatus &status) {
     status_pane_->set_accessibility(accessibility_status_line(status));
   });
   load_appearance();

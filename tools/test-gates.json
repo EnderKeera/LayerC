@@ -21,6 +21,7 @@
         "layerc_editor_visual_tests",
         "layerc_editor_color_tests",
         "layerc_editor_live_edit_tests",
+        "layerc_editor_overlay_preview_tests",
         "layerc_editor_tests",
         "layerc_fltk_accessibility_tree_tests",
         "layerc_isolated_visual_tests",
@@ -119,6 +120,7 @@
       "description": "Linux LayerE toolkit suites under an X display (CTest label editor); selected by tools/run-linux-tests.sh --editor.",
       "label": "editor",
       "required": [
+        "layerc_editor_overlay_preview_tests",
         "layerc_fltk_accessibility_tree_tests",
         "layerc_linux_atspi_adaptor_tests",
         "layerc_linux_editor_atspi_mapping_tests",

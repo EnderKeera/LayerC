@@ -7,7 +7,6 @@
 #include "editor_pages.hpp"
 #include "automation_editor.hpp"
 #include "visual_editor.hpp"
-#include "live_draft_client.hpp"
 #include "task_list.hpp"
 #include "tasks_window.hpp"
 #include "diagnostics_window.hpp"
@@ -135,8 +134,7 @@ private:
   bool pending_fields_{};
   bool saving_{};
   std::uint64_t observed_generation_{};
-  std::unique_ptr<LiveDraftClient> live_draft_;
-  std::unique_ptr<LiveDraftWatch> live_draft_watch_; // destroyed before its client
+  std::unique_ptr<StandaloneLiveDrafts> live_draft_;
   std::string live_draft_text_;
   StatusKind live_draft_kind_{StatusKind::none};
   std::uint64_t live_draft_sequence_{}; // latest publish; 0 when none is current

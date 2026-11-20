@@ -4,7 +4,7 @@
 #include "layerc/core/panel_geometry.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "automation_simulator.hpp"
-#include "display_types.hpp"
+#include "platform/overlay_preview.hpp"
 
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
@@ -121,27 +121,32 @@ void PanelPreview::draw() {
       const auto view = present(panel, &simulated);
       if (!view.presentation.visible) continue;
       const auto placed = placement(view.panel, frame, view.presentation.items.size());
-      platform::OverlayFrame overlay;
-      overlay.panel = view.panel;
-      for (const auto &item : view.presentation.items)
-        overlay.bars.push_back(platform::overlay_bar_from_presentation(item));
-      const auto display = platform::build_overlay_display_list(overlay);
-      // This is the exact same typed paint model as X11, cairo and GNOME.
-      for (const auto &op : display.ops) {
-        const int left = placed.left + static_cast<int>(op.rect.x * placed.scale);
-        const int top = placed.top + static_cast<int>(op.rect.y * placed.scale);
-        const int width = std::max(1, static_cast<int>(op.rect.width * placed.scale));
-        const int height = std::max(1, static_cast<int>(op.rect.height * placed.scale));
+      // The local overlay's own paint model: the shared display list on
+      // Linux, the GDI overlay's rounded shapes on Windows.
+      const auto paint = overlay_preview_paint(view.panel, view.presentation.items);
+      const Fl_Font face = paint.face == OverlayPreviewFace::monospace
+          ? FL_COURIER : FL_HELVETICA_BOLD;
+      for (const auto &op : paint.ops) {
+        const int left = placed.left + static_cast<int>(op.x * placed.scale);
+        const int top = placed.top + static_cast<int>(op.y * placed.scale);
+        const int width = std::max(1, static_cast<int>(op.width * placed.scale));
+        const int height = std::max(1, static_cast<int>(op.height * placed.scale));
+        const int radius = op.radius > 0
+            ? std::min({std::max(1, static_cast<int>(std::lround(op.radius * placed.scale))),
+                        width / 2, height / 2})
+            : 0;
         fl_color(rgb(op.rgb));
         switch (op.kind) {
-        case platform::OverlayOpKind::fill_rect:
-          fl_rectf(left, top, width, height);
+        case OverlayPreviewOp::Kind::fill:
+          if (radius > 0) fl_rounded_rectf(left, top, width, height, radius);
+          else fl_rectf(left, top, width, height);
           break;
-        case platform::OverlayOpKind::stroke_rect:
-          fl_rect(left, top, width, height);
+        case OverlayPreviewOp::Kind::stroke:
+          if (radius > 0) fl_rounded_rect(left, top, width, height, radius);
+          else fl_rect(left, top, width, height);
           break;
-        case platform::OverlayOpKind::text:
-          fl_font(FL_COURIER, std::max(8, static_cast<int>(op.font_px * placed.scale)));
+        case OverlayPreviewOp::Kind::text:
+          fl_font(face, std::max(8, static_cast<int>(op.font_px * placed.scale)));
           fl_draw(op.text.c_str(), left + 2, top + 1, std::max(width - 4, 1),
                   std::max(height - 2, 1), FL_ALIGN_INSIDE | FL_ALIGN_CENTER);
           break;

@@ -83,6 +83,12 @@ if(TARGET layerc_editor_fltk_uia)
         SOURCES tests/fltk_accessibility_tree_tests.cpp
         LINK layerc_editor_fltk_a11y TIMEOUT 60 LABELS required editor)
 endif()
+if(TARGET layerc_editor_fltk_support)
+    # The preview's paint model mirrors the GDI overlay; no window is opened.
+    layerc_add_test(layerc_editor_overlay_preview_tests WIN32
+        SOURCES tests/editor_overlay_preview_tests.cpp
+        LINK layerc_editor_fltk_support TIMEOUT 30 LABELS required editor)
+endif()
 if(TARGET layere_fltk)
     add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)
     set_tests_properties(layerc_windows_fltk_smoke PROPERTIES
@@ -423,6 +429,12 @@ if(NOT WIN32)
         layerc_add_test(layerc_linux_editor_atspi_mapping_tests
             SOURCES tests/linux_atspi_mapping_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+        # Display-free: the preview takes the overlays' shared display list.
+        layerc_add_test(layerc_editor_overlay_preview_tests
+            SOURCES tests/editor_overlay_preview_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+        target_include_directories(layerc_editor_overlay_preview_tests PRIVATE
+            src/platform/linux)
         layerc_add_test(layerc_fltk_accessibility_tree_tests
             SOURCES tests/fltk_accessibility_tree_tests.cpp
             LINK layerc_editor_fltk_a11y TIMEOUT 60 SKIP_RETURN_CODE 77

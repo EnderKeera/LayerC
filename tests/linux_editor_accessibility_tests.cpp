@@ -639,15 +639,14 @@ void linux_editor_shortcuts_columns() {
 // The visible line says the same thing the status reports, and it changes while
 // the editor stays open.
 void linux_editor_accessibility_status_lines() {
-  using atspi::AdaptorStatus;
-  using atspi::StatusState;
-  expect(editor::accessibility_status_line({StatusState::on, {}}) ==
+  using editor::AccessibilityStatusState;
+  expect(editor::accessibility_status_line({AccessibilityStatusState::active, {}}) ==
              "Accessibility: AT-SPI bridge active",
-         "on keeps the wording the GUI checks");
-  expect(editor::accessibility_status_line({StatusState::off, {}}) ==
+         "active keeps the wording the GUI checks");
+  expect(editor::accessibility_status_line({AccessibilityStatusState::waiting, {}}) ==
              "Accessibility: AT-SPI bridge waiting for a screen reader",
-         "off names the waiting state");
-  expect(editor::accessibility_status_line({StatusState::unavailable,
+         "waiting names the waiting state");
+  expect(editor::accessibility_status_line({AccessibilityStatusState::unavailable,
                                             "no accessibility bus is reachable"}) ==
              "Accessibility unavailable: no accessibility bus is reachable",
          "unavailable names the reason");
@@ -660,9 +659,21 @@ void linux_editor_accessibility_status_lines() {
   struct Log {
     atspi::Adaptor *adaptor{};
     std::vector<std::string> lines;
+    static editor::AccessibilityStatus neutral_status(const atspi::AdaptorStatus &status) {
+      switch (status.state) {
+      case atspi::StatusState::on:
+        return {editor::AccessibilityStatusState::active, {}};
+      case atspi::StatusState::off:
+        return {editor::AccessibilityStatusState::waiting, {}};
+      case atspi::StatusState::unavailable:
+        return {editor::AccessibilityStatusState::unavailable, status.reason};
+      }
+      return {editor::AccessibilityStatusState::unavailable, status.reason};
+    }
     static void record(void *data) {
       auto &self = *static_cast<Log *>(data);
-      self.lines.push_back(editor::accessibility_status_line(self.adaptor->status()));
+      self.lines.push_back(editor::accessibility_status_line(
+          neutral_status(self.adaptor->status())));
     }
   } log;
   {
@@ -676,15 +687,16 @@ void linux_editor_accessibility_status_lines() {
            "the line turns active when a consumer listens");
     harness.set_flags(false, false);
     expect(harness.spin_until(
-               [&] { return adaptor.status().state == StatusState::off; },
+               [&] { return adaptor.status().state == atspi::StatusState::off; },
                ms(3000)),
            "the status returns to waiting");
     expect(log.lines.back() ==
                "Accessibility: AT-SPI bridge waiting for a screen reader",
            "the line returns to waiting");
     harness.set_flags(true, false);
-    expect(harness.spin_until([&] { return adaptor.status().state == StatusState::on; },
-                              ms(3000)),
+    expect(harness.spin_until(
+               [&] { return adaptor.status().state == atspi::StatusState::on; },
+               ms(3000)),
            "the status turns on again");
   }
 }
@@ -716,14 +728,15 @@ void linux_editor_accessibility_in_the_window() {
     return;
   std::string line;
   accessibility->set_status_handler(
-      [&](const atspi::AdaptorStatus &status) {
+      [&](const editor::AccessibilityStatus &status) {
         line = editor::accessibility_status_line(status);
       });
   expect(line == "Accessibility: AT-SPI bridge waiting for a screen reader",
          "a late caller is handed the current waiting line");
   harness.set_flags(true, false);
   expect(harness.spin_until(
-             [&] { return accessibility->status().state == atspi::StatusState::on; },
+             [&] { return accessibility->status().state ==
+                       editor::AccessibilityStatusState::active; },
              ms(3000)),
          "the window's own adaptor turns on");
   expect(line == "Accessibility: AT-SPI bridge active",

@@ -149,9 +149,14 @@ PanelColorsLayout panel_colors_layout() {
 
 void EditorApp::load_appearance() {
   appearance_path_ = editor_appearance_path();
-  auto loaded = load_editor_appearance(appearance_path_);
-  appearance_ = loaded.appearance;
-  appearance_error_ = std::move(loaded.error);
+  if (editor_appearance_file_supported()) {
+    auto loaded = load_editor_appearance(appearance_path_);
+    appearance_ = loaded.appearance;
+    appearance_error_ = std::move(loaded.error);
+  } else {
+    appearance_ = {};
+    appearance_error_.clear();
+  }
   // The default is a preset too, so it is always applied.
   apply_editor_appearance(appearance_, window, profiles, preview);
 }
@@ -159,11 +164,12 @@ void EditorApp::load_appearance() {
 
 void EditorApp::open_profiles_folder() {
   const auto directory = session.directory();
-  if (directory.empty()) { report(StatusKind::failure, "No profiles folder: HOME is not an absolute path."); return; }
+  if (directory.empty()) { report(StatusKind::failure, profile_directory_unavailable_reason()); return; }
   if (opener_.running()) { report(StatusKind::information, "The file manager is still starting."); return; }
   const std::string path = directory.string();
   if (!opener_.start(directory)) {
-    report(StatusKind::failure, "Could not start xdg-open; the profiles folder is " + path);
+    report(StatusKind::failure, "Could not start " + std::string(folder_opener_name()) +
+           "; the profiles folder is " + path);
     return;
   }
   opener_path_ = path;
@@ -176,8 +182,13 @@ void EditorApp::opener_tick(void *data) {
   if (!app.opener_.running()) return;
   const auto exit = app.opener_.poll();
   if (!exit) { Fl::repeat_timeout(0.1, &EditorApp::opener_tick, data); return; }
-  if (!exit->code || *exit->code != 0)
-    app.report(StatusKind::failure, "xdg-open could not open the profiles folder (" +
+  if (exit->accepted_without_process)
+    app.report(StatusKind::information, std::string(folder_opener_name()) +
+               " accepted the folder request, but no process exit status is available: " +
+               app.opener_path_);
+  else if (!exit->code || *exit->code != 0)
+    app.report(StatusKind::failure, std::string(folder_opener_name()) +
+               " could not open the profiles folder (" +
                (exit->code ? "exit " + std::to_string(*exit->code)
                            : std::string("no exit status")) +
                "); it is " + app.opener_path_);
