@@ -178,12 +178,12 @@ const std::vector<double> &TextMetrics::line(const Fl_Input_ *field, int font, i
   // when an edit moved it to another index. The pass table then offers it to
   // every other field with that text.
   Line *line = nullptr;
-  if (const auto found = fields.lines.find(expanded);
-      found != fields.lines.end() && found->second.font == key) {
-    line = &found->second;
-  } else if (const auto found = table.lines.find(expanded); found != table.lines.end()) {
+  if (const auto own = fields.lines.find(expanded);
+      own != fields.lines.end() && own->second.font == key) {
+    line = &own->second;
+  } else if (const auto shared = table.lines.find(expanded); shared != table.lines.end()) {
     line = &fields.lines.insert_or_assign(std::string(expanded),
-                                          Line{key, found->second.advances, impl.pass})
+                                          Line{key, shared->second.advances, impl.pass})
                 .first->second;
   } else {
     line = &fields.lines.insert_or_assign(std::string(expanded), Line{key, {}, impl.pass})
