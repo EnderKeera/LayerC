@@ -37,7 +37,7 @@ namespace layerc::test::atspi_fixture {
 // --- case a ---------------------------------------------------------------
 
 void accessibility_is_off_until_a_consumer_listens() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -59,7 +59,7 @@ void accessibility_is_off_until_a_consumer_listens() {
 // --- case b ---------------------------------------------------------------
 
 void enabling_accessibility_embeds_and_keeps_one_application() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -103,7 +103,7 @@ void enabling_accessibility_embeds_and_keeps_one_application() {
 // --- case c ---------------------------------------------------------------
 
 void clients_read_the_tree_over_dbus() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -250,7 +250,7 @@ void clients_read_the_tree_over_dbus() {
 // --- case d ---------------------------------------------------------------
 
 void changes_reach_listeners_as_protocol_events() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -360,7 +360,7 @@ void changes_reach_listeners_as_protocol_events() {
 }
 
 void announcements_are_suppressed_without_a_listener() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -407,7 +407,7 @@ void announcements_are_suppressed_without_a_listener() {
 // --- case e ---------------------------------------------------------------
 
 void disabling_stops_events_and_enabling_resumes() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -472,7 +472,7 @@ void disabling_stops_events_and_enabling_resumes() {
 // --- case f ---------------------------------------------------------------
 
 void the_status_watch_reports_why_accessibility_is_unavailable() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
 
   // A Flatpak-style fixed address needs neither org.a11y.Bus nor a flag query.
@@ -557,7 +557,7 @@ void the_status_watch_reports_why_accessibility_is_unavailable() {
 // --- case q ---------------------------------------------------------------
 
 void a_late_address_reply_does_not_override_disabling() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -591,7 +591,7 @@ void a_late_address_reply_does_not_override_disabling() {
 // --- case r ---------------------------------------------------------------
 
 void a_late_working_address_does_not_override_disabling() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -624,7 +624,7 @@ void a_late_working_address_does_not_override_disabling() {
 // --- case s ---------------------------------------------------------------
 
 void only_the_latest_address_request_answers() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);

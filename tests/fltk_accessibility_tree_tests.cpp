@@ -170,7 +170,7 @@ const a11y::Node *named(const a11y::Snapshot &snapshot, const std::string &label
 
 void fltk_accessibility_tree_snapshots() {
 #ifndef _WIN32
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
 #endif
   Fixture fixture;
   accessibility::set_accessible_name(fixture.field, "Source filter");
@@ -363,7 +363,7 @@ void fltk_accessibility_tree_snapshots() {
 // FLTK's loop, so the protocol call returns before a dialog can open.
 void fltk_accessibility_actions() {
 #ifndef _WIN32
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
 #endif
   const auto count = [](Fl_Widget *, void *data) { ++*static_cast<int *>(data); };
   const auto turn = [] { for (int round = 0; round < 3; ++round) Fl::check(); };
@@ -549,7 +549,7 @@ void fltk_accessibility_actions() {
 
 void fltk_accessibility_actions_allow_closing_the_source() {
 #ifndef _WIN32
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
 #endif
   {
     Fl_Window window(300, 200, "Row action");
@@ -592,7 +592,7 @@ void fltk_accessibility_actions_allow_closing_the_source() {
 // that type, so a round toggle is a check box and a radio-typed button is a radio.
 void fltk_accessibility_button_roles() {
 #ifndef _WIN32
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
 #endif
   Fl_Window window(0, 0, 420, 240, "Role probe");
   Fl_Group choices(20, 10, 300, 90);

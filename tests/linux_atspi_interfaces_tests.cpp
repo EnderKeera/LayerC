@@ -84,7 +84,7 @@ actions_of(Harness &harness, const std::string &path) {
 // --- case a: which interfaces each role announces -------------------------
 
 void interfaces_follow_each_roles_capabilities() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -184,7 +184,7 @@ void interfaces_follow_each_roles_capabilities() {
 // --- case b: Component ----------------------------------------------------
 
 void component_geometry_follows_the_coordinate_type() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -350,7 +350,7 @@ void component_geometry_follows_the_coordinate_type() {
 // --- case c: Action -------------------------------------------------------
 
 void action_names_and_activation_reach_the_widget() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -414,7 +414,7 @@ void action_names_and_activation_reach_the_widget() {
 // --- case f: Value and Selection -----------------------------------------
 
 void value_and_selection_mutations_reach_the_widgets() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -550,7 +550,7 @@ void value_and_selection_mutations_reach_the_widgets() {
 
 void selection_changes_use_the_right_bus_event_and_filter() {
   constexpr const char *kTextInterface = "org.a11y.atspi.Text";
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -638,7 +638,7 @@ void selection_changes_use_the_right_bus_event_and_filter() {
 }
 
 void numeric_changes_report_the_value_once_over_dbus() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -696,7 +696,7 @@ void numeric_changes_report_the_value_once_over_dbus() {
 // A client that activates a control and then reads sees the generation its own
 // action produced, without waiting for the next periodic walk.
 void an_action_reads_back_in_the_generation_it_made() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -747,7 +747,7 @@ void an_action_reads_back_in_the_generation_it_made() {
 // A listener-less client that polls a large tree pays at most one walk per
 // refresh interval; its own actions would add one walk each.
 void reads_without_a_listener_stay_within_the_walk_budget() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -793,7 +793,7 @@ void reads_without_a_listener_stay_within_the_walk_budget() {
 // The periodic check only exists to publish app-side changes; a walk that just
 // ran is not followed by another one until something changes or a request asks.
 void an_idle_listener_does_not_keep_walking() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -842,7 +842,7 @@ void an_idle_listener_does_not_keep_walking() {
 // A widget changed from an application timeout is published without any client
 // request and without input, so a listener sees it within a refresh interval.
 void an_app_change_reaches_the_listener() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);

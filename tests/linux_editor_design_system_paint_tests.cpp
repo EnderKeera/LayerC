@@ -98,7 +98,7 @@ private:
 } // namespace
 
 void linux_editor_design_system_paint_contracts() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   editor::install_editor_style();
   PaintWindow window(440, 200, "LayerE paint test fixture");
   editor::EditorField<Fl_Input> field(20, 25, 260, editor::editor_input_height);
@@ -137,7 +137,7 @@ void linux_editor_design_system_paint_contracts() {
 }
 
 void linux_editor_design_system_tab_and_glyph_contracts() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   editor::install_editor_style();
   PaintWindow window(440, 230, "LayerE tab and glyph test fixture");
   editor::EditorTabs tabs(20, 20, 400, 130);
@@ -196,7 +196,7 @@ void linux_editor_design_system_tab_and_glyph_contracts() {
 }
 
 void linux_editor_empty_state_contracts() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   editor::install_editor_style();
   PaintWindow window(300, 200, "LayerE empty-state fixture");
   EmptyStateBox empty(20, 20, 260, 160);

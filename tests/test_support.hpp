@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
@@ -38,6 +39,17 @@ inline constexpr int skip_code = 77;
 // connection and extension availability before exercising live operations.
 inline void require_x11() {
   if (!x11_display_available()) skip();
+}
+
+// For suites that open FLTK windows: skips like require_x11, then selects
+// FLTK's X11 backend as LayerE itself does (src/editor/fltk/main.cpp), so a
+// reachable Wayland compositor cannot change the backend under test. Call it
+// before the suite's first FLTK window.
+inline void require_fltk_x11() {
+  require_x11();
+#ifndef _WIN32
+  if (::setenv("FLTK_BACKEND", "x11", 1) != 0) skip();
+#endif
 }
 
 // Owns a fresh directory under the system temp root, unique per process and

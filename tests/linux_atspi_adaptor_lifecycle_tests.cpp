@@ -29,7 +29,7 @@ std::string launcher_service_file(const std::filesystem::path &marker) {
 // --- case g ---------------------------------------------------------------
 
 void a_change_inside_the_throttle_window_still_reaches_clients() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -86,7 +86,7 @@ void a_change_inside_the_throttle_window_still_reaches_clients() {
 // --- case h ---------------------------------------------------------------
 
 void a_lost_accessibility_bus_is_reported_and_recovered() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -153,7 +153,7 @@ void a_lost_accessibility_bus_is_reported_and_recovered() {
 // --- case i ---------------------------------------------------------------
 
 void a_refused_embed_is_reported_and_recovered() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -191,7 +191,7 @@ void a_refused_embed_is_reported_and_recovered() {
 // --- case j ---------------------------------------------------------------
 
 void listeners_from_two_buses_are_tracked_separately() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -237,7 +237,7 @@ void listeners_from_two_buses_are_tracked_separately() {
 // --- case k ---------------------------------------------------------------
 
 void a_listener_signal_before_the_reply_keeps_the_known_listeners() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -277,7 +277,7 @@ void a_listener_signal_before_the_reply_keeps_the_known_listeners() {
 // The address the bus hands out cannot be connected to: the status must name
 // that cause instead of the generic "not connected" that a teardown leaves.
 void a_failed_bus_open_names_its_cause_and_recovers() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -323,7 +323,7 @@ void a_failed_bus_open_names_its_cause_and_recovers() {
 // asking about the status must not start the launcher: only an assistive
 // technology does that, and the owner watch picks it up when it does.
 void a_missing_launcher_waits_and_is_not_activated() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   layerc::test::TempDirectory temp("layerc-atspi-launcher");
   const auto services = temp.path() / "dbus-1" / "services";
@@ -386,7 +386,7 @@ void a_missing_launcher_waits_and_is_not_activated() {
 // A launcher that is there but cannot name its bus is a fault with its own
 // reason, reported once, and recoverable.
 void a_launcher_that_names_no_bus_is_unavailable() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -429,7 +429,7 @@ void a_launcher_that_names_no_bus_is_unavailable() {
 // so and stops there — no session bus, no watch, no export, and re-enabling
 // cannot revive it because nothing is watching for a consumer.
 void no_at_bridge_disables_the_adaptor() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -468,7 +468,7 @@ void no_at_bridge_disables_the_adaptor() {
 // Any other NO_AT_BRIDGE value is not the opt-out: the bridge works as it does
 // with the variable unset.
 void no_at_bridge_zero_behaves_normally() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -490,7 +490,7 @@ void no_at_bridge_zero_behaves_normally() {
 // --- case n: registrations in the registry's own spelling ------------------
 
 void a_registry_spelled_listener_signal_turns_events_on() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -524,7 +524,7 @@ void a_registry_spelled_listener_signal_turns_events_on() {
 // --- case o ---------------------------------------------------------------
 
 void a_departed_listener_is_removed_with_its_bus() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -570,7 +570,7 @@ void a_departed_listener_is_removed_with_its_bus() {
 // --- case p ---------------------------------------------------------------
 
 void a_pattern_deregistration_removes_the_listeners_it_covers() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);

@@ -66,7 +66,7 @@ std::size_t attribute_count(sd_bus_message *message) {
 // --- case d: Text ---------------------------------------------------------
 
 void text_offsets_are_characters_and_geometry_is_real() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -295,7 +295,7 @@ void text_offsets_are_characters_and_geometry_is_real() {
 // --- case e: EditableText -------------------------------------------------
 
 void edits_run_through_the_fields_own_path_and_report_text_changes() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
@@ -443,7 +443,7 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
 // --- case f: the registry's spelling of a registration --------------------
 
 void a_registry_spelled_registration_reaches_the_text_events() {
-  layerc::test::require_x11();
+  layerc::test::require_fltk_x11();
   require_session_bus();
   Harness harness;
   require_private_bus(harness);
