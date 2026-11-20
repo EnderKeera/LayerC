@@ -46,6 +46,7 @@ void linux_editor_accessibility_descriptions();
 void linux_editor_accessibility_hint_and_names();
 void linux_editor_accessibility_color_names();
 void linux_editor_accessibility_announcements();
+void linux_editor_accessibility_popup_focus_events();
 void linux_editor_accessibility_keeps_fltk_file_chooser();
 void linux_editor_review_regressions();
 void linux_editor_empty_state_contracts();
@@ -974,6 +975,7 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_accessibility_hint_and_names),
   LAYERC_TEST_CASE(linux_editor_accessibility_color_names),
   LAYERC_TEST_CASE(linux_editor_accessibility_announcements),
+  LAYERC_TEST_CASE(linux_editor_accessibility_popup_focus_events),
   LAYERC_TEST_CASE(linux_editor_accessibility_keeps_fltk_file_chooser),
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_shortcuts_columns),

@@ -147,8 +147,9 @@ void popup_semantics_and_recovery() {
   expect(!a11y_snapshot::showing(first) &&
              a11y_snapshot::bounds(first) == a11y_snapshot::Bounds{},
          "LNX-02 closed dropdown items have no onscreen rectangle");
-  // The legacy signal counted focus entering the first row; count the same
-  // transition between passes.
+  // Focus entering the first row, counted between snapshot passes. This sees
+  // the model only; delivery of the focused-state event over the bus is
+  // asserted in linux_editor_accessibility_popup_focus_events.
   int focus_events = 0;
   a11y::NodeId observed_focus = focused_node(snapshot)
                                     ? focused_node(snapshot)->id
@@ -176,7 +177,7 @@ void popup_semantics_and_recovery() {
              "LNX-02 visible menu rows have distinct ordered extents");
       key(FL_Down); sync();
       expect(a11y_snapshot::focused(last) && !a11y_snapshot::focused(first) && focus_events == 1,
-             "LNX-02 arrows skip disabled items and emit focused state changes");
+             "LNX-02 arrows skip disabled items and move focus into the first row once");
       key(FL_Escape);
     });
     editor::track_editor_popup(bar, 0);

@@ -444,8 +444,11 @@ NodeId Adaptor::Impl::announcement_node(const Snapshot &snapshot) const {
     const NodeId id = tree.id_for(*announcement_source);
     if (id != no_node) return id;
   }
+  // As the legacy bridge did: a source that is not exported speaks from the
+  // active window, and with no window active, from the application.
   for (const auto &[id, node] : snapshot.nodes)
-    if (node.states.focused) return id;
+    if (id != snapshot.root && node.parent == snapshot.root && node.states.active)
+      return id;
   return snapshot.root;
 }
 

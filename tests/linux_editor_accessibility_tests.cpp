@@ -9,6 +9,7 @@
 #include "editor_accessibility.hpp"
 #include "editor_app.hpp"
 #include "editor_commands.hpp"
+#include "editor_popup.hpp"
 #include "linux_atspi_test_fixture.hpp"
 #include "linux_editor_test_access.hpp"
 #include "test_support.hpp"
@@ -28,6 +29,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -398,6 +401,34 @@ void linux_editor_accessibility_hint_and_names() {
   harness.spin(ms(300));
   expect(text_property(harness, *save, "Name") == "Save",
          "an empty name restores the label");
+  // A dialog's widgets die and the next dialog lands on the same addresses:
+  // neither the registry nor the exported tree may give the new widget the
+  // dead one's name.
+  alignas(Fl_Button) unsigned char storage[sizeof(Fl_Button)]{};
+  window.begin();
+  auto *first = new (storage) Fl_Button(10, 140, 160, 30, "First");
+  window.end();
+  layerc::editor::accessibility::set_accessible_name(*first, "First profile action");
+  window.redraw();
+  harness.spin(ms(300));
+  expect(layerc::editor::accessibility::accessible_name(*first) == "First profile action",
+         "the registry stores the name while the widget lives");
+  expect(named(harness, "First profile action").has_value(),
+         "the live widget is exported under its registered name");
+  first->~Fl_Button();
+  window.begin();
+  auto *second = new (storage) Fl_Button(10, 140, 160, 30, "Second");
+  window.end();
+  expect(static_cast<void *>(second) == static_cast<void *>(storage),
+         "the re-created button reuses the address");
+  expect(!layerc::editor::accessibility::accessible_name(*second),
+         "a re-created widget does not inherit a dead widget's name");
+  window.redraw();
+  harness.spin(ms(300));
+  expect(named(harness, "Second").has_value() &&
+             !named(harness, "First profile action").has_value(),
+         "the exported tree names the re-created widget by its own label");
+  second->~Fl_Button();
   window.hide();
   Fl::check();
 }
@@ -448,25 +479,144 @@ void linux_editor_accessibility_announcements() {
   if (!expect(announced.has_value(), "the announcement is readable")) return;
   expect(announced->path == *object, "an announcement comes from the widget's node");
   expect(announced->text == "Profile saved.", "the announcement text is preserved");
-  mark = harness.signals().size();
+  // A source that is not exported speaks from the active window, as the
+  // legacy bridge did, and with no window active from the application.
+  const auto top = children(harness, std::string{atspi::kRootPath});
+  if (!expect(top.size() == 1, "the application exports its one window")) return;
+  const std::string window_path = top.front().path;
+  const std::string root_path{atspi::kRootPath};
   Fl_Button unknown(10, 90, 160, 30, "Unknown");
+  // The one announcement since `from`, as a client hears it; none or a
+  // duplicate fails the case.
+  const auto heard = [&](const std::size_t from,
+                         const std::string &text) -> std::optional<Signal> {
+    (void)wait_event(harness, from,
+                     EventQuery{"org.a11y.atspi.Event.Object", "Announcement", ""},
+                     ms(2000));
+    harness.spin(ms(150));
+    std::optional<Signal> only;
+    int count = 0;
+    for (std::size_t i = from; i < harness.signals().size(); ++i)
+      if (harness.signals()[i].member == "Announcement") {
+        ++count;
+        only = harness.signals()[i];
+      }
+    if (count != 1 || !only || only->text != text) return std::nullopt;
+    return only;
+  };
+  expect(button.take_focus() != 0, "the window becomes active through its button");
+  Fl::check();
+  mark = harness.signals().size();
   adaptor.announce(&unknown, "No source widget.");
-  expect(wait_event(harness, mark,
-                    EventQuery{"org.a11y.atspi.Event.Object", "Announcement", ""},
-                    ms(2000)),
-         "an unknown widget still announces");
-  const auto fallback =
-      find_event(harness, mark,
-                 EventQuery{"org.a11y.atspi.Event.Object", "Announcement", ""});
-  if (expect(fallback.has_value(), "the fallback announcement is readable"))
-    expect(fallback->text == "No source widget.",
-           "an unknown widget falls back to the active window or the root");
+  auto fallback = heard(mark, "No source widget.");
+  expect(fallback && fallback->path == window_path,
+         "an unknown widget falls back to the active window");
   mark = harness.signals().size();
   adaptor.announce(nullptr, "No source at all.");
-  expect(wait_event(harness, mark,
-                    EventQuery{"org.a11y.atspi.Event.Object", "Announcement", ""},
-                    ms(2000)),
-         "a null source announces from the root");
+  fallback = heard(mark, "No source at all.");
+  expect(fallback && fallback->path == window_path,
+         "a null source speaks from the active window");
+  Fl::focus(nullptr);
+  Fl::check();
+  mark = harness.signals().size();
+  adaptor.announce(&unknown, "Nothing active.");
+  fallback = heard(mark, "Nothing active.");
+  expect(fallback && fallback->path == root_path,
+         "with no window active, an unknown widget speaks from the root");
+  mark = harness.signals().size();
+  adaptor.announce(nullptr, "No source, no window.");
+  fallback = heard(mark, "No source, no window.");
+  expect(fallback && fallback->path == root_path,
+         "a null source announces from the root when no window is active");
+  window.hide();
+  Fl::check();
+}
+
+// Sends one key to the popup that holds the grab, as the keyboard would.
+void popup_key(const int value) {
+  const int previous = Fl::e_keysym;
+  Fl::e_keysym = value;
+  if (auto *grab = Fl::grab()) grab->handle(FL_KEYBOARD);
+  Fl::e_keysym = previous;
+}
+
+// Runs a step once the popup's modal loop is up, from inside that loop.
+struct DuringPopup {
+  explicit DuringPopup(std::function<void()> body) : step(std::move(body)) {
+    Fl::add_timeout(0.01, run, this);
+  }
+  ~DuringPopup() { Fl::remove_timeout(run, this); }
+  DuringPopup(const DuringPopup &) = delete;
+  DuringPopup &operator=(const DuringPopup &) = delete;
+  std::function<void()> step;
+  int attempts{};
+  bool delivered{};
+  static void run(void *data) {
+    auto &self = *static_cast<DuringPopup *>(data);
+    if (Fl::modal() != nullptr) {
+      self.delivered = true;
+      self.step();
+    } else if (++self.attempts < 100) {
+      Fl::repeat_timeout(0.01, run, data);
+    }
+  }
+};
+
+// What a screen reader hears while it walks a popup: each arrow that moves the
+// highlight reports the focused state from the row it landed on, once, on the
+// bus (the snapshot-only LNX-02 case cannot see delivery).
+void linux_editor_accessibility_popup_focus_events() {
+  Session session;
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({"focus:", "object:"});
+  Fl_Window window(460, 300);
+  editor::EditorMenuBar bar(0, 0, 460, 28);
+  int invoked = 0;
+  const auto callback = [](Fl_Widget *, void *data) { ++*static_cast<int *>(data); };
+  bar.add("&Help/&First", 0, callback, &invoked);
+  bar.add("&Help/Disabled", 0, callback, &invoked, FL_MENU_INACTIVE);
+  bar.add("&Help/&Last", 0, callback, &invoked);
+  Fl_Button previous(20, 150, 150, 30, "Previous focus");
+  window.end();
+  window.show();
+  previous.take_focus();
+  Fl::check();
+  a11y::FltkTree tree;
+  atspi::Adaptor adaptor{tree};
+  if (!expect(enabled(harness), "a consumer enables the adaptor")) return;
+  harness.spin(ms(250));
+  const auto first = named(harness, "First");
+  const auto last = named(harness, "Last");
+  if (!expect(first && last, "the popup rows are exported before it opens")) return;
+  const auto focused_on = [&](const std::size_t from, const std::string &path) {
+    int count = 0;
+    for (std::size_t i = from; i < harness.signals().size(); ++i) {
+      const auto &signal = harness.signals()[i];
+      if (signal.member == "StateChanged" && signal.name == "focused" &&
+          signal.detail1 == 1 && signal.path == path)
+        ++count;
+    }
+    return count;
+  };
+  const auto mark = harness.signals().size();
+  {
+    DuringPopup probe([&] {
+      popup_key(FL_Down);
+      expect(harness.spin_until([&] { return focused_on(mark, *first) > 0; }, ms(2000)),
+             "the highlighted row reports its focused state on the bus");
+      popup_key(FL_Down);
+      expect(harness.spin_until([&] { return focused_on(mark, *last) > 0; }, ms(2000)),
+             "arrowing past the disabled row reports the last row focused");
+      harness.spin(ms(200));
+      expect(focused_on(mark, *first) == 1, "the first row's focus is reported once");
+      popup_key(FL_Escape);
+    });
+    editor::track_editor_popup(bar, 0);
+    expect(probe.delivered, "the popup probe ran inside the popup");
+  }
+  expect(!editor::popup_owner() && invoked == 0,
+         "Escape closes the popup without invoking a row");
   window.hide();
   Fl::check();
 }
