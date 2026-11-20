@@ -40,25 +40,12 @@ const Node *request_selection(const ObjectSource &source,
   return node;
 }
 
-struct SelectedChild {
-  NodeId id{};
-  std::size_t position{}; // Index within the container's children.
-};
-
-// A list row or tab is chosen through the selected state; a radio button,
-// which FLTK clears siblings of, is chosen through its checked state. A
-// container holds one chosen child (single select) or none.
-bool chosen(const Node &child) {
-  return child.states.selected ||
-         (child.role == Role::radio_button && child.states.checked);
-}
-
-std::vector<SelectedChild> selected_children(const ObjectSource &source,
-                                             const Node &node) {
-  std::vector<SelectedChild> selected;
-  for (std::size_t i = 0; i < node.children.size(); ++i) {
-    const Node *child = find_node(source, node.children[i]);
-    if (child != nullptr && chosen(*child)) selected.push_back({child->id, i});
+std::vector<NodeId> selected_children(const ObjectSource &source, const Node &node) {
+  std::vector<NodeId> selected;
+  for (const NodeId id : node.children) {
+    const Node *child = find_node(source, id);
+    if (child && selection_member(node.role, *child) && selected_item(*child))
+      selected.push_back(id);
   }
   return selected;
 }
@@ -113,7 +100,7 @@ int get_selected_child(sd_bus_message *message, void *data,
   // append_reference opens and closes the (so) struct itself.
   const int appended =
       found ? append_reference(reply, source.unique_name,
-                               chosen[static_cast<std::size_t>(*index)].id,
+                               chosen[static_cast<std::size_t>(*index)],
                                source.root)
             : append_null_reference(reply);
   if (appended < 0) {
@@ -131,7 +118,8 @@ int select_child(sd_bus_message *message, void *data, sd_bus_error *error) {
   if (!node) return -ENOENT;
   const Node *child = child_at(source, *node, *index);
   if (child == nullptr) return -EINVAL;
-  if (chosen(*child)) return reply_bool(message, false);
+  if (!selection_member(node->role, *child) || selected_item(*child))
+    return reply_bool(message, false);
   if (child->states.disabled || !child->states.showing)
     return reply_bool(message, false);
   const auto target = target_of(source, *child);
@@ -155,7 +143,7 @@ int is_child_selected(sd_bus_message *message, void *data, sd_bus_error *error) 
   const Node *node = request_selection(source, message, error);
   if (!node) return -ENOENT;
   const Node *child = child_at(source, *node, *index);
-  return reply_bool(message, child != nullptr && chosen(*child));
+  return reply_bool(message, child && selection_member(node->role, *child) && selected_item(*child));
 }
 
 const sd_bus_vtable kSelection[] = {

@@ -305,12 +305,13 @@ void emit_events(LoopBus &loop, const ObjectSource &source,
            true);
       break;
     }
-    case ChangeKind::value_changed: {
-      const Node *node = node_in(after, change.node);
-      if (!node || !node->range) break;
+    case ChangeKind::value_changed:
+      // Text fields report their edits via the Text interface.
+      break;
+    case ChangeKind::range_value_changed: {
       EventData data;
       data.kind = EventData::Kind::real;
-      data.real = node->range->value;
+      data.real = change.number;
       emit(change.node, kObjectEvent, "PropertyChange", "accessible-value", 0, 0,
            data, "object:property-change:accessible-value", false);
       break;
@@ -355,11 +356,14 @@ void emit_events(LoopBus &loop, const ObjectSource &source,
            "object:text-caret-moved", false);
       break;
     }
-    case ChangeKind::selection_changed: {
+    case ChangeKind::text_selection_changed:
+    case ChangeKind::container_selection_changed: {
+      const bool text = change.kind == ChangeKind::text_selection_changed;
       EventData data;
       data.kind = EventData::Kind::integer;
-      emit(change.node, kObjectEvent, "SelectionChanged", {}, 0, 0, data,
-           "object:selection-changed", false);
+      emit(change.node, kObjectEvent, text ? "TextSelectionChanged" : "SelectionChanged",
+           {}, 0, 0, data, text ? "object:text-selection-changed" : "object:selection-changed",
+           false);
       break;
     }
     case ChangeKind::focus_moved: {

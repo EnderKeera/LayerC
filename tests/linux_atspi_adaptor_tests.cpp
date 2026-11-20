@@ -17,6 +17,8 @@ void reads_without_a_listener_stay_within_the_walk_budget();
 void component_geometry_follows_the_coordinate_type();
 void action_names_and_activation_reach_the_widget();
 void value_and_selection_mutations_reach_the_widgets();
+void selection_changes_use_the_right_bus_event_and_filter();
+void numeric_changes_report_the_value_once_over_dbus();
 void text_offsets_are_characters_and_geometry_is_real();
 void edits_run_through_the_fields_own_path_and_report_text_changes();
 void an_idle_listener_does_not_keep_walking();
@@ -680,6 +682,8 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(component_geometry_follows_the_coordinate_type),
     LAYERC_TEST_CASE(action_names_and_activation_reach_the_widget),
     LAYERC_TEST_CASE(value_and_selection_mutations_reach_the_widgets),
+    LAYERC_TEST_CASE(selection_changes_use_the_right_bus_event_and_filter),
+    LAYERC_TEST_CASE(numeric_changes_report_the_value_once_over_dbus),
     LAYERC_TEST_CASE(text_offsets_are_characters_and_geometry_is_real),
     LAYERC_TEST_CASE(edits_run_through_the_fields_own_path_and_report_text_changes),
     LAYERC_TEST_CASE(an_idle_listener_does_not_keep_walking),

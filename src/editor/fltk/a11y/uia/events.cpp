@@ -99,9 +99,10 @@ void raise_changes(const std::shared_ptr<Context> &context,
            scroll_percent(old->second.scroll, true), scroll_percent(current.scroll, true));
       real(provider, UIA_ScrollVerticalScrollPercentPropertyId,
            scroll_percent(old->second.scroll, false), scroll_percent(current.scroll, false));
-      // A selection that moved onto this item is the event clients wait for;
-      // losing one is reported through the container's structure changes.
-      if (current.states.selected && !old->second.states.selected)
+      // Radio selection follows the shared checked-state rule, not Toggle.
+      if ((current.role == Role::list_row || current.role == Role::tab ||
+           current.role == Role::radio_button) &&
+          selected_item(current) && !selected_item(old->second))
         (void)UiaRaiseAutomationEvent(provider, UIA_SelectionItem_ElementSelectedEventId);
     }
     if (current.states.focused &&

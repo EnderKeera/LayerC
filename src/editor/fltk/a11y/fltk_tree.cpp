@@ -7,6 +7,7 @@
 #include "layerc/core/utf8.hpp"
 
 #include <FL/Fl.H>
+#include <FL/Fl_Choice.H>
 #include <FL/Fl_Input_.H>
 #include <FL/Fl_Valuator.H>
 #include <FL/Fl_Widget.H>
@@ -156,6 +157,11 @@ struct FltkTree::Impl {
     if (target.kind == TargetKind::widget) {
       if (auto *field = dynamic_cast<Fl_Input_ *>(target.widget))
         node.text = exportable(node.states, field_text(*field, &metrics));
+      if (const auto *choice = dynamic_cast<const Fl_Choice *>(target.widget)) {
+        // A non-editable combo exposes its committed label, not popup focus.
+        node.value = valid_utf8(clean_label(choice->text()));
+        node.states.read_only = true;
+      }
       if (auto *valuator = dynamic_cast<Fl_Valuator *>(target.widget)) node.range = range_of(*valuator);
       node.scroll = scroll_of(target);
     }

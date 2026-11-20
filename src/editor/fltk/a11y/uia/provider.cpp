@@ -118,7 +118,8 @@ public:
       if (pattern == UIA_RangeValuePatternId && current->range && !current->states.password)
         return make_range_value_pattern(context_, id_, result);
       if (pattern == UIA_SelectionPatternId &&
-          (current->role == Role::list || current->role == Role::tab_list))
+          (current->role == Role::list || current->role == Role::tab_list ||
+           (current->role == Role::group && context_->model.is_radio_group(id_))))
         return make_selection_pattern(context_, id_, result);
       if (pattern == UIA_SelectionItemPatternId &&
           (current->role == Role::list_row || current->role == Role::tab ||

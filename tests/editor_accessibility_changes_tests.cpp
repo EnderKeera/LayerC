@@ -188,7 +188,7 @@ void caret_and_selection() {
   after.nodes.at(3).text->anchor = 5;
   auto out = changes(before, after);
   expect(kinds(out) == std::vector<ChangeKind>({ChangeKind::caret_moved,
-                                                ChangeKind::selection_changed}),
+                                                 ChangeKind::text_selection_changed}),
          "a collapsed caret move reports both caret and selection");
   expect(out[0].offset == 5, "caret event carries the new byte offset");
   expect(out[1].anchor == 5 && out[1].caret == 5,
@@ -197,10 +197,55 @@ void caret_and_selection() {
   after = before;
   after.nodes.at(3).text->anchor = 1;
   out = changes(before, after);
-  expect(kinds(out) == std::vector<ChangeKind>({ChangeKind::selection_changed}),
+  expect(kinds(out) == std::vector<ChangeKind>({ChangeKind::text_selection_changed}),
          "an anchor-only change reports the selection");
   expect(out[0].anchor == 1 && out[0].caret == 3,
          "selection event keeps the caret");
+}
+
+void range_value_is_distinct_from_text_value() {
+  Snapshot before = fixture();
+  auto &slider = before.nodes.at(4);
+  slider.role = Role::slider;
+  slider.range = Range{0.0, 100.0, 0.5, 10.0};
+  Snapshot after = before;
+  after.nodes.at(4).range->value = 12.5;
+  const auto out = changes(before, after);
+  expect(out.size() == 1 && out.front().kind == ChangeKind::range_value_changed &&
+             out.front().node == slider.id && out.front().number == 12.5,
+         "a numeric-only change reports the new value");
+}
+
+void container_selection_tracks_chosen_children() {
+  Snapshot before = fixture();
+  before.nodes.at(2).role = Role::list;
+  Snapshot after = before;
+  after.nodes.at(4).states.selected = true;
+  auto out = changes(before, after);
+  const auto *selection = first(out, ChangeKind::container_selection_changed);
+  expect(selection && selection->node == 2 &&
+             !first(out, ChangeKind::text_selection_changed),
+         "list selection notifies the parent, not the row or the text field");
+
+  before = after;
+  after.nodes.at(2).children.pop_back();
+  after.nodes.erase(4);
+  out = changes(before, after);
+  selection = first(out, ChangeKind::container_selection_changed);
+  expect(selection && selection->node == 2,
+         "removing the chosen child still changes its container selection");
+
+  before = fixture();
+  before.nodes.at(4).role = Role::radio_button;
+  before.nodes.at(3).role = Role::check_box;
+  after = before;
+  after.nodes.at(3).states.checked = true;
+  expect(!first(changes(before, after), ChangeKind::container_selection_changed),
+         "a checkbox beside radios does not change their selection");
+  after.nodes.at(4).states.checked = true;
+  out = changes(before, after);
+  selection = first(out, ChangeKind::container_selection_changed);
+  expect(selection && selection->node == 2, "checking the radio changes its group selection");
 }
 
 void focus_reports_one_node() {
@@ -303,6 +348,8 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(empty_before_is_additions_only),
                  LAYERC_TEST_CASE(properties_and_states_in_order),
                  LAYERC_TEST_CASE(text_value_and_spans),
                  LAYERC_TEST_CASE(caret_and_selection),
+                 LAYERC_TEST_CASE(range_value_is_distinct_from_text_value),
+                 LAYERC_TEST_CASE(container_selection_tracks_chosen_children),
                  LAYERC_TEST_CASE(focus_reports_one_node),
                  LAYERC_TEST_CASE(windows_activate_and_deactivate),
                  LAYERC_TEST_CASE(announcements_are_occurrences),

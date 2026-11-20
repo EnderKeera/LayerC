@@ -2,6 +2,7 @@
 
 #include <FL/Fl_Widget.H>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -151,7 +152,7 @@ void interfaces_follow_each_roles_capabilities() {
   const auto mode_snapshot = fixture.tree.snapshot();
   const auto mode_node = mode_snapshot.nodes.find(mode_id);
   expect(mode_node != mode_snapshot.nodes.end() &&
-             atspi::radio_group(mode_snapshot, mode_node->second),
+             layerc::editor::a11y::radio_group(mode_snapshot, mode_node->second),
          "a group of plain radio-typed buttons derives a radio group");
 
   const auto label = interfaces_of(harness, "Static");
@@ -545,6 +546,149 @@ void value_and_selection_mutations_reach_the_widgets() {
                                      return sd_bus_message_append(call, "i", 1);
                                    }).reply) == std::optional<bool>{false},
          "a radio group cannot deselect without choosing another button");
+}
+
+void selection_changes_use_the_right_bus_event_and_filter() {
+  constexpr const char *kTextInterface = "org.a11y.atspi.Text";
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({"Object:SelectionChanged:"});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+
+  const auto field = node_path_named(harness, "Name");
+  const auto list = node_path_named(harness, "Items");
+  if (!expect(field && list, "the field and the list have paths")) return;
+  const auto count = [&](const std::size_t mark, const std::string &path,
+                         const std::string_view member) {
+    const auto &signals = harness.signals();
+    return std::count_if(signals.begin() + static_cast<std::ptrdiff_t>(mark),
+                         signals.end(), [&](const Signal &signal) {
+      return signal.sender == harness.embed_name() && signal.path == path &&
+             signal.interface == "org.a11y.atspi.Event.Object" &&
+             signal.member == member;
+    });
+  };
+  const auto wait_for = [&](const std::size_t mark, const std::string &path,
+                            const std::string_view member, const char *why) {
+    expect(harness.spin_until([&] { return count(mark, path, member) > 0; },
+                              ms(2000)),
+           why);
+  };
+
+  // Publish a real text selection first with only the container filter.
+  std::size_t mark = harness.signals().size();
+  fixture.name->insert_position(3, 0);
+  expect(harness.spin_until([&] {
+           return reply_i32(harness.get(*field, kTextInterface, "GetNSelections").reply) ==
+                  std::optional<std::int32_t>{1};
+         }, ms(2000)),
+         "the app-side field change was published");
+  harness.spin(ms(250));
+  expect(count(mark, *field, "SelectionChanged") == 0 &&
+             count(mark, *field, "TextSelectionChanged") == 0,
+         "a container listener does not receive text selections");
+
+  harness.announce_listener("Object:TextSelectionChanged");
+  // A read on the same connection follows the registration signal, so the
+  // editor has processed the new filter before the next app-side change.
+  (void)harness.get(*field, kTextInterface, "GetNSelections");
+  mark = harness.signals().size();
+  fixture.name->insert_position(7, 1);
+  wait_for(mark, *field, "TextSelectionChanged", "the field reports its new range");
+  expect(count(mark, *field, "SelectionChanged") == 0,
+         "the field does not send the container event as well");
+
+  mark = harness.signals().size();
+  const auto removed = harness.ask(
+      harness.embed_name(), *field, kTextInterface, "RemoveSelection",
+      [](sd_bus_message *call) { return sd_bus_message_append(call, "i", 0); });
+  expect(parse_bool(removed.reply) == std::optional<bool>{true},
+         "the client can remove a text selection");
+  wait_for(mark, *field, "TextSelectionChanged",
+           "the client-initiated text change reaches listeners");
+
+  mark = harness.signals().size();
+  fixture.items->value(1);
+  wait_for(mark, *list, "SelectionChanged", "the list reports the app-side choice");
+
+  mark = harness.signals().size();
+  const auto selected = harness.ask(
+      harness.embed_name(), *list, "org.a11y.atspi.Selection", "SelectChild",
+      [](sd_bus_message *call) { return sd_bus_message_append(call, "i", 1); });
+  expect(parse_bool(selected.reply) == std::optional<bool>{true},
+         "the client can select the second row");
+  wait_for(mark, *list, "SelectionChanged", "the list reports the client's choice");
+
+  mark = harness.signals().size();
+  fixture.items->remove(2);
+  wait_for(mark, *list, "SelectionChanged", "removing the selected row reports a change");
+  expect(variant_int(harness.property(*list, "org.a11y.atspi.Selection",
+                                      "NSelectedChildren").reply) ==
+             std::optional<std::int32_t>{0},
+         "the removed row is no longer selected");
+  expect(count(0, *list, "TextSelectionChanged") == 0,
+         "list changes never send the text event");
+}
+
+void numeric_changes_report_the_value_once_over_dbus() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({"Object:PropertyChange:accessible-value"});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+
+  const auto slider = node_path_named(harness, "Level");
+  if (!expect(slider.has_value(), "the valuator has a path")) return;
+  const auto events = [&](const std::size_t mark) {
+    std::vector<std::optional<double>> numbers;
+    const auto &signals = harness.signals();
+    for (std::size_t i = mark; i < signals.size(); ++i) {
+      const auto &signal = signals[i];
+      if (signal.sender == harness.embed_name() && signal.path == *slider &&
+          signal.interface == "org.a11y.atspi.Event.Object" &&
+          signal.member == "PropertyChange" && signal.name == "accessible-value")
+        numbers.push_back(signal.number);
+    }
+    return numbers;
+  };
+  const auto check = [&](const std::size_t mark, const double expected) {
+    expect(harness.spin_until([&] { return !events(mark).empty(); }, ms(2000)),
+           "the exact accessible-value subscription receives the event");
+    expect(variant_double(harness.property(*slider, "org.a11y.atspi.Value",
+                                          "CurrentValue").reply) ==
+               std::optional<double>{expected},
+           "the valuator's new value is readable");
+    // Flush another sampling interval to catch repeat notifications.
+    harness.spin(ms(250));
+    expect(events(mark) == std::vector<std::optional<double>>{expected},
+           "one notification carries the new value as a D-Bus double");
+  };
+
+  std::size_t mark = harness.signals().size();
+  fixture.level->value(5.5);
+  check(mark, 5.5);
+
+  mark = harness.signals().size();
+  const auto set = harness.ask(harness.embed_name(), *slider, kPropertiesInterface,
+                               "Set", [](sd_bus_message *call) {
+    return sd_bus_message_append(call, "ssv", "org.a11y.atspi.Value",
+                                 "CurrentValue", "d", 7.5);
+  });
+  expect(!set.failed, "a client sets the valuator");
+  check(mark, 7.5);
 }
 
 // --- case p: an action is read back with its own effect -------------------

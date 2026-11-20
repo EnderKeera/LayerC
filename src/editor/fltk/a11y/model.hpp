@@ -88,6 +88,12 @@ struct Snapshot {
   std::uint64_t generation{};
 };
 
+// A radio is selected by its checked state, unlike ordinary selection items.
+[[nodiscard]] bool selected_item(const Node &child) noexcept;
+// Radio controls in an ordinary group share a selection; unrelated siblings do not.
+[[nodiscard]] bool selection_member(Role container, const Node &child) noexcept;
+[[nodiscard]] bool radio_group(const Snapshot &snapshot, const Node &node);
+
 struct ModelError {
   NodeId node{};
   std::string message;
@@ -100,6 +106,7 @@ public:
   [[nodiscard]] std::optional<ModelError> publish(Snapshot snapshot);
   [[nodiscard]] Snapshot read() const;
   [[nodiscard]] std::optional<Node> read(NodeId id) const;
+  [[nodiscard]] bool is_radio_group(NodeId id) const;
   void clear();
 private:
   mutable std::mutex mutex_;

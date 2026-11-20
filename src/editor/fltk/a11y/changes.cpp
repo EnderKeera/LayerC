@@ -213,6 +213,11 @@ void properties(const Node &before, const Node &after, std::vector<Change> &out)
     change.from_text = true;
     out.push_back(std::move(change));
   }
+  if (before.range && after.range && before.range->value != after.range->value) {
+    Change change = entry(ChangeKind::range_value_changed, after.id);
+    change.number = after.range->value;
+    out.push_back(std::move(change));
+  }
 }
 
 void states(const Node &before, const Node &after, std::vector<Change> &out) {
@@ -250,11 +255,32 @@ void text(const Node &before, const Node &after, std::vector<Change> &out) {
   }
   if (before.text->anchor != after.text->anchor ||
       before.text->caret != after.text->caret) {
-    Change change = entry(ChangeKind::selection_changed, after.id);
+    Change change = entry(ChangeKind::text_selection_changed, after.id);
     change.anchor = after.text->anchor;
     change.caret = after.text->caret;
     out.push_back(std::move(change));
   }
+}
+
+std::vector<NodeId> chosen_children(const Snapshot &snapshot, const Node &node) {
+  switch (node.role) {
+  case Role::list:
+  case Role::tab_list:
+  case Role::drop_down:
+  case Role::menu:
+  case Role::group:
+    break;
+  default:
+    return {};
+  }
+  std::vector<NodeId> chosen;
+  for (const NodeId id : node.children) {
+    const auto child = snapshot.nodes.find(id);
+    if (child != snapshot.nodes.end() && selection_member(node.role, child->second) &&
+        selected_item(child->second))
+      chosen.push_back(id);
+  }
+  return chosen;
 }
 
 void focus(const Snapshot &before, const Snapshot &after,
@@ -318,6 +344,8 @@ std::vector<Change> changes(const Snapshot &before, const Snapshot &after) {
     properties(prior->second, node->second, out);
     states(prior->second, node->second, out);
     text(prior->second, node->second, out);
+    if (chosen_children(before, prior->second) != chosen_children(after, node->second))
+      out.push_back(entry(ChangeKind::container_selection_changed, id));
   }
   focus(before, after, out);
   windows(before, after, out);

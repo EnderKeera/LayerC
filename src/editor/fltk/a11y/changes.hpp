@@ -28,11 +28,13 @@ enum class ChangeKind {
   name_changed,
   description_changed,
   value_changed,
+  range_value_changed,
   state_changed,
   text_deleted,
   text_inserted,
   caret_moved,
-  selection_changed,
+  text_selection_changed,
+  container_selection_changed,
   // Focus and windows close the reading-order pass; the live announcement is
   // always last.
   focus_moved,
@@ -48,10 +50,12 @@ inline constexpr std::size_t no_index = static_cast<std::size_t>(-1);
 //  node_removed, node_added      node, parent, index (old, new), role
 //  child_removed, child_added    node (the child), parent, index (old, new)
 //  name/description/value        node; previous, text; value also from_text
+//  range_value_changed           node; number (new value)
 //  state_changed                 node; state, state_value (the new flag)
 //  text_deleted, text_inserted   node; offset (UTF-8 byte), previous or text
 //  caret_moved                   node; offset (new UTF-8 byte caret)
-//  selection_changed             node; anchor, caret (new UTF-8 bytes)
+//  text_selection_changed        node; anchor, caret (new UTF-8 bytes)
+//  container_selection_changed   node (the container)
 //  focus_moved                   node (the newly focused node)
 //  window_activated/_deactivated node
 //  announced                     node (the announcement source); text
@@ -69,6 +73,7 @@ struct Change {
   std::size_t offset{};
   std::size_t anchor{};
   std::size_t caret{};
+  double number{};
 };
 
 // Differences an adaptor turns into protocol events. Deterministic for equal

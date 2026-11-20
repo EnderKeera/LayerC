@@ -64,11 +64,6 @@ inline constexpr std::uint32_t role_password_text = 40;
 [[nodiscard]] std::vector<std::string_view> interfaces(const Node &node,
                                                        bool is_root);
 
-// A group whose direct children include a radio button. FLTK radio groups are
-// ordinary Fl_Group containers, so the Selection interface follows from the
-// children and needs the published snapshot, not one node.
-[[nodiscard]] bool radio_group(const Snapshot &snapshot, const Node &node);
-
 // Model offsets are UTF-8 bytes; AT-SPI offsets are characters (code points).
 // Both directions reject invalid UTF-8 and offsets that split a character.
 [[nodiscard]] std::optional<std::size_t> char_offset(std::string_view value,

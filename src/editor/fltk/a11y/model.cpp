@@ -119,6 +119,24 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
 }
 } // namespace
 
+bool selected_item(const Node &child) noexcept {
+  return child.role == Role::radio_button ? child.states.checked : child.states.selected;
+}
+
+bool selection_member(Role container, const Node &child) noexcept {
+  return container != Role::group || child.role == Role::radio_button;
+}
+
+bool radio_group(const Snapshot &snapshot, const Node &node) {
+  if (node.role != Role::group) return false;
+  for (const NodeId child : node.children) {
+    const auto found = snapshot.nodes.find(child);
+    if (found != snapshot.nodes.end() && found->second.role == Role::radio_button)
+      return true;
+  }
+  return false;
+}
+
 std::optional<ModelError> Model::publish(Snapshot snapshot) {
   if (auto error = validate(snapshot)) return error;
   const std::lock_guard lock(mutex_);
@@ -142,6 +160,12 @@ std::optional<Node> Model::read(const NodeId id) const {
   const auto found = snapshot_.nodes.find(id);
   if (found == snapshot_.nodes.end()) return std::nullopt;
   return found->second;
+}
+
+bool Model::is_radio_group(const NodeId id) const {
+  const std::lock_guard lock(mutex_);
+  const auto found = snapshot_.nodes.find(id);
+  return found != snapshot_.nodes.end() && radio_group(snapshot_, found->second);
 }
 
 } // namespace layerc::editor::a11y

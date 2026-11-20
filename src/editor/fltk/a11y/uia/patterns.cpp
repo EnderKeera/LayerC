@@ -147,7 +147,7 @@ private:
   NodeId id_;
 };
 
-// Selection: a list or a tab list hands out its selected children.
+// Selection: a list, tab list or radio group hands out its chosen children.
 class Selection final : public ISelectionProvider {
 public:
   Selection(std::shared_ptr<Context> context, const NodeId id)
@@ -176,7 +176,9 @@ public:
       std::vector<IRawElementProviderSimple *> chosen;
       for (const auto child : current->children) {
         const auto candidate = node(context_, child);
-        if (!candidate || !candidate->states.selected) continue;
+        if (!candidate || !selection_member(current->role, *candidate) ||
+            !selected_item(*candidate))
+          continue;
         if (auto *provider = make_provider(context_, child)) chosen.push_back(provider);
       }
       auto *array = SafeArrayCreateVector(VT_UNKNOWN, 0, static_cast<ULONG>(chosen.size()));
@@ -253,8 +255,7 @@ public:
       std::size_t chosen = 0;
       for (const auto child : siblings(*current)) {
         const auto candidate = node(context_, child);
-        if (candidate && candidate->role == current->role &&
-            (candidate->states.selected || candidate->states.checked))
+        if (candidate && candidate->role == current->role && selected_item(*candidate))
           ++chosen;
       }
       if (chosen > 0) return UIA_E_INVALIDOPERATION;
@@ -269,8 +270,7 @@ public:
       if (current->states.disabled) return UIA_E_ELEMENTNOTENABLED;
       // A selected item cannot be deselected in a list that always keeps one
       // choice; an unselected item already satisfies the request.
-      if (current->states.selected || current->states.checked)
-        return UIA_E_INVALIDOPERATION;
+      if (selected_item(*current)) return UIA_E_INVALIDOPERATION;
       return S_OK;
     });
   }
@@ -280,8 +280,7 @@ public:
     return guarded([&]() -> HRESULT {
       const auto current = node(context_, id_);
       if (!current) return UIA_E_ELEMENTNOTAVAILABLE;
-      *result = current->states.selected || current->states.checked ? VARIANT_TRUE
-                                                                   : VARIANT_FALSE;
+      *result = selected_item(*current) ? VARIANT_TRUE : VARIANT_FALSE;
       return S_OK;
     });
   }

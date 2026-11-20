@@ -68,6 +68,7 @@ struct Signal {
   std::string sender, path, interface, member;
   // Event bodies: (s name, i detail1, i detail2, v any_data).
   std::string name, text;
+  std::optional<double> number;
   std::int32_t detail1{}, detail2{};
   char data{'u'};
 
@@ -587,6 +588,10 @@ private:
         if (sd_bus_message_read_basic(message, SD_BUS_TYPE_STRING, &text) >= 0 &&
             text != nullptr)
           signal.text = text;
+      } else if (type == SD_BUS_TYPE_DOUBLE) {
+        double value = 0.0;
+        if (sd_bus_message_read_basic(message, SD_BUS_TYPE_DOUBLE, &value) > 0)
+          signal.number = value;
       } else if (type == SD_BUS_TYPE_INT32) {
         std::int32_t value = 0;
         if (sd_bus_message_read_basic(message, SD_BUS_TYPE_INT32, &value) >= 0)

@@ -30,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -244,8 +245,11 @@ struct Fixture {
   Fl_Group advanced{300, 120, 220, 60, "Advanced"};
   EndGroup advanced_end{advanced};
   EndGroup tabs_end{tabs};
-  Fl_Radio_Button metric{20, 200, 120, 24, "Metric"};
-  Fl_Radio_Button imperial{150, 200, 120, 24, "Imperial"};
+  Fl_Group radio_group{20, 185, 260, 50, "Measurement system"};
+  Fl_Radio_Button metric{20, 187, 120, 22, "Metric"};
+  Fl_Radio_Button imperial{150, 187, 120, 22, "Imperial"};
+  Fl_Check_Button radio_neighbor{20, 210, 220, 22, "Show measurements"};
+  EndGroup radio_group_end{radio_group};
   Fl_Choice units{300, 200, 160, 24, "Units"};
   Fl_Scroll pane{20, 240, 320, 110, "Scrollable pane"};
   EndGroup pane_end{pane};
@@ -272,8 +276,11 @@ struct Fixture {
     set_accessible_name(rows, "Rows");
     tabs.value(&general);
     set_accessible_name(tabs, "Sections");
-    units.add("Millimetres");
-    units.add("Inches");
+    metric.value(1);
+    radio_neighbor.value(1);
+    units.add("&Millimetres");
+    units.add("&Inches");
+    units.value(0);
     set_accessible_name(units, "Units");
     pane.begin();
     new Fl_Box(20, 240, 300, 400);
@@ -676,12 +683,45 @@ void selection_and_selection_item() {
                      IID_IUIAutomationSelectionItemPattern, other_radio),
              "the other radio button publishes the selection item pattern");
       if (!radio || !other_radio) return;
+      Ref<IUIAutomationElement> mode;
+      if (!ok(radio->get_CurrentSelectionContainer(mode.put()), "get the radio container") ||
+          !expect(static_cast<bool>(mode), "the radio names a selection container"))
+        return;
+      expect(name_of(*mode.get()) == "Measurement system",
+             "the radio container is its named group");
+      Ref<IUIAutomationSelectionPattern> radios;
+      if (!pattern(*mode.get(), UIA_SelectionPatternId, IID_IUIAutomationSelectionPattern, radios))
+        return;
+      const auto chosen_radio_is = [&](const std::string &name) {
+        Ref<IUIAutomationElementArray> items;
+        int count{};
+        Ref<IUIAutomationElement> element;
+        return SUCCEEDED(radios->GetCurrentSelection(items.put())) && items &&
+               SUCCEEDED(items->get_Length(&count)) && count == 1 &&
+               SUCCEEDED(items->GetElement(0, element.put())) && element &&
+               name_of(*element.get()) == name;
+      };
+      expect(chosen_radio_is("Metric"),
+             "the checked radio, not the checked checkbox, is the initial selection");
+
+      // Listen only to Imperial so earlier row or tab events cannot satisfy this assertion.
+      Ref<EventLog> radio_log;
+      *radio_log.put() = new ::EventLog;
+      constexpr auto selected_event = UIA_SelectionItem_ElementSelectedEventId;
+      if (!ok(client.automation->AddAutomationEventHandler(
+                  selected_event, imperial.get(), TreeScope_Element, nullptr, radio_log.get()),
+              "subscribe to Imperial's selection event"))
+        return;
       expect(radio->Select() == S_OK, "choose the radio button");
       expect(wait([&] {
                BOOL now{};
                return SUCCEEDED(radio->get_CurrentIsSelected(&now)) && now != FALSE;
              }),
-             "the chosen radio reports IsSelected");
+              "the chosen radio reports IsSelected");
+      expect(wait([&] { return chosen_radio_is("Imperial"); }),
+             "the same group now returns the newly checked radio");
+      expect(wait([&] { return radio_log->event_count(selected_event) > 0; }),
+             "UIA delivers ElementSelected for the chosen radio");
       // A chosen radio is checked rather than selected; it still fills the group.
       expect(other_radio->AddToSelection() == kInvalidOperation,
              "a radio cannot join a group whose choice is already made");
@@ -716,13 +756,43 @@ void expand_collapse_and_scroll() {
       *log.put() = new ::EventLog;
       Subscription subscription{client.automation.get(), log.get()};
       const PROPERTYID watched[] = {UIA_ExpandCollapseExpandCollapseStatePropertyId,
-                                    UIA_ScrollVerticalScrollPercentPropertyId};
-      if (!subscription.add(*root.get(), watched, 2)) return;
+                                    UIA_ScrollVerticalScrollPercentPropertyId,
+                                    UIA_ValueValuePropertyId};
+      if (!subscription.add(*root.get(), watched, 3)) return;
 
       auto choice = find(*client.automation.get(), *root.get(), L"Units");
       auto pane = find(*client.automation.get(), *root.get(), L"Scrollable pane");
       auto button = find(*client.automation.get(), *root.get(), L"Pin overlay");
       if (!choice || !pane || !button) return;
+
+      Ref<IUIAutomationValuePattern> choice_value;
+      if (!pattern(*choice.get(), UIA_ValuePatternId, IID_IUIAutomationValuePattern, choice_value))
+        return;
+      const auto value_is = [&](const std::wstring &expected) {
+        BSTR value{};
+        const auto read = choice_value->get_CurrentValue(&value);
+        const bool matches = SUCCEEDED(read) && value &&
+                             std::wstring_view(value, SysStringLen(value)) == expected;
+        SysFreeString(value);
+        return matches;
+      };
+      expect(value_is(L"Millimetres"), "the choice publishes its displayed label");
+      BOOL readonly{FALSE};
+      ok(choice_value->get_CurrentIsReadOnly(&readonly), "read whether the choice value is editable");
+      expect(readonly != FALSE, "the non-editable combo publishes a read-only value");
+      if (BSTR proposed = SysAllocString(L"Inches")) {
+        const HRESULT set = choice_value->SetValue(proposed);
+        SysFreeString(proposed);
+        expect(FAILED(set), "the combo refuses a text setter");
+      } else {
+        expect(false, "allocate the proposed combo value");
+      }
+      expect(value_is(L"Millimetres"), "a failed text setter leaves the selection alone");
+      fixture.on_fltk([&] { fixture.units.value(1); });
+      expect(wait([&] { return value_is(L"Inches"); }),
+             "the published value follows the widget's committed selection");
+      expect(wait([&] { return log->property_count(UIA_ValueValuePropertyId) > 0; }),
+             "the changed label raises a UIA value event");
 
       Ref<IUIAutomationExpandCollapsePattern> expand;
       if (!pattern(*choice.get(), UIA_ExpandCollapsePatternId,
