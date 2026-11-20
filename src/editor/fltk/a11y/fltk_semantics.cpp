@@ -110,9 +110,10 @@ struct BrowserExtent : Fl_Browser_ {
 std::optional<PaneExtent> list_extent(const Fl_Browser_ &list) {
   int content_height = (list.*BrowserExtent::height)();
   if (const auto *rows = dynamic_cast<const RowGeometry *>(&list)) {
-    // The frontend's own rows end where the last entry says they do.
+    // Entries are window coordinates; the content length is their span, which
+    // scrolling translates without changing.
     const auto &tops = rows->row_tops();
-    if (!tops.empty()) content_height = tops.back();
+    if (!tops.empty()) content_height = tops.back() - tops.front();
   }
   const int content_width = (list.*BrowserExtent::width)();
   const int thickness = list.scrollbar_size() > 0 ? list.scrollbar_size() : Fl::scrollbar_size();

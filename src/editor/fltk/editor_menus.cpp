@@ -189,7 +189,11 @@ int ContextBrowser::row_at(int x, int y) {
 std::vector<int> ContextBrowser::row_tops() const {
   std::vector<int> tops;
   tops.reserve(static_cast<std::size_t>(std::max(0, size())) + 1);
-  int row_top = y() - vposition();
+  // Rows start where FLTK draws them: the viewport top inside the box, the
+  // origin row_at() hit-tests against.
+  int left{}, top{}, width{}, height{};
+  bbox(left, top, width, height);
+  int row_top = top - vposition();
   for (auto *item = item_first(); item; item = item_next(item)) {
     tops.push_back(row_top);
     row_top += item_height(item);

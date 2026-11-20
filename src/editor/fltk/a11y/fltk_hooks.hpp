@@ -14,8 +14,10 @@ class Fl_Window;
 
 namespace layerc::editor::a11y {
 // A browser whose rows are not FLTK's uniform rows. Entry i of row_tops() is
-// where row i + 1 starts and the last entry is where the final row ends;
-// row_bounds() is the visible slice of a 1-based row in window coordinates.
+// the window y where row i + 1 starts, measured from the scrolled viewport top,
+// and the last entry is where the final row ends; back() - front() is the
+// content length. row_bounds() is the visible slice of a 1-based row in window
+// coordinates.
 class RowGeometry {
 public:
   virtual ~RowGeometry() = default;

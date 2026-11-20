@@ -75,9 +75,10 @@ public:
   // The same slice from a row table a wider walk already read.
   [[nodiscard]] std::optional<EditorBounds>
   row_bounds(int row, const std::vector<int> &tops) const override;
-  // Row offsets for one walk of the items: entry i is where row i+1 starts and
-  // entry size() is where the last row ends. A caller asking about every row
-  // reads this once instead of walking the item list per row.
+  // Window y offsets for one walk of the items, anchored at the scrolled
+  // viewport top: entry i is where row i+1 starts and entry size() is where the
+  // last row ends. A caller asking about every row reads this once instead of
+  // walking the item list per row.
   [[nodiscard]] std::vector<int> row_tops() const override;
   int handle(int event) override;
 protected:

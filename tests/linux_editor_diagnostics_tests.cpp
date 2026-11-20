@@ -11,6 +11,7 @@
 #include "linux_editor_test_access.hpp"
 #include "test_support.hpp"
 #include "fltk_a11y_snapshot_support.hpp"
+#include "a11y/fltk_semantics.hpp"
 
 namespace editor = layerc::editor;
 
@@ -25,6 +26,7 @@ namespace editor = layerc::editor;
 #include <FL/Fl_Output.H>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -217,9 +219,33 @@ void linux_editor_semantic_row_extents() {
   list->clear();
   for (int i = 1; i <= 80; ++i)
     list->add(("Semantic row " + std::to_string(i)).c_str());
+  // A framed list below the menu bar: its rows start inside the box, not at y().
+  list->box(FL_BORDER_BOX);
   list->topline(1);
   list->redraw();
   Fl::check();
+  expect(list->y() > 0 && Fl::box_dy(list->box()) > 0,
+         "the production list sits below the window top inside a border");
+  const a11y::Target list_target{list, a11y::TargetKind::widget, 0};
+  // Every visible row slice hit-tests back to its own row at both edges.
+  const auto hits_agree = [&] {
+    int seen = 0;
+    bool agree = true;
+    for (int row = 1; row <= list->size(); ++row) {
+      const auto slice = list->row_bounds(row);
+      if (!slice) continue;
+      ++seen;
+      const int middle = slice->x + slice->width / 2;
+      agree = agree && list->row_at(middle, slice->y) == row &&
+              list->row_at(middle, slice->y + slice->height - 1) == row;
+    }
+    return agree && seen > 0;
+  };
+  expect(hits_agree(), "row bounds agree with hit testing at the top");
+  const auto at_top = a11y::scroll_of(list_target);
+  expect(at_top && at_top->vertical == 0.0 && at_top->vertical_view > 0.0 &&
+             at_top->vertical_view < 100.0,
+         "an unscrolled long list reports 0 percent and a partial view");
   Fl_Menu_Bar *bar = nullptr;
   std::function<void(Fl_Group &)> locate = [&](Fl_Group &group) {
     for (int i = 0; i < group.children() && !bar; ++i) {
@@ -270,6 +296,22 @@ void linux_editor_semantic_row_extents() {
     const auto final = a11y_snapshot::bounds(last_now);
     expect(final[2] > 0 && final[3] > 0 && a11y_snapshot::showing(last_now),
            "scrolling reveals the final row's own geometry");
+    expect(hits_agree(), "row bounds agree with hit testing at the end");
+    const auto at_end = a11y::scroll_of(list_target);
+    expect(at_top && at_end && at_end->vertical_view == at_top->vertical_view,
+           "scrolling translates rows without changing content length or view size");
+    expect(at_end && at_end->vertical == 100.0, "the final row scrolls the list to 100 percent");
+    // Percentages written through the adaptor read back within one pixel.
+    for (const double percent : {50.0, 0.0, 100.0, 25.0}) {
+      expect(a11y::set_scroll(list_target, -1.0, percent), "a vertical scroll request applies");
+      Fl::check();
+      const auto read = a11y::scroll_of(list_target);
+      expect(read && std::abs(read->vertical - percent) < 0.5,
+             "a vertical scroll percentage round-trips");
+      expect(read && at_top && read->vertical_view == at_top->vertical_view,
+             "a scroll request leaves the visible share unchanged");
+      expect(hits_agree(), "row bounds agree with hit testing after a scroll request");
+    }
   }
   window.hide();
   Fl::check();
