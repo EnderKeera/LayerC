@@ -77,8 +77,10 @@ struct String {
 };
 
 struct Apartment {
-  HRESULT result{CoInitializeEx(nullptr, COINIT_MULTITHREADED)};
+  explicit Apartment(DWORD model = COINIT_MULTITHREADED)
+      : result{CoInitializeEx(nullptr, model)} {}
   ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
+  HRESULT result;
 };
 
 bool ok(HRESULT result, const char *message) {
@@ -996,7 +998,8 @@ void system_caret(IUIAutomation &automation, IUIAutomationElement &root, Fixture
 
 int main(int argc, char **argv) {
   const std::string only = argc > 1 ? argv[1] : "";
-  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const Apartment apartment{COINIT_APARTMENTTHREADED};
+  if (!ok(apartment.result, "initialize text fixture STA")) return 1;
   Fl::lock();
   Fixture fixture;
   std::thread worker([&] {
@@ -1026,6 +1029,5 @@ int main(int argc, char **argv) {
   });
   Fl::run();
   worker.join();
-  CoUninitialize();
   return layerc::test::failures == 0 ? 0 : 1;
 }

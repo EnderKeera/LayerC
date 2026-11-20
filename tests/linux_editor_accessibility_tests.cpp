@@ -24,10 +24,7 @@
 #include <FL/Fl_Window.H>
 
 #include <algorithm>
-#include <array>
-#include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <new>
@@ -76,19 +73,6 @@ std::optional<bool> reply_bool(sd_bus_message *message) {
 std::vector<Reference> children(Harness &harness, const std::string &path) {
   return reply_references(
       harness.get(path, kAccessibleInterface, "GetChildren").reply);
-}
-
-// The nodes whose child list holds `path`: AT-SPI reads parentage from the
-// container, so a client verifies it the same way.
-std::vector<std::string> parents_of(Harness &harness, const std::string &path) {
-  std::vector<std::string> parents;
-  std::vector<std::string> queue{std::string{atspi::kRootPath}};
-  for (std::size_t i = 0; i < queue.size(); ++i)
-    for (const auto &child : children(harness, queue[i])) {
-      if (child.path == path) parents.push_back(queue[i]);
-      queue.push_back(child.path);
-    }
-  return parents;
 }
 
 // The chosen children, as a client reads them: one GetSelectedChild per slot
@@ -253,7 +237,11 @@ void linux_editor_accessibility_tree_rows() {
     expect(reply_text(harness.get(row, kAccessibleInterface, "GetRoleName").reply) ==
                "list item",
            "row role preserved");
-    expect(parents_of(harness, row) == std::vector<std::string>{*shown},
+    // As in the legacy ATK test, ask the row for its own parent rather than
+    // making a round trip for each of the 5,843 rows to infer parentage.
+    const auto parent = reply_variant_reference(
+        harness.property(row, kAccessibleInterface, "Parent").reply);
+    expect(parent && parent->name == harness.embed_name() && parent->path == *shown,
            "row parent preserved");
     const auto index =
         reply_i32(harness.get(row, kAccessibleInterface, "GetIndexInParent").reply);
@@ -270,13 +258,15 @@ void linux_editor_accessibility_tree_rows() {
            "an unselected child does not");
     harness.spin(ms(200));
     const auto stable = children(harness, *shown);
-    expect(stable[2499].path == row, "unchanged showing rows keep their object path");
+    expect(stable.size() == 5843 && stable[2499].path == row,
+           "unchanged showing rows keep their object path");
     tabs.value(&profile);
     harness.spin(ms(300));
     const auto hidden_rows = children(harness, *shown);
     expect(hidden_rows.empty(), "hidden rows are removed");
-    expect(harness.get(row, kAccessibleInterface, "Name").failed,
-           "a removed row answers UnknownObject");
+    expect(harness.property(row, kAccessibleInterface, "Parent").error ==
+               "org.freedesktop.DBus.Error.UnknownObject",
+           "a removed row no longer has a parent");
     expect(harness.get(row, "org.a11y.atspi.Action", "DoAction")
                .error == "org.freedesktop.DBus.Error.UnknownObject",
            "a removed row rejects its action");
@@ -304,7 +294,8 @@ void linux_editor_accessibility_tree_rows() {
     if (!expect(rebuilt.size() == 1, "rebuilt row is reachable")) return;
     expect(text_property(harness, rebuilt[0].path, "Name") == "Replacement",
            "hidden rebuild restores correct content");
-    expect(harness.get(restored[2499].path, kAccessibleInterface, "Name").failed,
+    expect(harness.property(restored[2499].path, kAccessibleInterface, "Name").error ==
+               "org.freedesktop.DBus.Error.UnknownObject",
            "hidden rebuild cannot retarget an old row");
     list.hide();
     harness.spin(ms(300));

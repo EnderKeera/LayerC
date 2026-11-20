@@ -550,8 +550,9 @@ void selection_and_selection_item() {
       if (!list || !beta || !alpha || !gamma) return;
       for (IUIAutomationElement *each : {alpha.get(), beta.get(), gamma.get()}) {
         Ref<IUIAutomationSelectionItemPattern> probe;
-        ok(pattern(*each, UIA_SelectionItemPatternId, IID_IUIAutomationSelectionItemPattern, probe),
-           "every row publishes SelectionItem");
+        expect(pattern(*each, UIA_SelectionItemPatternId,
+                       IID_IUIAutomationSelectionItemPattern, probe),
+               "every row publishes SelectionItem");
       }
 
       Ref<IUIAutomationSelectionPattern> selection;
