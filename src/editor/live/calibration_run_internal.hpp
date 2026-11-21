@@ -1,6 +1,6 @@
 #pragma once
 
-#include "calibration_session.hpp"
+#include "calibration_run.hpp"
 
 #include <filesystem>
 
@@ -12,6 +12,7 @@ namespace layerc::editor::detail {
 [[nodiscard]] std::variant<layerc::core::CalibrationResponse, CalibrationFailure>
 run_calibration_session_with_image(HWND owner,
                                   const layerc::core::CalibrationRequest &request,
-                                  const std::filesystem::path &image);
+                                  const std::filesystem::path &image,
+                                  const CalibrationPump &pump = win32_message_pump());
 
 } // namespace layerc::editor::detail

@@ -36,12 +36,6 @@ private:
   bool dragging_{};
 };
 
-// Runs on Apply with the complete typed draft before the dialog closes. A
-// returned reason is shown and the dialog keeps the draft open for correction;
-// only an accepted value closes the dialog.
-using CalibrationAccept =
-    std::function<CalibrationAcceptance(const CalibrationDraft &)>;
-
 // Seeded references load from the editor's owned, possibly unpublished bytes
 // first, then from the verified store.
 [[nodiscard]] std::optional<AcceptedCalibration> run_x11_calibration(

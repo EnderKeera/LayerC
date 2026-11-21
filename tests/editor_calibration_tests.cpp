@@ -1,4 +1,5 @@
-#include "calibration_session_internal.hpp"
+#include "calibration_run_internal.hpp"
+#include "calibration_session.hpp"
 #include "editor_util.hpp"
 #include "test_support.hpp"
 

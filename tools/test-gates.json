@@ -34,6 +34,7 @@
         "layerc_visual_asset_gc_contract_tests",
         "layerc_windows_fltk_accessibility_tests",
         "layerc_windows_fltk_binding_tests",
+        "layerc_windows_fltk_calibration_tests",
         "layerc_windows_fltk_daemon_link_tests",
         "layerc_windows_fltk_notification_tests",
         "layerc_windows_fltk_patterns_tests",

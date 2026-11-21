@@ -1,8 +1,8 @@
 #include "visual_editor.hpp"
 
 #include "accessible_widgets.hpp"
-#include "calibration_window.hpp"
 #include "editor_app.hpp"
+#include "platform/calibration_service.hpp"
 #include "profile_edit.hpp"
 #include "layerc/platform/profile_visual_assets.hpp"
 
@@ -90,8 +90,8 @@ struct LinuxVisualEditor::Impl {
     if (selected_id.empty()) reason = "Select or add a cooldown before calibration.\n";
     else if (document.path().empty()) reason = "Save the profile once before calibration.\n";
     if (profile.visual_runtime == core::VisualRuntime::isolated)
-      reason += "Unavailable: the isolated visual worker is Windows-only; this setting is retained, never silently weakened.\n";
-    else reason += "X11 capture uses Composite/Damage, with a bounded full-frame fallback.\n";
+      reason += isolated_runtime_note();
+    else reason += visual_capture_note();
     reason += "Enabled, Remove and runtime edits are drafts until Save. Calibration Apply validates and commits.\n"
               "Imported modules, shared observations and unsupported data are preserved.";
     hint->value(reason.c_str());
@@ -162,7 +162,6 @@ struct LinuxVisualEditor::Impl {
     }
     if (widget != calibrate || !app.apply_fields()) return;
     session.end_text_edit();
-    const auto path = session.document().path();
     const auto cooldown = selected_id;
     const auto unchanged = unchanged_guard();
     auto seed = CalibrationModel::open(session.document().profile(), cooldown,
@@ -185,13 +184,27 @@ struct LinuxVisualEditor::Impl {
         return std::string("The active document or cooldown changed during calibration.");
       return accepted;
     };
-    auto accepted = run_x11_calibration(path, std::move(*seed), accept,
-                                        session.owned_template_assets());
-    if (!accepted) { app.report(StatusKind::information, "Calibration cancelled. No calibration data or assets were written."); return; }
+    const CalibrationHost host{
+        .report = [&](const StatusKind kind, const std::string &text) { app.report(kind, text); },
+        .resolve_target = [&]() -> std::optional<TaskCandidate> {
+          if (app.placement_active() &&
+              task_matches(*app.placement(), session.document().profile().game))
+            return app.placement();
+          return app.window_target("Calibrate visual");
+        },
+        .owner = app.main_window(),
+    };
+    auto result = run_platform_calibration(host, session.document(), cooldown,
+                                           std::move(*seed), accept, session.owned_template_assets());
+    if (const auto *end = std::get_if<CalibrationEnd>(&result)) {
+      if (*end == CalibrationEnd::cancelled)
+        app.report(StatusKind::information, "Calibration cancelled. No calibration data or assets were written.");
+      return;
+    }
     if (!unchanged()) { app.report(StatusKind::failure, "Not applied: the active document changed during calibration."); return; }
     // The session owns the prepared template bytes; Save publishes them with
     // the profile and sidecars in one durable transaction.
-    if (const auto error = session.apply_calibration(std::move(*accepted))) {
+    if (const auto error = session.apply_calibration(std::get<AcceptedCalibration>(std::move(result)))) {
       app.report(StatusKind::failure, "Not applied: " + *error); return;
     }
     // A refused durable Save keeps the complete calibration in the document

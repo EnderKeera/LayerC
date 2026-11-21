@@ -46,25 +46,33 @@ void EditorApp::position_command() {
     return;
   }
   if (!apply_fields()) return;
+  if (const auto target = window_target("Position on window")) position_on(*target);
+}
+
+std::optional<TaskCandidate> EditorApp::window_target(const std::string_view action) {
   std::string error;
   const auto tasks = scan_tasks(error);
-  if (!error.empty() && tasks.empty()) { report(StatusKind::failure, "Window discovery failed: " + error); return; }
+  if (!error.empty() && tasks.empty()) {
+    report(StatusKind::failure, "Window discovery failed: " + error);
+    return std::nullopt;
+  }
   auto game = session.document().profile().game;
   std::size_t matches = 0;
   for (const auto &task : tasks)
     if (task_matches(task, game)) ++matches;
   const auto *selected = tasks_window && tasks_window->shown() ? tasks_window->selected() : nullptr;
-  if (selected && task_matches(*selected, game)) { position_on(*selected); return; }
+  if (selected && task_matches(*selected, game)) return *selected;
   if (matches == 1) {
-    if (const auto target = matching_task(tasks, game)) { position_on(*target); return; }
+    if (const auto target = matching_task(tasks, game)) return target;
   }
   const std::string reason = matches == 0
       ? "No running window matches this profile. Start the game, or check the profile's "
         "Application, then press Refresh."
-      : "Several windows match — select one, then Position on window.";
+      : "Several windows match — select one, then " + std::string(action) + ".";
   report(StatusKind::information, matches == 0 ? "No automatic match — select an eligible window in Detected Tasks."
                       : "Multiple windows match — select one in Detected Tasks.");
   show_tasks(reason);
+  return std::nullopt;
 }
 
 void EditorApp::position_on(const TaskCandidate &task) {

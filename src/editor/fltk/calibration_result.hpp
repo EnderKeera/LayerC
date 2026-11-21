@@ -3,6 +3,7 @@
 #include "layerc/platform/profile_visual_assets.hpp"
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -19,4 +20,10 @@ struct AcceptedCalibration {
   std::vector<layerc::platform::EncodedTemplateAsset> assets;
 };
 using CalibrationAcceptance = std::variant<AcceptedCalibration, std::string>;
+
+// Runs on Apply with the complete typed draft before the dialog closes. A
+// returned reason is shown and the dialog keeps the draft open for correction;
+// only an accepted value closes the dialog.
+using CalibrationAccept =
+    std::function<CalibrationAcceptance(const CalibrationDraft &)>;
 } // namespace layerc::editor

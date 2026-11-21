@@ -20,6 +20,7 @@
 #include <FL/Fl_Widget.H>
 #include <optional>
 #include <string>
+#include <string_view>
 
 class Fl_Box;
 class Fl_Button;
@@ -90,6 +91,7 @@ public:
   void build();
   void show();
   [[nodiscard]] bool shown() const;
+  [[nodiscard]] Fl_Window *main_window() noexcept { return &window; }
   [[nodiscard]] bool handle_shortcut(int key, int modifiers);
   void show_context_menu(EditorMenuContext context, bool has_target);
   void refresh();
@@ -122,6 +124,7 @@ public:
   // The game window the preview stands for while positioning on it.
   [[nodiscard]] bool placement_active() const;
   [[nodiscard]] const std::optional<TaskCandidate> &placement() const noexcept { return placement_; }
+  [[nodiscard]] std::optional<TaskCandidate> window_target(std::string_view action);
 
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;

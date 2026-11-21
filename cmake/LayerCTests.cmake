@@ -93,6 +93,9 @@ if(WIN32 AND TARGET layerc_editor_fltk)
     layerc_add_test(layerc_windows_fltk_binding_tests WIN32
         SOURCES tests/windows_fltk_binding_tests.cpp
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_calibration_tests WIN32
+        SOURCES tests/windows_fltk_calibration_tests.cpp
+        LINK layerc_editor_fltk TIMEOUT 60 LABELS required editor)
 endif()
 if(TARGET layere_fltk)
     add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)

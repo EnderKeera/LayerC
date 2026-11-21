@@ -416,7 +416,8 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     # Win32 frontend: the live-edit session and the sibling daemon launch.
     add_library(layerc_editor_live STATIC
         src/editor/live/live_edit_session.cpp
-        src/editor/live/daemon_process.cpp)
+        src/editor/live/daemon_process.cpp
+        src/editor/live/calibration_run.cpp)
     target_include_directories(layerc_editor_live PUBLIC src/editor/live)
     target_link_libraries(layerc_editor_live PUBLIC layerc_core layerc_windows)
     layerc_win32(layerc_editor_live)

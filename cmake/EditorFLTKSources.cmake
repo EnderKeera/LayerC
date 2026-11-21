@@ -21,8 +21,6 @@ set(LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES
     src/editor/fltk/tasks_window.cpp
     src/editor/fltk/automation_editor.cpp
     src/editor/fltk/visual_editor.cpp
-    src/editor/fltk/calibration_window.cpp
-    src/editor/fltk/calibration_preview.cpp
     src/editor/fltk/editor_forms.cpp
     src/editor/fltk/editor_geometry.cpp
     src/editor/fltk/editor_import.cpp
