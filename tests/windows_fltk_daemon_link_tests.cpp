@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 using namespace std::chrono_literals;
@@ -33,7 +35,7 @@ namespace runtime = layerc::runtime;
 
 std::wstring private_pipe_name() {
   static std::atomic<std::uint64_t> sequence{};
-  std::wstring name = L"\\\\.\\pipe\\LayerC.P2B1.Tests.";
+  std::wstring name = L"\\\\.\\pipe\\LayerC.P2B2.Tests.";
   name += std::to_wstring(GetCurrentProcessId());
   name += L".";
   name += std::to_wstring(sequence.fetch_add(1));
@@ -69,7 +71,7 @@ std::string test_diagnostics_json() {
   return runtime::serialize_runtime_diagnostics_json(diagnostics);
 }
 
-enum class ReplyMode { acknowledge, error, silent };
+enum class ReplyMode { acknowledge, error, silent, silent_trace_unsubscribe };
 
 class FakeLayerD final {
 public:
@@ -78,11 +80,14 @@ public:
       : pipe_name_(private_pipe_name()), mode_(mode),
         expected_client_pid_(expected_client_pid),
         stop_event_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        work_event_(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
         diagnostics_json_(test_diagnostics_json()) {}
 
   ~FakeLayerD() {
     if (stop_event_ != nullptr) (void)SetEvent(stop_event_);
+    if (work_event_ != nullptr) (void)SetEvent(work_event_);
     if (thread_.joinable()) thread_.join();
+    if (work_event_ != nullptr) CloseHandle(work_event_);
     if (stop_event_ != nullptr) CloseHandle(stop_event_);
   }
 
@@ -90,7 +95,7 @@ public:
   FakeLayerD &operator=(const FakeLayerD &) = delete;
 
   [[nodiscard]] bool start() {
-    if (stop_event_ == nullptr) return false;
+    if (stop_event_ == nullptr || work_event_ == nullptr) return false;
     thread_ = std::thread([this] { serve(); });
     std::unique_lock lock(mutex_);
     return ready_cv_.wait_for(lock, 2s, [this] { return ready_; }) && pipe_ready_;
@@ -110,6 +115,55 @@ public:
   [[nodiscard]] std::size_t handshakes() {
     std::lock_guard lock(mutex_);
     return handshake_count_;
+  }
+
+  [[nodiscard]] bool wait_for_trace_subscribes(
+      const std::size_t count, const std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return request_cv_.wait_for(lock, timeout,
+                                [this, count] {
+                                  return trace_subscribe_count_ >= count;
+                                });
+  }
+
+  [[nodiscard]] bool wait_for_trace_unsubscribes(
+      const std::size_t count, const std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return request_cv_.wait_for(lock, timeout,
+                                [this, count] {
+                                  return trace_unsubscribe_count_ >= count;
+                                });
+  }
+
+  [[nodiscard]] std::size_t trace_subscribe_count() {
+    std::lock_guard lock(mutex_);
+    return trace_subscribe_count_;
+  }
+
+  [[nodiscard]] std::size_t trace_unsubscribe_count() {
+    std::lock_guard lock(mutex_);
+    return trace_unsubscribe_count_;
+  }
+
+  [[nodiscard]] bool push_trace(std::string packet) {
+    {
+      std::lock_guard lock(mutex_);
+      pending_trace_packets_.push_back(std::move(packet));
+    }
+    return work_event_ != nullptr && SetEvent(work_event_) != FALSE;
+  }
+
+  [[nodiscard]] bool wait_for_disconnect(const std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return request_cv_.wait_for(lock, timeout, [this] { return disconnected_; });
+  }
+
+  [[nodiscard]] bool disconnect_client() {
+    {
+      std::lock_guard lock(mutex_);
+      disconnect_requested_ = true;
+    }
+    return work_event_ != nullptr && SetEvent(work_event_) != FALSE;
   }
 
 private:
@@ -145,6 +199,32 @@ private:
               diagnostics_json_);
       return;
     }
+    if (message.type == core::LiveMessageType::automation_trace_subscribe) {
+      {
+        std::lock_guard lock(mutex_);
+        ++trace_subscribe_count_;
+      }
+      request_cv_.notify_all();
+      if (mode_ == ReplyMode::error) {
+        reply(channel, message, core::LiveMessageType::error,
+              "test trace subscribe rejected");
+      } else if (mode_ != ReplyMode::silent) {
+        reply(channel, message, core::LiveMessageType::acknowledgement,
+              "trace subscribed");
+      }
+      return;
+    }
+    if (message.type == core::LiveMessageType::automation_trace_unsubscribe) {
+      {
+        std::lock_guard lock(mutex_);
+        ++trace_unsubscribe_count_;
+      }
+      request_cv_.notify_all();
+      if (mode_ != ReplyMode::silent_trace_unsubscribe)
+        reply(channel, message, core::LiveMessageType::acknowledgement,
+              "trace unsubscribed");
+      return;
+    }
     if (message.type != core::LiveMessageType::committed_profile) return;
     if (mode_ == ReplyMode::silent) return;
     if (mode_ == ReplyMode::error) {
@@ -170,16 +250,39 @@ private:
     if (!pipe_ready) return;
 
     while (WaitForSingleObject(stop_event_, 0) != WAIT_OBJECT_0) {
+      std::deque<std::string> trace_packets;
+      bool disconnect{};
+      {
+        std::lock_guard lock(mutex_);
+        disconnect = std::exchange(disconnect_requested_, false);
+        trace_packets.swap(pending_trace_packets_);
+      }
+      const bool was_connected = channel.connected();
+      if (disconnect) channel.disconnect_peer();
+      for (auto &packet : trace_packets) {
+        core::LiveMessage message;
+        message.type = core::LiveMessageType::automation_trace_event;
+        message.text = std::move(packet);
+        (void)channel.send(message);
+      }
       for (const auto &result : channel.poll()) {
         if (const auto *message = std::get_if<core::LiveMessage>(&result))
           handle(channel, *message);
       }
+      if (was_connected && !channel.connected()) {
+        {
+          std::lock_guard lock(mutex_);
+          disconnected_ = true;
+        }
+        request_cv_.notify_all();
+      }
       if (WaitForSingleObject(stop_event_, 0) == WAIT_OBJECT_0) break;
-      std::array<HANDLE, 4> handles{};
+      std::array<HANDLE, 5> handles{};
       handles[0] = stop_event_;
+      handles[1] = work_event_;
       const auto pipe_count = channel.wait_handles(
-          std::span<HANDLE>(handles).subspan(1));
-      const DWORD count = static_cast<DWORD>(pipe_count + 1U);
+          std::span<HANDLE>(handles).subspan(2));
+      const DWORD count = static_cast<DWORD>(pipe_count + 2U);
       const DWORD waited =
           WaitForMultipleObjects(count, handles.data(), FALSE, INFINITE);
       if (waited == WAIT_OBJECT_0 || waited == WAIT_FAILED) break;
@@ -190,6 +293,7 @@ private:
   ReplyMode mode_;
   DWORD expected_client_pid_{};
   HANDLE stop_event_{};
+  HANDLE work_event_{};
   std::thread thread_;
   std::mutex mutex_;
   std::condition_variable ready_cv_;
@@ -198,6 +302,11 @@ private:
   bool pipe_ready_{};
   std::size_t diagnostics_count_{};
   std::size_t handshake_count_{};
+  std::size_t trace_subscribe_count_{};
+  std::size_t trace_unsubscribe_count_{};
+  bool disconnect_requested_{};
+  bool disconnected_{};
+  std::deque<std::string> pending_trace_packets_;
   std::string diagnostics_json_;
 };
 
@@ -225,6 +334,38 @@ make_committed_profile(layerc::test::TempDirectory &temporary) {
   constexpr std::string_view json = "{}";
   if (!layerc::test::write_file(path, json)) return std::nullopt;
   return editor::CommittedProfile{path, std::string(json)};
+}
+
+core::AutomationEvent make_trace_event(const std::uint64_t id) {
+  core::AutomationEvent event;
+  event.kind = core::AutomationEventKind::session_started;
+  event.timestamp = core::TimePoint{} + core::Milliseconds{
+      static_cast<std::int64_t>(id)};
+  event.source_id = "hub-event-" + std::to_string(id);
+  event.origin_token = id;
+  event.fields.emplace("id", core::AutomationValue{
+                                  static_cast<std::int64_t>(id)});
+  return event;
+}
+
+std::string trace_packet(const std::vector<core::AutomationEvent> &events) {
+  std::vector<core::AutomationTraceEntry> entries;
+  entries.reserve(events.size());
+  for (std::size_t index{}; index < events.size(); ++index)
+    entries.push_back(
+        core::make_automation_root_trace_entry(events[index], index + 1U));
+  return core::export_layerc_trace(entries);
+}
+
+std::optional<editor::AutomationTraceUpdate> wait_for_trace_update(
+    editor::DaemonHub &hub, const std::uint64_t id,
+    const std::chrono::milliseconds timeout = 2s) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto update = hub.take_trace(id)) return update;
+    std::this_thread::sleep_for(20ms);
+  }
+  return hub.take_trace(id);
 }
 
 void lazy_worker_and_absent_status() {
@@ -442,13 +583,261 @@ void shutdown_joins_with_a_pending_status_demand() {
   }
 }
 
+void hub_trace_subscribe_acknowledges_with_reset() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  const bool requested = server.wait_for_trace_subscribes(1, 1s);
+  layerc::test::expect(requested && server.trace_subscribe_count() == 1 &&
+                           reset.has_value() && reset->reply.has_value() &&
+                           reset->reply->reset && reset->reply->packet.empty() &&
+                           reset->reply->generation == id,
+                       "one acknowledged subscribe produces a reset reply");
+  hub.unsubscribe_trace(id);
+}
+
+void hub_trace_receives_a_push_while_idle_connected() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset.has_value() && reset->reply.has_value() &&
+                               reset->reply->reset,
+                           "the initial trace reset is consumed before the push"))
+    return;
+
+  const std::vector<core::AutomationEvent> events{make_trace_event(1)};
+  layerc::test::expect(server.push_trace(trace_packet(events)),
+                       "the fake server queues a trace event");
+  const auto update = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(update.has_value() && update->reply.has_value(),
+                            "an idle-connected push reaches take_trace"))
+    return;
+  const auto parsed = core::parse_layerc_trace(update->reply->packet);
+  const auto *delivered =
+      std::get_if<std::vector<core::AutomationEvent>>(&parsed);
+  layerc::test::expect(delivered != nullptr && delivered->size() == 1 &&
+                           delivered->front().source_id == "hub-event-1" &&
+                           update->reply->cursor == 1,
+                       "the pushed event arrives without a pending request");
+  hub.unsubscribe_trace(id);
+}
+
+void hub_trace_unsubscribe_stops_later_pushes() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset.has_value() && reset->reply.has_value() &&
+                               reset->reply->reset,
+                           "the trace subscription is established"))
+    return;
+  hub.unsubscribe_trace(id);
+  const bool unsubscribed = server.wait_for_trace_unsubscribes(1, 1s);
+  layerc::test::expect(unsubscribed && server.trace_unsubscribe_count() == 1,
+                       "one unsubscribe is sent to the private server");
+  const std::vector<core::AutomationEvent> events{make_trace_event(2)};
+  layerc::test::expect(server.push_trace(trace_packet(events)),
+                       "the fake server queues a post-unsubscribe trace");
+  bool delivered{};
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (hub.take_trace(id).has_value()) {
+      delivered = true;
+      break;
+    }
+    std::this_thread::sleep_for(20ms);
+  }
+  layerc::test::expect(!delivered,
+                       "a post-unsubscribe push is not delivered to the old id");
+}
+
+void unconfirmed_unsubscribe_closes_the_trace_connection() {
+  FakeLayerD server(ReplyMode::silent_trace_unsubscribe);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals, 700ms));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset && reset->reply && reset->reply->reset,
+                           "the trace subscription is established"))
+    return;
+
+  hub.unsubscribe_trace(id);
+  if (!layerc::test::expect(server.wait_for_trace_unsubscribes(1, 1s) &&
+                               server.wait_for_disconnect(2s),
+                           "an unconfirmed unsubscribe closes the pipe so recording cannot remain active"))
+    return;
+  const auto status = hub.status();
+  layerc::test::expect(status.running && status.error.empty() &&
+                           server.handshakes() == 2,
+                       "the next status demand reconnects after trace cleanup");
+}
+
+void absent_trace_retries_three_times_without_starting_layerd() {
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(private_pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  std::optional<editor::AutomationTraceUpdate> failure;
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto update = hub.take_trace(id)) {
+      failure = std::move(update);
+      break;
+    }
+    hub.poll_trace(id);
+    std::this_thread::sleep_for(20ms);
+  }
+  if (!layerc::test::expect(failure.has_value(),
+                            "three absent-pipe attempts produce an update"))
+    return;
+  layerc::test::expect(!failure->reply.has_value() &&
+                           failure->error.find("LayerD is not running") !=
+                               std::string::npos &&
+                           starts == 0,
+                       "an absent trace subscription reports LayerD without launching it");
+}
+
+void trace_subscribe_error_retries_with_layerd_text() {
+  FakeLayerD server(ReplyMode::error);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  std::optional<editor::AutomationTraceUpdate> failure;
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto update = hub.take_trace(id)) {
+      failure = std::move(update);
+      break;
+    }
+    hub.poll_trace(id);
+    std::this_thread::sleep_for(20ms);
+  }
+  layerc::test::expect(failure.has_value() && !failure->reply.has_value() &&
+                           failure->error == "test trace subscribe rejected" &&
+                           server.trace_subscribe_count() == 3 && starts == 0,
+                       "three private error replies end the subscription without launching");
+}
+
+void disconnected_trace_resubscribes_with_a_gap() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset.has_value() && reset->reply.has_value() &&
+                               reset->reply->reset,
+                           "the first trace subscription is established"))
+    return;
+  if (!layerc::test::expect(server.disconnect_client(),
+                            "the fake server requests a client disconnect"))
+    return;
+
+  std::optional<editor::AutomationTraceUpdate> retried;
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    hub.poll_trace(id);
+    if (auto update = hub.take_trace(id)) {
+      retried = std::move(update);
+      break;
+    }
+    std::this_thread::sleep_for(20ms);
+  }
+  const bool resubscribed = server.wait_for_trace_subscribes(2, 1s);
+  layerc::test::expect(resubscribed && server.trace_subscribe_count() == 2 &&
+                           retried.has_value() && retried->reply.has_value() &&
+                           retried->reply->gap && !retried->reply->reset,
+                       "the next poll resubscribes and reports a trace gap");
+  hub.unsubscribe_trace(id);
+}
+
+void shutdown_while_trace_is_held_reports_an_error() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset.has_value() && reset->reply.has_value() &&
+                               reset->reply->reset,
+                           "the trace subscription is established before shutdown"))
+    return;
+  hub.shutdown();
+  const auto stopped = hub.take_trace(id);
+  layerc::test::expect(stopped.has_value() && !stopped->reply.has_value() &&
+                           stopped->error == "The LayerD link was shut down.",
+                       "shutdown ends the held trace with the documented error");
+}
+
+void status_reload_and_trace_continue_on_one_held_connection() {
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!layerc::test::expect(server.start(), "the private fake LayerD pipe is ready"))
+    return;
+  std::atomic<unsigned> starts{};
+  std::atomic<unsigned> signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(reset.has_value() && reset->reply.has_value() &&
+                               reset->reply->reset,
+                           "the trace subscription is held before status and reload"))
+    return;
+  const auto status = hub.status();
+  layerc::test::TempDirectory temporary("layerc-p2b2-trace-reload");
+  const auto profile = make_committed_profile(temporary);
+  if (!layerc::test::expect(profile.has_value(), "a committed profile fixture is written"))
+    return;
+  const auto reload = hub.reload(profile);
+  const std::vector<core::AutomationEvent> events{make_trace_event(3)};
+  layerc::test::expect(server.push_trace(trace_packet(events)),
+                       "the fake server queues a trace after status and reload");
+  const auto update = wait_for_trace_update(hub, id);
+  if (!layerc::test::expect(update.has_value() && update->reply.has_value(),
+                            "trace events continue flowing after status and reload"))
+    return;
+  const auto parsed = core::parse_layerc_trace(update->reply->packet);
+  const auto *delivered =
+      std::get_if<std::vector<core::AutomationEvent>>(&parsed);
+  layerc::test::expect(status.running && status.error.empty() &&
+                           reload.state == editor::ReloadState::acknowledged &&
+                           delivered != nullptr && delivered->size() == 1 &&
+                           delivered->front().source_id == "hub-event-3" &&
+                           starts == 0 && signals == 0,
+                       "status, committed reload, and trace share the held hub");
+  hub.unsubscribe_trace(id);
+}
+
 void editor_image_allowlist_is_exact() {
   const auto &names = platform::layerc_editor_image_names;
   const bool accepts_windows = names.size() == 2 &&
       std::wstring_view(names[0]) == L"layere.exe" &&
       std::wstring_view(names[1]) == L"layere_fltk.exe";
-  const auto contains = [&names](const std::wstring_view image) {
-    for (const auto *name : names)
+  const auto contains = [](const std::wstring_view image) {
+    for (const auto *name : platform::layerc_editor_image_names)
       if (std::wstring_view(name) == image) return true;
     return false;
   };
@@ -472,4 +861,13 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(held_connection_serves_later_requests_without_rehandshake),
     LAYERC_TEST_CASE(second_editor_reports_a_busy_pipe),
     LAYERC_TEST_CASE(shutdown_joins_with_a_pending_status_demand),
+    LAYERC_TEST_CASE(hub_trace_subscribe_acknowledges_with_reset),
+    LAYERC_TEST_CASE(hub_trace_receives_a_push_while_idle_connected),
+    LAYERC_TEST_CASE(hub_trace_unsubscribe_stops_later_pushes),
+    LAYERC_TEST_CASE(unconfirmed_unsubscribe_closes_the_trace_connection),
+    LAYERC_TEST_CASE(absent_trace_retries_three_times_without_starting_layerd),
+    LAYERC_TEST_CASE(trace_subscribe_error_retries_with_layerd_text),
+    LAYERC_TEST_CASE(disconnected_trace_resubscribes_with_a_gap),
+    LAYERC_TEST_CASE(shutdown_while_trace_is_held_reports_an_error),
+    LAYERC_TEST_CASE(status_reload_and_trace_continue_on_one_held_connection),
     LAYERC_TEST_CASE(editor_image_allowlist_is_exact))

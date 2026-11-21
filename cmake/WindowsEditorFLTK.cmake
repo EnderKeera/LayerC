@@ -30,8 +30,10 @@ add_library(layerc_editor_fltk_support STATIC
     src/editor/fltk/platform/win32/folder_opener.cpp
     src/editor/fltk/platform/win32/tasks.cpp
     src/editor/fltk/platform/win32/overlay_preview.cpp
+    src/editor/fltk/platform/win32/trace_relay.cpp
     src/editor/fltk/platform/win32/daemon_hub.cpp
-    src/editor/fltk/platform/win32/daemon_link.cpp)
+    src/editor/fltk/platform/win32/daemon_link.cpp
+    src/editor/fltk/platform/win32/automation_trace_client.cpp)
 target_include_directories(layerc_editor_fltk_support PUBLIC src/editor/fltk)
 target_link_libraries(layerc_editor_fltk_support PUBLIC
     layerc_editor_live layerc_editor_core layerc_runtime layerc_windows

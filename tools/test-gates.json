@@ -37,7 +37,8 @@
         "layerc_windows_fltk_notification_tests",
         "layerc_windows_fltk_patterns_tests",
         "layerc_windows_fltk_smoke",
-        "layerc_windows_fltk_text_tests"
+        "layerc_windows_fltk_text_tests",
+        "layerc_windows_fltk_trace_relay_tests"
       ],
       "allowSkip": {
         "layerc_overlay_tests": "the runner cannot create an isolated desktop; unavailable interactive coverage, not a pass"

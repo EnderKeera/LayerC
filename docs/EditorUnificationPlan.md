@@ -159,7 +159,7 @@ Kept like the Linux matrix in [LinuxEditorPlan.md](LinuxEditorPlan.md): each Win
 | Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter |
 | Exchange | Import and export packs | `editor_packs` | File dialogs |
 | Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service |
-| Advanced | Automation, simulator, trace | `editor_automation*` | (shared code) |
+| Advanced | Automation, simulator, trace | `editor_automation*` | Shared editor tools; live trace uses the authenticated LayerD pipe on Windows |
 | Advanced | Visual triggers and calibration | `editor_visual`, `calibration_session` | Visual service |
 | Options | Visual recognition, overlay and editor capture exclusion, launcher updates, text size | `editor_dialog` (Options) | Capture exclusion, settings |
 | Appearance | Presets, roles, contrast checks | `editor_appearance`, `appearance_contrast` | Shared contrast code |

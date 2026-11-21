@@ -1,5 +1,6 @@
 #include "platform/win32/daemon_hub.hpp"
 
+#include "platform/win32/trace_relay.hpp"
 #include "daemon_process.hpp"
 #include "live_edit_session.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -31,7 +32,9 @@ constexpr auto caller_backstop_grace = std::chrono::milliseconds(500);
 std::string win32_reason(DWORD error);
 
 struct Request final {
-  enum class Kind { status, reload };
+  // Trace requests have no waiting caller: their outcome is the relay's
+  // subscription state.
+  enum class Kind { status, reload, trace_subscribe, trace_unsubscribe };
 
   Request(Kind request_kind, std::optional<CommittedProfile> profile,
           const Clock::time_point request_deadline)
@@ -45,8 +48,14 @@ struct Request final {
   bool completed{};
   DaemonStatus status_result;
   ReloadResult reload_result;
+  std::uint64_t trace_id{};
   std::atomic<bool> request_sent{};
 };
+
+bool is_trace(const Request &request) noexcept {
+  return request.kind == Request::Kind::trace_subscribe ||
+         request.kind == Request::Kind::trace_unsubscribe;
+}
 
 } // namespace
 
@@ -68,6 +77,7 @@ struct DaemonHub::State {
   std::deque<std::shared_ptr<Request>> queue;
   std::shared_ptr<Request> active;
   std::thread worker;
+  TraceRelay trace;
   HANDLE wake_event{};
   bool stopping{};
   bool worker_failed{};
@@ -137,6 +147,21 @@ void finish_reload(const std::shared_ptr<DaemonHub::State> &state,
   request->ready.notify_all();
 }
 
+void finish_trace(const std::shared_ptr<DaemonHub::State> &state,
+                  const std::shared_ptr<Request> &request,
+                  std::optional<std::string> failure) {
+  std::lock_guard lock(state->mutex);
+  if (request->completed) return;
+  request->completed = true;
+  if (request->kind == Request::Kind::trace_unsubscribe) {
+    if (!failure) state->trace.unsubscribe_succeeded();
+  } else if (failure) {
+    state->trace.attempt_failed(request->trace_id, std::move(*failure));
+  } else {
+    state->trace.attempt_succeeded(request->trace_id);
+  }
+}
+
 bool request_completed(const std::shared_ptr<DaemonHub::State> &state,
                        const std::shared_ptr<Request> &request) {
   std::lock_guard lock(state->mutex);
@@ -190,6 +215,10 @@ void fail_unreachable(const std::shared_ptr<DaemonHub::State> &state,
                       const std::shared_ptr<Request> &request,
                       const DaemonHubEnvironment &environment,
                       std::string reason) {
+  if (is_trace(*request)) {
+    finish_trace(state, request, std::move(reason));
+    return;
+  }
   if (request->kind == Request::Kind::status) {
     finish_status(state, request, disconnected_status(std::move(reason)));
     return;
@@ -203,6 +232,10 @@ void fail_unreachable(const std::shared_ptr<DaemonHub::State> &state,
 void fail_closed(const std::shared_ptr<DaemonHub::State> &state,
                  const std::shared_ptr<Request> &request,
                  std::string reason) {
+  if (is_trace(*request)) {
+    finish_trace(state, request, std::move(reason));
+    return;
+  }
   if (request->kind == Request::Kind::status) {
     finish_status(state, request, disconnected_status(std::move(reason)));
     return;
@@ -212,6 +245,11 @@ void fail_closed(const std::shared_ptr<DaemonHub::State> &state,
 
 void fail_timeout(const std::shared_ptr<DaemonHub::State> &state,
                   const std::shared_ptr<Request> &request) {
+  if (is_trace(*request)) {
+    finish_trace(state, request,
+                 "LayerD did not confirm the trace subscription before the deadline.");
+    return;
+  }
   if (request->kind == Request::Kind::status) {
     DaemonStatus status;
     status.running = request->request_sent.load();
@@ -228,7 +266,9 @@ void fail_timeout(const std::shared_ptr<DaemonHub::State> &state,
 
 void fail_shutdown_locked(const std::shared_ptr<Request> &request) {
   if (request->completed) return;
-  if (request->kind == Request::Kind::status) {
+  if (is_trace(*request)) {
+    // Nothing waits for it; shutdown ends the subscription with the pipe.
+  } else if (request->kind == Request::Kind::status) {
     request->status_result.error = "The LayerD link was shut down.";
   } else {
     request->reload_result = {ReloadState::failed,
@@ -242,6 +282,7 @@ void fail_shutdown_locked(const std::shared_ptr<Request> &request) {
 // are refused with it instead of queueing behind a thread that is gone.
 void fail_worker_locked(DaemonHub::State &state, std::string reason) {
   state.worker_failed = true;
+  state.trace.fail(reason);
   state.worker_error = std::move(reason);
   if (state.active) fail_shutdown_locked(state.active);
   for (const auto &request : state.queue) fail_shutdown_locked(request);
@@ -252,6 +293,11 @@ void fail_worker_locked(DaemonHub::State &state, std::string reason) {
 void handle_absent(const std::shared_ptr<DaemonHub::State> &state,
                    const std::shared_ptr<Request> &request,
                    const DaemonHubEnvironment &environment) {
+  if (is_trace(*request)) {
+    finish_trace(state, request,
+                 "LayerD is not running; start LayerD and try again.");
+    return;
+  }
   if (request->kind == Request::Kind::status) {
     DaemonStatus status;
     status.socket_missing = true;
@@ -310,6 +356,20 @@ bool handle_reply(const std::shared_ptr<DaemonHub::State> &state,
                   const ProfileRevision expected_revision,
                   const LiveMessage &message) {
   if (message.revision != expected_revision) return false;
+  if (is_trace(*request)) {
+    if (message.type == LiveMessageType::acknowledgement) {
+      finish_trace(state, request, std::nullopt);
+      return true;
+    }
+    if (message.type == LiveMessageType::error) {
+      finish_trace(state, request,
+                   message.text.empty()
+                       ? "LayerD refused the trace subscription."
+                       : message.text);
+      return true;
+    }
+    return false;
+  }
   if (request->kind == Request::Kind::status) {
     if (message.type == LiveMessageType::diagnostics_reply) {
       handle_replied_status(state, request, message);
@@ -341,10 +401,43 @@ struct ActiveDemand {
   ProfileRevision reply_revision{};
 };
 
-void discard_session(std::unique_ptr<LiveEditSession> &session,
-                     PipeLiveEditTransport *&transport) noexcept {
+// Routes one valid, authenticated poll in arrival order: pushed trace
+// packets reach the relay, and the active request's reply completes it.
+std::optional<LiveMessageType>
+route_forwarded(const std::shared_ptr<DaemonHub::State> &state,
+                const LiveEditStep &step, const ActiveDemand *active) {
+  std::optional<LiveMessageType> reply;
+  for (const auto &message : step.forwarded) {
+    if (message.type == LiveMessageType::automation_trace_event) {
+      std::lock_guard lock(state->mutex);
+      state->trace.append_packet(message.text);
+      continue;
+    }
+    if (!reply && active != nullptr && active->request->request_sent.load() &&
+        handle_reply(state, active->request, active->reply_revision, message))
+      reply = message.type;
+  }
+  return reply;
+}
+
+// A closed connection also drops LayerD's trace subscription.
+void discard_session(const std::shared_ptr<DaemonHub::State> &state,
+                     std::unique_ptr<LiveEditSession> &session,
+                     PipeLiveEditTransport *&transport) {
   session.reset();
   transport = nullptr;
+  std::lock_guard lock(state->mutex);
+  state->trace.connection_lost();
+}
+
+bool skip_unsent_trace(const std::shared_ptr<DaemonHub::State> &state,
+                       const Request &request, const LiveEditSession *session) {
+  if (!is_trace(request) || request.request_sent.load()) return false;
+  // A closed connection already dropped LayerD's trace subscription.
+  if (request.kind == Request::Kind::trace_unsubscribe)
+    return session == nullptr || !session->connected();
+  std::lock_guard lock(state->mutex);
+  return !state->trace.current(request.trace_id);
 }
 
 void process_worker(const std::shared_ptr<DaemonHub::State> &state,
@@ -360,6 +453,11 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       if (!active && !state->queue.empty()) {
         auto request = std::move(state->queue.front());
         state->queue.pop_front();
+        // No caller waits on a trace request, so its deadline bounds only
+        // its own exchange, not the queue ahead of it.
+        if (is_trace(*request))
+          request->deadline = Clock::now() +
+              std::max(environment.reply_timeout, std::chrono::milliseconds::zero());
         state->active = request;
         active.emplace(ActiveDemand{std::move(request)});
       }
@@ -370,15 +468,20 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         const auto waited = wait_for_work(state, transport, INFINITE);
         if (waited.kind == WaitResult::Kind::wake) continue;
         if (waited.kind == WaitResult::Kind::pipe) {
-          (void)session->poll({});
-          if (!session->connected()) discard_session(session, transport);
+          const auto step = session->poll({});
+          if (!session->connected() || step.authentication_rejected ||
+              !step.protocol_errors.empty()) {
+            discard_session(state, session, transport);
+          } else if (session->authenticated()) {
+            (void)route_forwarded(state, step, nullptr);
+          }
           continue;
         }
         if (waited.kind == WaitResult::Kind::failed)
-          discard_session(session, transport);
+          discard_session(state, session, transport);
         continue;
       }
-      if (session) discard_session(session, transport);
+      if (session) discard_session(state, session, transport);
       if (wait_for_work(state, nullptr, INFINITE).kind ==
           WaitResult::Kind::failed) {
         std::lock_guard lock(state->mutex);
@@ -389,12 +492,16 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     }
 
     const auto request = active->request;
-    if (request_completed(state, request)) {
+    if (request_completed(state, request) ||
+        skip_unsent_trace(state, *request, session.get())) {
       clear_active(state, request);
       active.reset();
       continue;
     }
     if (Clock::now() >= request->deadline) {
+      // The remote subscription state is unknown without a reply. Closing
+      // the pipe guarantees an abandoned recording stops.
+      if (is_trace(*request)) discard_session(state, session, transport);
       if (request->request_sent.load()) {
         fail_timeout(state, request);
       } else if (request->kind == Request::Kind::status) {
@@ -421,7 +528,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     }
 
     if (!active->presence_probed) {
-      if (session && !session->connected()) discard_session(session, transport);
+      if (session && !session->connected()) discard_session(state, session, transport);
       if (!session) {
         if (environment.pipe_name.empty()) {
           fail_unreachable(state, request, environment,
@@ -456,7 +563,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     if (step.authentication_rejected) {
       fail_unreachable(state, request, environment,
                        "LayerD refused live-pipe package authentication.");
-      discard_session(session, transport);
+      discard_session(state, session, transport);
       clear_active(state, request);
       active.reset();
       continue;
@@ -467,7 +574,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         fail_closed(state, request, reason);
       else
         fail_unreachable(state, request, environment, reason);
-      discard_session(session, transport);
+      discard_session(state, session, transport);
       clear_active(state, request);
       active.reset();
       continue;
@@ -477,7 +584,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           !transport->last_error().empty()) {
         fail_unreachable(state, request, environment,
                          "LayerD live-pipe authentication failed.");
-        discard_session(session, transport);
+        discard_session(state, session, transport);
         clear_active(state, request);
         active.reset();
         continue;
@@ -491,18 +598,24 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         fail_unreachable(state, request, environment,
                          "LayerD live-pipe connection wait failed (" +
                              win32_reason(waited.error) + ").");
-        discard_session(session, transport);
+        discard_session(state, session, transport);
         clear_active(state, request);
         active.reset();
       }
       continue;
     }
 
+    const auto reply = route_forwarded(state, step, &*active);
     if (!request->request_sent.load()) {
       bool sent{};
       if (request->kind == Request::Kind::status) {
         sent = session->send_authenticated(
             LiveMessage{.type = LiveMessageType::diagnostics_request});
+      } else if (is_trace(*request)) {
+        sent = session->send_authenticated(LiveMessage{
+            .type = request->kind == Request::Kind::trace_subscribe
+                        ? LiveMessageType::automation_trace_subscribe
+                        : LiveMessageType::automation_trace_unsubscribe});
       } else {
         const auto &committed = *request->committed;
         const auto key = layerc::platform::canonical_profile_key(committed.path);
@@ -523,7 +636,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           fail_unreachable(state, request, environment,
                            "LayerD did not accept the live-pipe request.");
         }
-        discard_session(session, transport);
+        discard_session(state, session, transport);
         clear_active(state, request);
         active.reset();
         continue;
@@ -533,14 +646,10 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       continue;
     }
 
-    bool replied{};
-    for (const auto &message : step.forwarded) {
-      if (handle_reply(state, request, active->reply_revision, message)) {
-        replied = true;
-        break;
-      }
-    }
-    if (replied || request_completed(state, request)) {
+    if (reply || request_completed(state, request)) {
+      if (request->kind == Request::Kind::trace_unsubscribe &&
+          reply == LiveMessageType::error)
+        discard_session(state, session, transport);
       clear_active(state, request);
       active.reset();
       continue;
@@ -548,7 +657,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     if (!session->connected()) {
       fail_closed(state, request,
                   "LayerD closed the live pipe before replying.");
-      discard_session(session, transport);
+      discard_session(state, session, transport);
       clear_active(state, request);
       active.reset();
       continue;
@@ -561,7 +670,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       fail_closed(state, request,
                   "LayerD live-pipe wait failed (" +
                       win32_reason(waited.error) + ").");
-      discard_session(session, transport);
+      discard_session(state, session, transport);
       clear_active(state, request);
       active.reset();
     }
@@ -667,7 +776,45 @@ std::shared_ptr<Request> submit_request(
   return request;
 }
 
+// Queues a trace request without waiting for it, starting the worker on
+// first demand. The caller holds lifecycle_mutex and mutex. Returns the
+// reason the link cannot take it, if any.
+std::optional<std::string> enqueue_trace_locked(
+    const std::shared_ptr<DaemonHub::State> &state,
+    const DaemonHubEnvironment &environment, const Request::Kind kind,
+    const std::uint64_t id) {
+  if (state->stopping) return "The LayerD link was shut down.";
+  if (!state->initialization_error.empty()) return state->initialization_error;
+  if (state->worker_failed) return state->worker_error;
+  if (!state->worker.joinable()) {
+    try {
+      auto worker_state = state;
+      auto worker_environment = environment;
+      state->worker = std::thread(
+          [worker_state = std::move(worker_state),
+           worker_environment = std::move(worker_environment)] {
+            run_worker(worker_state, worker_environment);
+          });
+    } catch (...) {
+      return "The LayerD link worker could not start.";
+    }
+  }
+  auto request = std::make_shared<Request>(kind, std::nullopt, Clock::now());
+  request->trace_id = id;
+  state->queue.push_back(request);
+  if (SetEvent(state->wake_event) == FALSE) {
+    std::erase(state->queue, request);
+    return "The LayerD link wake event failed.";
+  }
+  return std::nullopt;
+}
+
 } // namespace
+
+DaemonHub &product_daemon_hub() {
+  static DaemonHub hub(product_daemon_hub_environment());
+  return hub;
+}
 
 DaemonHubEnvironment product_daemon_hub_environment() {
   return {.pipe_name = layerc::platform::live_edit_pipe_name,
@@ -694,12 +841,51 @@ ReloadResult DaemonHub::reload(
   return request->reload_result;
 }
 
+std::uint64_t DaemonHub::subscribe_trace() {
+  std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
+  std::lock_guard lock(state_->mutex);
+  const auto id = state_->trace.subscribe();
+  if (auto failure = enqueue_trace_locked(state_, environment_,
+                                          Request::Kind::trace_subscribe, id))
+    state_->trace.fail(std::move(*failure));
+  return id;
+}
+
+void DaemonHub::poll_trace(const std::uint64_t subscription) {
+  std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
+  std::lock_guard lock(state_->mutex);
+  if (!state_->trace.begin_attempt(subscription)) return;
+  if (auto failure = enqueue_trace_locked(state_, environment_,
+                                          Request::Kind::trace_subscribe,
+                                          subscription))
+    state_->trace.fail(std::move(*failure));
+}
+
+std::optional<AutomationTraceUpdate>
+DaemonHub::take_trace(const std::uint64_t subscription) {
+  std::lock_guard lock(state_->mutex);
+  return state_->trace.take_update(subscription);
+}
+
+void DaemonHub::unsubscribe_trace(const std::uint64_t subscription) noexcept {
+  try {
+    std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
+    std::lock_guard lock(state_->mutex);
+    if (state_->trace.unsubscribe(subscription))
+      (void)enqueue_trace_locked(state_, environment_,
+                                 Request::Kind::trace_unsubscribe, 0);
+  } catch (...) {
+    // Closing the pipe at shutdown also ends LayerD's subscription.
+  }
+}
+
 void DaemonHub::shutdown() noexcept {
   if (!state_) return;
   std::lock_guard lifecycle_lock(state_->lifecycle_mutex);
   {
     std::lock_guard lock(state_->mutex);
     state_->stopping = true;
+    state_->trace.fail("The LayerD link was shut down.");
     if (state_->active) fail_shutdown_locked(state_->active);
     for (const auto &request : state_->queue) fail_shutdown_locked(request);
     state_->queue.clear();

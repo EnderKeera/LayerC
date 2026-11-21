@@ -6,14 +6,6 @@
 #include "layerc/runtime/runtime_services.hpp"
 
 namespace layerc::editor {
-namespace {
-
-DaemonHub &daemon_hub() {
-  static DaemonHub hub(product_daemon_hub_environment());
-  return hub;
-}
-
-} // namespace
 
 std::string DaemonStatus::summary() const {
   if (!running) {
@@ -46,16 +38,16 @@ bool wayland_environment() { return false; }
 
 std::string wayland_scope_note(const DaemonStatus &, const bool) { return {}; }
 
-DaemonStatus query_daemon_status() { return daemon_hub().status(); }
+DaemonStatus query_daemon_status() { return product_daemon_hub().status(); }
 
 ReloadResult request_daemon_reload(
     const std::optional<CommittedProfile> &committed) {
-  return daemon_hub().reload(committed);
+  return product_daemon_hub().reload(committed);
 }
 
 void shutdown_daemon_link() noexcept {
   try {
-    daemon_hub().shutdown();
+    product_daemon_hub().shutdown();
   } catch (...) {
   }
 }
