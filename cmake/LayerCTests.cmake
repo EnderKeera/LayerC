@@ -89,6 +89,11 @@ if(TARGET layerc_editor_fltk_support)
         SOURCES tests/editor_overlay_preview_tests.cpp
         LINK layerc_editor_fltk_support TIMEOUT 30 LABELS required editor)
 endif()
+if(WIN32 AND TARGET layerc_editor_fltk)
+    layerc_add_test(layerc_windows_fltk_binding_tests WIN32
+        SOURCES tests/windows_fltk_binding_tests.cpp
+        LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+endif()
 if(TARGET layere_fltk)
     add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)
     set_tests_properties(layerc_windows_fltk_smoke PROPERTIES

@@ -1,6 +1,8 @@
 #include "editor_pages.hpp"
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
+#include "platform/hid_binding_capture.hpp"
+#include "platform/services.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 
@@ -331,9 +333,14 @@ void BindingPage::build(FormBuilder &builder) {
   (void)builder.button(880, 210, 150, "Add mouse", EditorCommand::add_mouse);
   auto *capture = builder.button(710, 275, 320, "Capture focused chord...",
                        EditorCommand::capture_binding);
-  auto *capture_note = new Fl_Box(710, 330, 320, 80,
-      "Capture reads only events in its focused editor dialog.\n"
-      "Controller and HID bindings stay read-only until device capture is implemented.");
+  const bool hid = hid_binding_capture_available();
+  if (hid)
+    (void)builder.button(710, 313, 320, "Capture HID binding...",
+                         EditorCommand::capture_hid_binding);
+  auto *capture_note = new Fl_Box(710, hid ? 352 : 330, 320, hid ? 65 : 80);
+  std::string capture_text = "Capture reads only events in its focused editor dialog.";
+  if (!hid) capture_text += "\n" + std::string(focused_binding_hid_note());
+  capture_note->copy_label(capture_text.c_str());
   capture_note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   capture_note->labelsize(11);
   accessibility::describe_with(*capture, *capture_note);

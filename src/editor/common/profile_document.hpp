@@ -190,10 +190,15 @@ public:
     if (retained_visual_) visit(retained_visual_->optional_profile());
   }
   // Recording variants: an accepted edit is exactly one history transaction.
+  // A fallible local effect (such as assigning a HID slot) runs only for a
+  // validated, changed candidate, before the document or history is changed.
+  // It must not reenter the document and must leave no effects on refusal.
+  using BeforeProfileAccept = std::function<std::optional<std::string>()>;
   ModuleEditOutcome edit_profile(
       const std::function<void(layerc::core::GameProfile &)> &edit,
       DocumentChangeKind kind,
-      const layerc::core::CompanionProfile *companion = nullptr);
+      const layerc::core::CompanionProfile *companion = nullptr,
+      const BeforeProfileAccept &before_accept = {});
   ModuleEditOutcome edit_visual(
       const std::function<std::optional<std::string>(
           std::optional<layerc::core::VisualProfile> &)> &edit,
@@ -228,7 +233,8 @@ private:
   // candidate but never record history; the public overloads record once.
   [[nodiscard]] ModuleEditOutcome edit_profile_value(
       const std::function<void(layerc::core::GameProfile &)> &edit,
-      const layerc::core::CompanionProfile *companion);
+      const layerc::core::CompanionProfile *companion,
+      const BeforeProfileAccept &before_accept);
   [[nodiscard]] ModuleEditOutcome edit_visual_value(
       const std::function<std::optional<std::string>(
           std::optional<layerc::core::VisualProfile> &)> &edit);

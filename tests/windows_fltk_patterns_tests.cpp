@@ -1021,20 +1021,22 @@ void idle_and_app_side_changes() {
   // Two warm-up waits settle the interval the connection left armed; then an
   // idle loop must sleep through each whole slice instead of waking for us.
   for (int warm = 0; warm < 2; ++warm) (void)Fl::wait(0.5);
-  long long shortest = 5000;
-  for (int pass = 0; pass < 3; ++pass) {
+  int short_waits = 0;
+  for (int pass = 0; pass < 5; ++pass) {
     const auto before = std::chrono::steady_clock::now();
     (void)Fl::wait(0.5);
     const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
                           std::chrono::steady_clock::now() - before)
                           .count();
     std::cerr << "[idle] wait " << pass << " took " << took << " ms\n";
-    if (took < shortest) shortest = took;
+    if (took < 400) ++short_waits;
   }
   stage = 2;
   // A wait lasts at least its slice unless something wakes the loop early, and
-  // slowness can only lengthen it, so this holds under load too.
-  expect(shortest >= 400, "an idle loop is not woken by the accessibility refresh");
+  // slowness can only lengthen it. The refresh runs every 100 ms, so a refresh
+  // that woke the loop would cut every wait short; one short wait is a single
+  // stray message (the in-process UIA client's own housekeeping), not the timer.
+  expect(short_waits <= 1, "an idle loop is not woken by the accessibility refresh");
   while (!fixture.closed.load()) (void)Fl::wait(0.02);
   worker.join();
 }

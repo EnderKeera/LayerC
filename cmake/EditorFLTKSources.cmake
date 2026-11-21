@@ -35,6 +35,7 @@ set(LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES
     src/editor/fltk/editor_menus.cpp
     src/editor/fltk/editor_preview.cpp
     src/editor/fltk/binding_capture.cpp
+    src/editor/fltk/hid_binding_dialog.cpp
     src/editor/fltk/accessible_widgets.cpp)
 
 set(LAYERC_EDITOR_FLTK_PORTABLE_SOURCES

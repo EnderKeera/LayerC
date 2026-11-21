@@ -195,6 +195,34 @@ EditorSession::edit(const std::function<void(core::GameProfile &)> &change,
   return outcome.message;
 }
 
+std::optional<std::string> EditorSession::add_hid_binding(
+    const std::string_view cooldown_id, core::HidControlBinding binding,
+    const ProfileDocument::BeforeProfileAccept &assign_slot) {
+  if (!opened_) return "No profile is open.";
+  const auto &profile = document_.profile();
+  if (std::ranges::find(profile.cooldowns, cooldown_id, &core::CooldownDefinition::id) ==
+      profile.cooldowns.end())
+    return "The selected cooldown no longer exists.";
+  if (profile.hid_bindings.size() >= core::max_hid_bindings)
+    return "This profile already has the maximum number of HID bindings.";
+  const auto outcome = document_.edit_profile(
+      [&](core::GameProfile &candidate) {
+        binding.id = next_unique_id(
+            "hid-" + core::slugify(cooldown_id, "control"), [&](std::string_view id) {
+              return std::ranges::find(candidate.hid_bindings, id, &core::HidControlBinding::id) !=
+                     candidate.hid_bindings.end();
+            });
+        candidate.hid_bindings.push_back(std::move(binding));
+        add_binding(candidate, cooldown_id,
+                    {{{core::InputDevice::generic_hid,
+                       static_cast<std::uint16_t>(candidate.hid_bindings.size()), 0}}});
+      },
+      DocumentChangeKind::immediate, companion_.profile(), assign_slot);
+  if (!outcome.accepted()) return outcome.message;
+  mark_changed(false);
+  return std::nullopt;
+}
+
 std::optional<std::string> EditorSession::edit_items(
     const std::function<std::optional<std::string>(
         core::GameProfile &, std::optional<core::AutomationProfile> &)> &change) {

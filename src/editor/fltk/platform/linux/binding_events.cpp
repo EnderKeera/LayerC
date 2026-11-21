@@ -283,12 +283,23 @@ void FocusedBindingEvents::stop() {
   impl_->owner.detach();
 }
 
+std::string_view focused_binding_hid_note() noexcept {
+  return "Generic HID capture is unavailable on Linux; existing HID bindings are kept unchanged.";
+}
+
 FocusedKeyResult FocusedBindingEvents::keyboard_token() {
+  using Kind = FocusedKeyResult::Kind;
+  if (Fl::event_key() == FL_Escape) return {Kind::cancel, std::nullopt};
   const auto *native = fl_xevent;
   if (!fl_x11_display() || !native || native->type != KeyPress) return {};
   const auto code = impl_->keyboard.scan_code(native->xkey.keycode);
-  if (!code) return {true, std::nullopt};
-  return {true, core::InputToken{core::InputDevice::keyboard, *code, 0}};
+  if (!code) return {Kind::key, std::nullopt};
+  return {Kind::key, core::InputToken{core::InputDevice::keyboard, *code, 0}};
+}
+
+bool FocusedBindingEvents::mouse_input_inside(const int x, const int y,
+                                              const int w, const int h) const {
+  return impl_->owner.shown() && Fl::event_inside(x, y, w, h) != 0;
 }
 
 std::optional<core::InputToken> FocusedBindingEvents::mouse_button_token() const {
@@ -297,6 +308,13 @@ std::optional<core::InputToken> FocusedBindingEvents::mouse_button_token() const
       ? platform::button_to_mouse_code(native->xbutton.button) : std::uint16_t{};
   if (code == 0) return std::nullopt;
   return core::InputToken{core::InputDevice::mouse, code, 0};
+}
+
+std::optional<core::InputToken> FocusedBindingEvents::mouse_wheel_token() const {
+  const auto dy = Fl::event_dy();
+  if (dy == 0) return std::nullopt;
+  return core::InputToken{core::InputDevice::mouse,
+                          static_cast<std::uint16_t>(dy < 0 ? 6 : 7), 0};
 }
 
 } // namespace layerc::editor

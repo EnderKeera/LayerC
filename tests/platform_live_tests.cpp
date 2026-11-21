@@ -526,9 +526,9 @@ struct FaultingSettingsStore {
   using Value = std::optional<std::uint32_t>;
   std::vector<Value> values;
   std::vector<std::uint32_t> next;
-  std::optional<std::size_t> fail_read;
-  std::optional<std::size_t> fail_write;
-  std::optional<std::size_t> fail_restore;
+  std::optional<std::size_t> fail_read{};
+  std::optional<std::size_t> fail_write{};
+  std::optional<std::size_t> fail_restore{};
   std::size_t writes{};
 
   std::uint32_t read(const std::size_t index,
@@ -618,6 +618,49 @@ void settings_commit_policy() {
          "a failed first write leaves every value as it was");
 }
 
+void hid_slots_refuse_unreadable_and_unapproved_replacement() {
+  namespace platform = layerc::platform;
+  using Assignment = platform::HidSlotAssignment;
+  const std::string ascii_key = "Software\\LayerC.Test\\hid-slots-" +
+      std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
+  const std::wstring key(ascii_key.begin(), ascii_key.end());
+  constexpr DWORD probe = 13;
+  const bool fixture = RegSetKeyValueW(HKEY_CURRENT_USER, key.c_str(), L"OverrideProbe",
+                                       REG_DWORD, &probe, sizeof(probe)) == ERROR_SUCCESS;
+  if (!expect(fixture, "create a disposable HID settings key")) return;
+  {
+    layerc::test::ScopedEnvironment settings("LAYERC_SETTINGS_KEY", ascii_key);
+    if (expect(platform::read_layerc_registry_dword(L"OverrideProbe").value == probe,
+               "HID slot test is redirected before any writes")) {
+      layerc::core::HidDeviceSelector selector;
+      selector.descriptor_hash.assign(64, 'a');
+      const std::wstring first = L"fixture-path-1";
+      const std::wstring second = L"fixture-path-2";
+      expect(platform::assign_hid_stable_slot_checked(selector, first, false) ==
+                 Assignment::assigned &&
+                 platform::assign_hid_stable_slot_checked(selector, L"FIXTURE-PATH-1", false) ==
+                     Assignment::assigned,
+             "a new or already assigned slot succeeds without replacement");
+      expect(platform::assign_hid_stable_slot_checked(selector, second, false) ==
+                 Assignment::occupied && platform::read_hid_stable_slot(selector) == first,
+             "unapproved replacement leaves the original path in place");
+      expect(platform::assign_hid_stable_slot_checked(selector, second, true) ==
+                 Assignment::assigned && platform::read_hid_stable_slot(selector) == second,
+             "explicit replacement reassigns the local slot");
+      const auto name = std::wstring(64, L'a') + L"-0-0-0-0-slot-1";
+      if (expect(static_cast<bool>(platform::write_layerc_registry_dword(name, probe, L"HidSlots")),
+                 "store an incompatible slot value")) {
+        expect(platform::assign_hid_stable_slot_checked(selector, first, true) ==
+                   Assignment::unreadable &&
+                   platform::read_layerc_registry_dword(name, L"HidSlots").value == probe,
+               "a failed slot read cannot be mistaken for an empty slot");
+      }
+    }
+  }
+  expect(RegDeleteTreeW(HKEY_CURRENT_USER, key.c_str()) == ERROR_SUCCESS,
+         "remove the disposable HID settings key");
+}
+
 // Options > Apply's snapshot against a disposable registry key: every value
 // lands as the DWORD its reader expects, whatever type was there before.
 void options_settings_commit() {
@@ -682,6 +725,7 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(live::journal_read_status_recovery),
       LAYERC_TEST_CASE(live::profile_planning_after_recovery),
       LAYERC_TEST_CASE(hid_sampling),
+      LAYERC_TEST_CASE(hid_slots_refuse_unreadable_and_unapproved_replacement),
       LAYERC_TEST_CASE(live::platform_visual_assets),
       LAYERC_TEST_CASE(live::platform_visual_asset_writer_ownership),
       LAYERC_TEST_CASE(live::platform_sibling_authentication),

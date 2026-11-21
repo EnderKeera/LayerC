@@ -2,6 +2,7 @@
 
 #include "profile_document.hpp"
 #include "profile_edit.hpp"
+#include "layerc/core/hid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -138,8 +139,11 @@ void add_binding(core::GameProfile &profile, const std::string_view cooldown_id,
 
 bool remove_binding(core::GameProfile &profile, const std::size_t index) {
   if (index >= profile.bindings.size()) return false;
+  const bool had_hid = std::ranges::any_of(profile.bindings[index].chord.tokens,
+      [](const core::InputToken &token) { return token.device == core::InputDevice::generic_hid; });
   profile.bindings.erase(profile.bindings.begin() +
                          static_cast<std::ptrdiff_t>(index));
+  if (had_hid) core::compact_hid_bindings(profile);
   return true;
 }
 

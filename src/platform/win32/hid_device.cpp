@@ -389,4 +389,21 @@ bool assign_hid_stable_slot(
       write_layerc_registry_string(name, device_path, L"HidSlots"));
 }
 
+HidSlotAssignment assign_hid_stable_slot_checked(
+    const layerc::core::HidDeviceSelector &selector,
+    const std::wstring &device_path, const bool replace) {
+  if (device_path.empty()) return HidSlotAssignment::write_failed;
+  const auto current = read_layerc_registry_string(
+      stable_slot_value_name(selector), 32U * 1024U, L"HidSlots");
+  if (current.failed()) return HidSlotAssignment::unreadable;
+  if (current.value && !current.value->empty()) {
+    if (CompareStringOrdinal(current.value->c_str(), -1, device_path.c_str(), -1,
+                             TRUE) == CSTR_EQUAL)
+      return HidSlotAssignment::assigned;
+    if (!replace) return HidSlotAssignment::occupied;
+  }
+  return assign_hid_stable_slot(selector, device_path)
+             ? HidSlotAssignment::assigned : HidSlotAssignment::write_failed;
+}
+
 } // namespace layerc::platform

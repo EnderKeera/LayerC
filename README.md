@@ -320,6 +320,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_windows_fltk_notification_tests` | FLTK editor trial: a real UI Automation client receives child-list and accessible-name changes, but not announcements made before it connected |
 | `layerc_windows_fltk_patterns_tests` | FLTK editor trial: a real `IUIAutomation` client drives Toggle, RangeValue, Selection/SelectionItem, ExpandCollapse and Scroll, an idle client costs at most one tree walk per refresh interval, and app-side changes are published without a client request |
 | `layerc_windows_fltk_text_tests` | FLTK editor trial: a real client drives Text and TextPattern2 on single-line, multiline and scrolled fields: line and endpoint movement, search, single-selection and child-range contracts, text and selection events, insertion-point geometry, offscreen range refusal, and Windows system-caret position and lifetime |
+| `layerc_windows_fltk_binding_tests` | FLTK trial: focused keyboard and mouse events, background-dialog refusal, IME-message guards, XInput edge mapping, and HID dialog validation and undo with a fixture device |
 | `layerc_windows_fltk_smoke` | `layere_fltk --smoke`: the unshipped FLTK trial opens its empty window with its UI Automation bridge, then closes |
 
 ### Linux

@@ -1,21 +1,17 @@
 // The Linux editor command table: completeness, order, the menu/context truth
 // tables and the derived help text.
 #include "editor_commands.hpp"
-#include "editor_app.hpp"
-#include "editor_menus.hpp"
 #include "test_support.hpp"
 
 #include <FL/Fl.H>
 
 #include <array>
 #include <cstdlib>
-#include <string>
 #include <string_view>
-#include <vector>
+#include <utility>
 
 namespace {
 
-using layerc::editor::EditorApp;
 using layerc::editor::EditorCommand;
 using layerc::editor::EditorMenuContext;
 using layerc::test::expect;
@@ -111,10 +107,20 @@ void linux_editor_command_registry_contracts() {
   expect(paths_match && row == menu_path_baseline.size(),
          "every menu path uses the v2 label and keeps the bar order");
   bool contexts_match = true;
-  for (std::size_t i = 0; i < specs.size() && i < context_baseline.size(); ++i)
-    contexts_match = contexts_match && specs[i].contexts == context_baseline[i].first &&
-                     specs[i].target_contexts == context_baseline[i].second;
-  expect(contexts_match,
+  row = 0;
+  for (const auto &spec : specs) {
+    if (spec.command == EditorCommand::capture_hid_binding) {
+      expect(spec.menu_path == nullptr && spec.contexts == 0 && spec.target_contexts == 0,
+             "the Windows-only HID capture command is not offered on Linux");
+      continue;
+    }
+    if (row >= context_baseline.size() ||
+        spec.contexts != context_baseline[row].first ||
+        spec.target_contexts != context_baseline[row].second)
+      contexts_match = false;
+    ++row;
+  }
+  expect(contexts_match && row == context_baseline.size(),
          "context menus offer and target exactly the commands they did before");
   expect(layerc::editor::command_spec(EditorCommand::redo).alternate_shortcut ==
              (FL_CTRL | 'y'),

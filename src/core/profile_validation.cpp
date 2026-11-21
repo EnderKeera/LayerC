@@ -17,7 +17,6 @@
 namespace layerc::core {
 namespace {
 
-constexpr std::size_t max_hid_bindings = 128;
 constexpr std::string_view empty_text = "expected non-empty string";
 constexpr std::string_view integer_range =
     "integer is outside the supported range or encoding";

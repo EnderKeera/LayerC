@@ -77,7 +77,8 @@ ModuleEditOutcome ProfileDocument::edit_visual_value(
 
 ModuleEditOutcome ProfileDocument::edit_profile_value(
     const std::function<void(layerc::core::GameProfile &)> &edit,
-    const layerc::core::CompanionProfile *companion) {
+    const layerc::core::CompanionProfile *companion,
+    const BeforeProfileAccept &before_accept) {
   auto candidate = profile_;
   edit(candidate);
   if (const auto error = core::validate_profile(candidate))
@@ -93,6 +94,9 @@ ModuleEditOutcome ProfileDocument::edit_profile_value(
   if (companion && !core::CompanionModule::valid(*companion, candidate))
     return {ModuleEditStatus::invalid,
             "The edit would invalidate the read-only Game Bar companion module."};
+  if (before_accept)
+    if (auto refusal = before_accept())
+      return {ModuleEditStatus::refused, std::move(*refusal)};
   profile_ = std::move(candidate);
   return {ModuleEditStatus::accepted, {}};
 }
@@ -458,8 +462,9 @@ void ProfileDocument::accept_commit(std::filesystem::path path,
 ModuleEditOutcome ProfileDocument::edit_profile(
     const std::function<void(layerc::core::GameProfile &)> &edit,
     const DocumentChangeKind kind,
-    const layerc::core::CompanionProfile *companion) {
-  const auto outcome = edit_profile_value(edit, companion);
+    const layerc::core::CompanionProfile *companion,
+    const BeforeProfileAccept &before_accept) {
+  const auto outcome = edit_profile_value(edit, companion, before_accept);
   if (outcome.accepted())
     (void)history_.record(profile_, visual_.profile, automation_.profile,
                           kind == DocumentChangeKind::text);

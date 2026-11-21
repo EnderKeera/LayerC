@@ -44,11 +44,14 @@ add_library(layerc_editor_fltk STATIC
     ${LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES}
     src/editor/fltk/platform/win32/editor_accessibility.cpp
     src/editor/fltk/platform/win32/desktop_font.cpp
-    src/editor/fltk/platform/win32/live_draft_watch.cpp)
+    src/editor/fltk/platform/win32/live_draft_watch.cpp
+    src/editor/fltk/platform/win32/binding_events.cpp
+    src/editor/fltk/platform/win32/hid_binding_capture.cpp)
 target_include_directories(layerc_editor_fltk PUBLIC src/editor/fltk)
 # Calibration types only; the Windows capture backend arrives with its service.
 target_link_libraries(layerc_editor_fltk PUBLIC
-    layerc_editor_fltk_support layerc_editor_fltk_uia layerc_capture_common)
+    layerc_editor_fltk_support layerc_editor_fltk_uia layerc_capture_common
+    PRIVATE comctl32 xinput9_1_0)
 layerc_win32(layerc_editor_fltk)
 
 if(LAYERC_BUILD_EDITOR)

@@ -326,7 +326,8 @@ void LiveEditHost::rebuild_overlays() {
                                       .available_charges = cooldown.max_charges,
                                       .max_charges = cooldown.max_charges,
                                       .next_charge_at = {},
-                                      .recovery_deadlines = {}});
+                                      .recovery_deadlines = {},
+                                      .active_until = {}});
   }
 
   const OverlayEditMode edit_mode{

@@ -94,6 +94,11 @@ public:
   [[nodiscard]] std::optional<std::string>
   edit(const std::function<void(layerc::core::GameProfile &)> &change,
        bool text_change = false);
+  // Adds one HID descriptor and its chord, without replacing existing chords.
+  // The local slot is written only after base and sidecar validation succeeds.
+  [[nodiscard]] std::optional<std::string>
+  add_hid_binding(std::string_view cooldown_id, core::HidControlBinding binding,
+                  const ProfileDocument::BeforeProfileAccept &assign_slot);
   // Typed-row edits can promote IDs and create/remap automation references.
   // Both values validate and enter history as one transaction.
   [[nodiscard]] std::optional<std::string> edit_items(

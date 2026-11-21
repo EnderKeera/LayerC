@@ -154,8 +154,8 @@ Kept like the Linux matrix in [LinuxEditorPlan.md](LinuxEditorPlan.md): each Win
 | --- | --- | --- | --- |
 | Profiles | List, new, duplicate, rename, turn on / off, delete, save, save as, open folder, game match, legacy upgrade | `editor_profiles`, `editor_shell` | Store service, `ShellExecuteW` |
 | Profiles | Detected tasks | `editor_tasks`, `window_discovery` | Tasks service |
-| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | Capture service |
-| Bindings | Generic HID capture | `editor_hid`, `hid_device` | Raw Input in the capture dialog |
+| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | FLTK frontend has the Windows focused capture adapter for physical scans, mouse input, and XInput edges; trial launcher integration remains pending |
+| Bindings | Generic HID capture | `editor_hid`, `hid_device` | FLTK frontend has a foreground Raw Input dialog with advanced system-device opt-in and a validated local slot assignment; trial launcher integration and physical device checks remain pending |
 | Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter |
 | Exchange | Import and export packs | `editor_packs` | File dialogs |
 | Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service |

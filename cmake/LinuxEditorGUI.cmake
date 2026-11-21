@@ -121,6 +121,7 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/editor_accessibility.cpp
     src/editor/fltk/platform/linux/tasks.cpp
     src/editor/fltk/platform/linux/binding_events.cpp
+    src/editor/fltk/platform/linux/hid_binding_capture.cpp
     src/editor/fltk/platform/linux/calibration_source.cpp
     src/editor/fltk/platform/linux/desktop_font.cpp
     src/editor/fltk/platform/linux/live_draft_watch.cpp

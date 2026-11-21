@@ -2,6 +2,7 @@
 
 #include "layerc/core/hid.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/xinput_controls.hpp"
 
 #include <algorithm>
 #include <array>
@@ -201,35 +202,15 @@ void InputRuntime::poll_controllers() {
       state = {};
     }
     auto &previous_state = controllers_[index];
-    const WORD previous = previous_state.Gamepad.wButtons;
-    const WORD current = state.Gamepad.wButtons;
-    for (unsigned bit = 0; bit < 16; ++bit) {
-      const WORD mask = static_cast<WORD>(1U << bit);
+    const auto previous = platform::xinput_digital_controls(previous_state.Gamepad);
+    const auto current = platform::xinput_digital_controls(state.Gamepad);
+    for (unsigned bit = 0; bit < platform::xinput_digital_control_count; ++bit) {
+      const auto mask = std::uint32_t{1} << bit;
       if ((previous & mask) != (current & mask)) {
-        emit_input(
-            {.token = {.device = layerc::core::InputDevice::controller,
-                       .code = static_cast<std::uint16_t>(bit + 1U),
-                       .controller_index = static_cast<std::uint8_t>(index)},
-             .pressed = (current & mask) != 0});
+        emit_input({.token = platform::xinput_control_token(bit, index),
+                    .pressed = (current & mask) != 0});
       }
     }
-    const auto emit_trigger = [this, index](const BYTE old_value,
-                                            const BYTE new_value,
-                                            const std::uint16_t code) {
-      const bool old_pressed = old_value >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-      const bool new_pressed = new_value >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-      if (old_pressed != new_pressed) {
-        emit_input(
-            {.token = {.device = layerc::core::InputDevice::controller,
-                       .code = code,
-                       .controller_index = static_cast<std::uint8_t>(index)},
-             .pressed = new_pressed});
-      }
-    };
-    emit_trigger(previous_state.Gamepad.bLeftTrigger,
-                 state.Gamepad.bLeftTrigger, 17);
-    emit_trigger(previous_state.Gamepad.bRightTrigger,
-                 state.Gamepad.bRightTrigger, 18);
 
     const auto now = layerc::core::MonotonicClock::now();
     const auto stick = [](const SHORT value) {

@@ -75,9 +75,14 @@ struct FocusedBindingCallbacks {
 };
 
 struct FocusedKeyResult {
-  bool handled{};
+  // Ignore consumes the dialog event without recording or showing an error
+  // (for example, IME composition or text delivery, not a physical key).
+  enum class Kind { unhandled, ignore, cancel, key };
+  Kind kind{};
   std::optional<core::InputToken> token;
 };
+
+[[nodiscard]] std::string_view focused_binding_hid_note() noexcept;
 
 // Passive, dialog-lifetime listeners. The platform adapter integrates its
 // owned notifications with the frontend loop, without exposing native types.
@@ -90,7 +95,9 @@ public:
   void start();
   void stop();
   [[nodiscard]] FocusedKeyResult keyboard_token();
+  [[nodiscard]] bool mouse_input_inside(int x, int y, int w, int h) const;
   [[nodiscard]] std::optional<core::InputToken> mouse_button_token() const;
+  [[nodiscard]] std::optional<core::InputToken> mouse_wheel_token() const;
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

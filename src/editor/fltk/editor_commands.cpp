@@ -3,9 +3,11 @@
 #include "binding_capture.hpp"
 #include "cooldown_groups_window.hpp"
 #include "diagnostics_window.hpp"
+#include "editor_accessibility.hpp"
 #include "editor_app.hpp"
 #include "editor_menus.hpp"
 #include "editor_tools.hpp"
+#include "hid_binding_dialog.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 
@@ -377,6 +379,44 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          app.changed(app.session.edit([&](auto &profile) {
            add_binding(profile, id, *captured);
          }));
+       }},
+      {EditorCommand::capture_hid_binding,
+       hid_binding_capture_available() ? "&Bindings/&HID binding..." : nullptr,
+       "&HID binding...", 0, 0, 0, hid_binding_capture_available() ? bindings : 0U, 0,
+       +[](const EditorApp &app) {
+         return hid_binding_capture_available() && app.session.has_document() &&
+                !app.session.document().profile().cooldowns.empty();
+       },
+       +[](EditorApp &app) {
+         if (!app.apply_fields()) return;
+         const auto index = app.binding_page_->target();
+         const auto &profile = app.session.document().profile();
+         if (index < 0 || static_cast<std::size_t>(index) >= profile.cooldowns.size()) return;
+         if (profile.hid_bindings.size() >= core::max_hid_bindings) {
+           app.report(StatusKind::failure,
+                      "This profile already has the maximum number of HID bindings.");
+           return;
+         }
+         const auto id = profile.cooldowns[static_cast<std::size_t>(index)].id;
+         const auto generation = app.session.edit_generation();
+         auto capture = make_hid_binding_capture();
+         if (!capture) return;
+         const bool accepted = capture_hid_binding(*capture, app.appearance_,
+             [&](const core::HidControlBinding &binding, const bool replace)
+                 -> std::optional<std::string> {
+               if (app.session.edit_generation() != generation)
+                 return "The profile changed while this dialog was open. Cancel and reopen it.";
+               return app.session.add_hid_binding(id, binding, [&] {
+                 return capture->assign_slot(binding.device, replace);
+               });
+             },
+             [&](Fl_Widget *source, const std::string &message) {
+               if (app.accessibility) app.accessibility->announce(source, message);
+             });
+         if (accepted) {
+           app.refresh();
+           app.report(StatusKind::success, "HID binding added. " + app.edit_status());
+         }
        }},
       {EditorCommand::delete_binding, "&Bindings/&Remove binding",
        "&Remove binding", 0, 0, 0, bindings, bindings,

@@ -72,4 +72,10 @@ read_hid_stable_slot(const layerc::core::HidDeviceSelector &selector);
 assign_hid_stable_slot(const layerc::core::HidDeviceSelector &selector,
                        std::wstring_view device_path);
 
+// Explicit editor choice: never treat a failed registry read as an empty slot.
+enum class HidSlotAssignment { assigned, occupied, unreadable, write_failed };
+[[nodiscard]] HidSlotAssignment
+assign_hid_stable_slot_checked(const layerc::core::HidDeviceSelector &selector,
+                               const std::wstring &device_path, bool replace);
+
 } // namespace layerc::platform

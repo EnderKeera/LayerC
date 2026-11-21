@@ -15,7 +15,7 @@ enum class EditorCommand {
   undo, redo, rename,
   duplicate, delete_profile, toggle_enabled,
   add_cooldown, duplicate_cooldown, delete_cooldown, cooldown_groups,
-  add_keyboard, add_mouse, capture_binding, delete_binding,
+  add_keyboard, add_mouse, capture_binding, capture_hid_binding, delete_binding,
   add_panel, delete_panel, panel_colors, position,
   profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page,
   refresh, diagnostics,
