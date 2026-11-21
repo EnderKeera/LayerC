@@ -18,8 +18,17 @@ namespace layerc::platform {
 inline constexpr wchar_t live_edit_pipe_name[] =
     L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3";
 
-// True for the authenticated live-edit peer or the sibling LayerC editor image.
-// The product image name stays at the authentication / launch boundary.
+// The editor images LayerD trusts beside itself: the Win32 editor and, until
+// the switch retires it (EditorUnificationPlan.md, Phase 6), the FLTK editor
+// that ships next to it. Only one editor holds the live-edit pipe at a time.
+inline constexpr std::array<const wchar_t *, 2> layerc_editor_image_names{
+    L"layere.exe", L"layere_fltk.exe"};
+
+// True when the process runs one of the editor images from LayerD's directory.
+[[nodiscard]] bool is_sibling_editor_process(DWORD process_id);
+
+// True for the authenticated live-edit peer or a sibling LayerC editor image.
+// The product image names stay at the authentication / launch boundary.
 [[nodiscard]] bool is_layerc_editor_process(DWORD process_id,
                                             DWORD authenticated_editor_id);
 

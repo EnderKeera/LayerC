@@ -1,10 +1,8 @@
 #include "editor_text.hpp"
 #include "editor_util.hpp"
 
-#include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/settings_store.hpp"
-#include "layerc/platform/window_query.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
@@ -97,23 +95,6 @@ void set_owner_draw_checkbox(const HWND control, const bool checked) {
 bool owner_draw_checkbox_checked(const HWND control) {
   return control != nullptr &&
          SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
-}
-
-bool start_daemon() {
-  const auto daemon = layerc::platform::sibling_image_path(L"layerd.exe");
-  if (daemon.empty()) return false;
-  std::wstring command_line =
-      layerc::platform::quote_command_argument(daemon.wstring());
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process{};
-  const BOOL created =
-      CreateProcessW(daemon.c_str(), command_line.data(), nullptr, nullptr, FALSE,
-                     CREATE_NO_WINDOW, nullptr, daemon.parent_path().c_str(),
-                     &startup, &process);
-  const layerc::platform::OwnedHandle thread(process.hThread);
-  const layerc::platform::OwnedHandle launched(process.hProcess);
-  return created != FALSE;
 }
 
 bool recycle_profile_bundle(const std::filesystem::path &path) {

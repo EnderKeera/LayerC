@@ -325,10 +325,18 @@ void committed_publish_and_forwarding() {
 
   fixture.receive(core::LiveMessageType::runtime_status, "status");
   fixture.receive(core::LiveMessageType::error, "unsolicited", 99);
+  core::LiveMessage acknowledgement;
+  acknowledgement.type = core::LiveMessageType::acknowledgement;
+  acknowledgement.revision = fixture.session.revision();
+  acknowledgement.text = "committed profile applied";
+  fixture.receive(acknowledgement);
   const auto step = fixture.session.poll({});
-  expect(step.forwarded.size() == 2 &&
-             step.forwarded.front().type == core::LiveMessageType::runtime_status,
-         "messages this session does not own are forwarded in order");
+  expect(step.forwarded.size() == 3 &&
+              step.forwarded.front().type == core::LiveMessageType::runtime_status &&
+              step.forwarded[1].type == core::LiveMessageType::error &&
+              step.forwarded.back().type == core::LiveMessageType::acknowledgement &&
+              step.forwarded.back().revision == acknowledgement.revision,
+          "messages this session does not own, including acknowledgements, are forwarded in order");
 
   expect(!fixture.session.send_in_session({}) ,
          "no session-scoped send exists without an active session");

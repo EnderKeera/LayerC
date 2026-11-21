@@ -169,7 +169,10 @@ private:
   // Drops owned template bytes that neither the document nor any snapshot
   // history can restore still references.
   void release_unreachable_assets();
-  [[nodiscard]] OperationOutcome reload_report(const std::string &done);
+  // Windows hands LayerD the committed profile; Linux reloads from disk.
+  [[nodiscard]] OperationOutcome
+  reload_report(const std::string &done,
+                const std::optional<CommittedProfile> &committed = std::nullopt);
 
   std::filesystem::path directory_;
   layerc::platform::ProfileSummaryDirectoryScan scan_;

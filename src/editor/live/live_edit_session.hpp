@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,14 +28,25 @@ public:
   [[nodiscard]] virtual bool send(const layerc::core::LiveMessage &message) = 0;
 };
 
-// The editor's client end of the LayerD live-edit named pipe.
+// The editor's client end of the LayerD live-edit named pipe. Tests name a
+// private pipe and pin the expected server process instead of layerd.exe.
 class PipeLiveEditTransport final : public LiveEditTransport {
 public:
-  PipeLiveEditTransport();
+  explicit PipeLiveEditTransport(
+      std::wstring pipe_name = layerc::platform::live_edit_pipe_name,
+      DWORD expected_server_process_id = 0);
   [[nodiscard]] std::vector<layerc::core::LiveMessageResult> poll() override;
   [[nodiscard]] bool take_connection_changed() override;
   [[nodiscard]] bool connected() const override;
   [[nodiscard]] bool send(const layerc::core::LiveMessage &message) override;
+  // The pipe's pending I/O events, for an owner that blocks between polls.
+  [[nodiscard]] std::size_t wait_handles(std::span<HANDLE> output) const noexcept {
+    return channel_.wait_handles(output);
+  }
+  // Why the last connection attempt or peer authentication failed.
+  [[nodiscard]] const std::wstring &last_error() const noexcept {
+    return channel_.last_error();
+  }
 
 private:
   // ~64 KiB of overlapped I/O buffers; only ever heap-allocated.
@@ -83,7 +95,8 @@ enum class LiveEditBegin : std::uint8_t {
 // Everything one poll produced, in the order the window should apply it.
 struct LiveEditStep {
   // Messages this session does not interpret (runtime status, diagnostics
-  // reply, automation trace, errors for another session).
+  // reply, automation trace, and acknowledgements or errors that answer a
+  // request outside the edit session, matched by their echoed revision).
   std::vector<layerc::core::LiveMessage> forwarded;
   std::vector<layerc::core::LiveProtocolError> protocol_errors;
   std::optional<HWND> begin_ready;

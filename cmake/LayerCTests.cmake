@@ -599,6 +599,10 @@ if(WIN32)
         SOURCES tests/editor_live_edit_session_tests.cpp
         LINK layerc_editor_ui WIN32 TIMEOUT 30)
 
+    layerc_add_test(layerc_windows_fltk_daemon_link_tests
+        SOURCES tests/windows_fltk_daemon_link_tests.cpp
+        LINK layerc_editor_fltk_support WIN32 TIMEOUT 30)
+
     layerc_add_test(layerc_calibration_tests
         SOURCES tests/calibration_window_tests.cpp
             tests/calibration_reference_tests.cpp

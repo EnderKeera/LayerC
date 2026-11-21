@@ -18,6 +18,7 @@ EditorApp::~EditorApp() {
   stop_edit_services();
   stop_opener();
   live_draft_.reset(); // the only join: bounded, and only at shutdown
+  shutdown_daemon_link(); // fails pending requests, joins the link's worker
 }
 
 std::string EditorApp::edit_status() const {

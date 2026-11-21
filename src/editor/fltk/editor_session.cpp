@@ -2,6 +2,7 @@
 
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/core/profile_modules.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
 #include "layerc/platform/profile_transaction.hpp"
@@ -366,7 +367,8 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
                                &platform::EncodedTemplateAsset::asset_sha256) != assets.end();
     });
     release_unreachable_assets();
-    reload = request_daemon_reload();
+    reload = request_daemon_reload(CommittedProfile{
+        path, layerc::core::serialize_profile_json(document_.profile())});
     rescan();
     mark_changed(false);
   }
@@ -374,12 +376,15 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
           save_report_kind(commit, reload, mode)};
 }
 
-OperationOutcome EditorSession::reload_report(const std::string &done) {
+OperationOutcome EditorSession::reload_report(
+    const std::string &done, const std::optional<CommittedProfile> &committed) {
   rescan();
-  const auto reload = request_daemon_reload();
+  const auto reload = request_daemon_reload(committed);
   if (reload.state == ReloadState::acknowledged)
     return {StatusKind::success, true,
             done + " LayerD acknowledged the reload request."};
+  if (reload.state == ReloadState::signalled)
+    return {StatusKind::success, true, done + " LayerD was asked to reload."};
   if (reload.state == ReloadState::daemon_unavailable)
     return {StatusKind::success, true,
             done + " LayerD is not running; it will load the change when it starts."};
@@ -408,7 +413,9 @@ OperationOutcome EditorSession::set_enabled(const std::size_t row, const bool en
             commit.result == CommitResult::write_failed
                        ? "Not changed. " + write_failure_text(commit.write_error) + "."
                        : std::string("Not changed: the profile or its modules need repair.")};
-  auto outcome = reload_report(enabled ? "Profile enabled." : "Profile disabled.");
+  auto outcome = reload_report(
+      enabled ? "Profile enabled." : "Profile disabled.",
+      CommittedProfile{path, layerc::core::serialize_profile_json(candidate.profile)});
   if (is_current) {
     if (const auto error = open_path(path)) {
       close_document();

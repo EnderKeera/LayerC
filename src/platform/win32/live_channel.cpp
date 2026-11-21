@@ -27,12 +27,19 @@ HANDLE make_event() {
 
 } // namespace
 
+bool is_sibling_editor_process(const DWORD process_id) {
+  return process_id != 0 &&
+         std::ranges::any_of(layerc_editor_image_names, [&](const wchar_t *image) {
+           return is_sibling_process_image(process_id, image);
+         });
+}
+
 bool is_layerc_editor_process(const DWORD process_id,
                               const DWORD authenticated_editor_id) {
   if (process_id == 0) return false;
   if (authenticated_editor_id != 0 && process_id == authenticated_editor_id)
     return true;
-  return is_sibling_process_image(process_id, L"layere.exe");
+  return is_sibling_editor_process(process_id);
 }
 
 NamedPipeEditorDaemonChannel::NamedPipeEditorDaemonChannel(
@@ -178,8 +185,8 @@ NamedPipeEditorDaemonChannel::verify_peer() const {
   const bool trusted_user = same_user_as_current_process(peer_process.get());
   const bool trusted_image =
       expected_peer_process_id_ != 0 ||
-      is_sibling_process_image(peer_pid,
-                               server ? L"layerd.exe" : L"layere.exe");
+      (server ? is_sibling_process_image(peer_pid, L"layerd.exe")
+              : is_sibling_editor_process(peer_pid));
   if (!trusted_user || !trusted_image)
     return PeerFault::untrusted;
   return DWORD{peer_pid};

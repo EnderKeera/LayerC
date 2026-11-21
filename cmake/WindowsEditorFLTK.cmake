@@ -29,10 +29,13 @@ add_library(layerc_editor_fltk_support STATIC
     src/editor/fltk/platform/win32/paths.cpp
     src/editor/fltk/platform/win32/folder_opener.cpp
     src/editor/fltk/platform/win32/tasks.cpp
-    src/editor/fltk/platform/win32/overlay_preview.cpp)
+    src/editor/fltk/platform/win32/overlay_preview.cpp
+    src/editor/fltk/platform/win32/daemon_hub.cpp
+    src/editor/fltk/platform/win32/daemon_link.cpp)
 target_include_directories(layerc_editor_fltk_support PUBLIC src/editor/fltk)
 target_link_libraries(layerc_editor_fltk_support PUBLIC
-    layerc_editor_core layerc_runtime layerc_windows layerc_bundle Threads::Threads)
+    layerc_editor_live layerc_editor_core layerc_runtime layerc_windows
+    layerc_bundle Threads::Threads)
 layerc_win32(layerc_editor_fltk_support)
 
 add_library(layerc_editor_fltk STATIC

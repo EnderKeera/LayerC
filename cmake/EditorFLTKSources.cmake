@@ -3,6 +3,7 @@
 set(LAYERC_EDITOR_FLTK_PORTABLE_SUPPORT_SOURCES
     src/editor/fltk/lease_worker.cpp
     src/editor/fltk/editor_session.cpp
+    src/editor/fltk/daemon_link_report.cpp
     src/editor/fltk/profile_mutations.cpp
     src/editor/fltk/editor_appearance.cpp
     src/editor/fltk/task_list.cpp)

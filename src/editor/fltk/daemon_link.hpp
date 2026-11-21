@@ -7,13 +7,16 @@
 #include "layerc/runtime/diagnostics.hpp"
 
 #include <cstddef>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
-// The Linux editor's authenticated LayerC.Control v1 client: daemon status
-// for the connection/fault display and the reload request that follows a
-// committed save. Toolkit-free; every call is a bounded blocking roundtrip.
+// The editor's authenticated link to LayerD: daemon status for the
+// connection/fault display and the reload request that follows a committed
+// save. Linux speaks LayerC.Control v1 over the control socket; Windows uses
+// the authenticated LayerD live-edit named pipe. Toolkit-free; every call is
+// a bounded blocking roundtrip.
 namespace layerc::editor {
 
 struct CapabilityLine {
@@ -60,15 +63,34 @@ struct DaemonStatus {
 
 [[nodiscard]] DaemonStatus query_daemon_status();
 
-enum class ReloadState { acknowledged, daemon_unavailable, failed };
+enum class ReloadState {
+  acknowledged,
+  // Windows only: LayerD was signalled to reload from disk; no reply exists.
+  signalled,
+  daemon_unavailable,
+  failed,
+};
 
 struct ReloadResult {
   ReloadState state{ReloadState::daemon_unavailable};
   std::string error;
 };
 
-// Asks the running daemon to reload profiles after a committed save.
-[[nodiscard]] ReloadResult request_daemon_reload();
+// The profile a save committed. Windows hands it to LayerD under the editor's
+// revision so the daemon applies exactly what was written; Linux reloads from
+// disk and ignores it.
+struct CommittedProfile {
+  std::filesystem::path path;
+  std::string json;
+};
+
+// Asks the running daemon to reload profiles after a committed change.
+[[nodiscard]] ReloadResult
+request_daemon_reload(const std::optional<CommittedProfile> &committed = std::nullopt);
+
+// Ends the daemon link before exit: fails any pending request and joins the
+// link's worker. Idempotent; Linux holds nothing to release.
+void shutdown_daemon_link() noexcept;
 
 // Manual Save and background autosave phrase the same durable outcome
 // differently; the wording is derived from the mode, never rewritten.

@@ -411,6 +411,15 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
 endif()
 
 if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
+    # The LayerD link both Windows editors share until the switch retires the
+    # Win32 frontend: the live-edit session and the sibling daemon launch.
+    add_library(layerc_editor_live STATIC
+        src/editor/live/live_edit_session.cpp
+        src/editor/live/daemon_process.cpp)
+    target_include_directories(layerc_editor_live PUBLIC src/editor/live)
+    target_link_libraries(layerc_editor_live PUBLIC layerc_core layerc_windows)
+    layerc_win32(layerc_editor_live)
+
     add_library(layerc_editor_ui STATIC
         src/editor/editor_dialog.cpp
         src/editor/editor_layout.cpp
@@ -442,11 +451,11 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_automation_simulator.cpp
         src/editor/editor_packs.cpp
         src/editor/editor_diagnostics.cpp
-        src/editor/editor_hid.cpp
-        src/editor/live_edit_session.cpp)
+        src/editor/editor_hid.cpp)
     target_include_directories(layerc_editor_ui PUBLIC src/editor)
     target_link_libraries(layerc_editor_ui PUBLIC
-        layerc_editor_core layerc_core layerc_runtime layerc_windows layerc_bundle
+        layerc_editor_live layerc_editor_core layerc_core layerc_runtime
+        layerc_windows layerc_bundle
         comctl32 comdlg32 dwmapi oleacc oleaut32 ole32 shell32 uxtheme user32 gdi32)
     layerc_win32(layerc_editor_ui)
 

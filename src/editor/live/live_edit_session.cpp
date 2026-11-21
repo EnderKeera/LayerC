@@ -23,8 +23,10 @@ void stamp_revision(LiveMessage &message,
 
 } // namespace
 
-PipeLiveEditTransport::PipeLiveEditTransport()
-    : channel_(layerc::platform::NamedPipeEditorDaemonChannel::Role::client) {}
+PipeLiveEditTransport::PipeLiveEditTransport(
+    std::wstring pipe_name, const DWORD expected_server_process_id)
+    : channel_(layerc::platform::NamedPipeEditorDaemonChannel::Role::client,
+               std::move(pipe_name), expected_server_process_id) {}
 
 std::vector<layerc::core::LiveMessageResult> PipeLiveEditTransport::poll() {
   return channel_.poll();
@@ -84,6 +86,8 @@ void LiveEditSession::handle_message(
     }
     if (session_id_ != 0 && message.edit_session == session_id_)
       step.session_acknowledged = true;
+    else
+      step.forwarded.push_back(message);
     return;
   }
   if (message.type == LiveMessageType::error) {
