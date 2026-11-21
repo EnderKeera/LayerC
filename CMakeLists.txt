@@ -314,6 +314,7 @@ if(WIN32)
         src/platform/win32/profile_file_guard.cpp
         src/platform/profile_transaction.cpp
         src/platform/win32/visual_assets.cpp
+        src/platform/profile_visual_assets.cpp
         src/platform/visual_asset_load.cpp
         src/platform/template_png.cpp
         src/platform/win32/live_channel.cpp
@@ -484,6 +485,7 @@ if(NOT WIN32)
         src/platform/text.cpp
         src/platform/linux/path_text.cpp
         src/platform/linux/visual_assets.cpp
+        src/platform/profile_visual_assets.cpp
         src/platform/visual_asset_load.cpp
         src/platform/template_png.cpp
         src/platform/linux/event_loop.cpp

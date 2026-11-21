@@ -3,6 +3,8 @@
 #include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/hid_device.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/profile_visual_assets.hpp"
 #include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "platform_live_scenarios.hpp"
@@ -16,9 +18,12 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -110,6 +115,46 @@ void visual_asset_contract_case() {
   expect(std::filesystem::exists(temp.path()),
          "asset contract directory should be created");
   layerc::test::visual_asset_load_contract(temp.path());
+}
+
+void profile_template_asset_snapshot() {
+  namespace assets = layerc::platform;
+  namespace core = layerc::core;
+  layerc::test::TempDirectory temp("LayerC-asset-snapshot");
+  const auto profile_path = temp.path() / "profile.json";
+  const auto image = layerc::test::visual_asset_contract::contract_image(true);
+  auto prepared = assets::prepare_profile_template_assets(
+      profile_path, std::span(&image, 1));
+  const auto *owned = std::get_if<std::vector<assets::EncodedTemplateAsset>>(&prepared);
+  if (!expect(owned && owned->size() == 1, "calibration produces one owned image")) return;
+  const auto &asset = owned->front();
+  const auto destination = assets::profile_visual_asset_path(profile_path, asset.asset_sha256);
+  expect(destination == temp.path() / "_visual" / "assets" / (asset.asset_sha256 + ".png") &&
+             !std::filesystem::exists(destination),
+         "Windows layout is unified and preparing a template does not write");
+  expect(assets::commit_profile_transaction(temp.path(), [&](auto &mutations) {
+           return assets::plan_profile_template_copies(profile_path, *owned, mutations);
+         }).ok() && std::filesystem::exists(destination),
+         "Windows assets publish through the recovered profile transaction");
+  core::VisualProfile visual;
+  core::TemplateState observation;
+  observation.references.push_back({.asset_sha256 = asset.asset_sha256});
+  visual.observations.push_back(std::move(observation));
+  const auto snapshot = assets::snapshot_profile_template_assets(profile_path, visual);
+  const auto *copied = std::get_if<std::vector<assets::EncodedTemplateAsset>>(&snapshot);
+  expect(copied && copied->size() == 1 && copied->front().bytes == asset.bytes,
+         "a duplicate snapshots the original encoded bytes");
+  const auto loaded = assets::load_profile_template_asset(profile_path, asset.asset_sha256);
+  const auto *decoded = std::get_if<core::TemplateImage>(&loaded);
+  expect(decoded && decoded->pixels == image.pixels, "the verified loader keeps the pixels");
+  std::error_code error;
+  expect(std::filesystem::remove(destination, error) && !error &&
+             std::holds_alternative<assets::VisualAssetError>(
+                 assets::snapshot_profile_template_assets(profile_path, visual)),
+         "missing bytes refuse a snapshot");
+  expect(std::holds_alternative<core::TemplateImage>(
+             assets::load_profile_template_asset({}, asset.asset_sha256, *owned)),
+         "a draft can still load its owned bytes");
 }
 
 void pipe_name_contract() {
@@ -631,6 +676,7 @@ int main(const int argc, char *argv[]) {
   namespace live = layerc::test::platform_live;
   return layerc::test::run({
       LAYERC_TEST_CASE(visual_asset_contract_case),
+      LAYERC_TEST_CASE(profile_template_asset_snapshot),
       LAYERC_TEST_CASE(pipe_name_contract),
       LAYERC_TEST_CASE(live::platform_transactions),
       LAYERC_TEST_CASE(live::journal_read_status_recovery),

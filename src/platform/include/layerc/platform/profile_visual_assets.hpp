@@ -51,7 +51,7 @@ using TemplateAssetSnapshotResult =
     std::span<const layerc::core::TemplateImage> images,
     std::span<const EncodedTemplateAsset> owned = {});
 
-// Profile-local loader supplied by the platform backend.
+// Resolve and verify a stored asset through the platform's profile layout.
 [[nodiscard]] TemplateImageResult
 load_profile_template_asset(const std::filesystem::path &profile_path,
                             std::string_view sha256);
