@@ -30,12 +30,15 @@ class EditorStatusMark;
 // Adds an authored name as a labelled choice item ('/' and '&' are text).
 void add_choice(Fl_Choice &choice, const std::string &name);
 
+enum class NumberStep { none, duration, bar_width, bar_height };
+
 // Builds the main window's standard controls with EditorApp's field, selection
 // and command callbacks. Geometry and creation order belong to the callers.
 class FormBuilder final {
 public:
   explicit FormBuilder(EditorApp &app) noexcept : app_(app) {}
-  [[nodiscard]] Fl_Input *input(int x, int y, int width, const char *label);
+  [[nodiscard]] Fl_Input *input(int x, int y, int width, const char *label,
+                                NumberStep step = NumberStep::none);
   [[nodiscard]] Fl_Choice *choice(int x, int y, int width, const char *label,
                                   const char *items);
   [[nodiscard]] Fl_Check_Button *check(int x, int y, int width, const char *label);

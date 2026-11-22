@@ -24,6 +24,12 @@
 // No native window, display, toolkit or process-handle types belong here.
 namespace layerc::editor {
 
+#ifdef _WIN32
+inline constexpr bool windows_editor_keys = true;
+#else
+inline constexpr bool windows_editor_keys = false;
+#endif
+
 [[nodiscard]] std::uint32_t current_process_id() noexcept;
 
 // The desktop's interface font description (for example "Cantarell 11"),

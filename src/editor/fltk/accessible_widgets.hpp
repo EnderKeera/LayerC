@@ -21,6 +21,7 @@ namespace layerc::editor::accessibility {
 // destroys the widgets: there is no lock and no other thread may call this.
 void set_accessible_name(Fl_Widget &control, std::string text);
 void set_accessible_description(Fl_Widget &control, std::string text);
+void describe_with_tooltip(Fl_Widget &control, std::string text);
 // Exported role for controls whose toolkit class does not say what they are.
 void set_accessible_role(Fl_Widget &control, a11y::Role role);
 void describe_with(Fl_Widget &control, Fl_Widget &hint);

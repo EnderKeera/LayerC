@@ -2,6 +2,7 @@
 #include "accessible_widgets.hpp"
 #include "editor_style.hpp"
 #include "profile_mutations.hpp"
+#include "platform/window_chrome.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -17,6 +18,7 @@
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Tabs.H>
+#include <FL/Fl_Tooltip.H>
 #include <FL/Fl_Window.H>
 
 #include <array>
@@ -122,10 +124,17 @@ void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label,
     refresh_primary_button(*button);
 }
 
+std::optional<RoleColors> applied_role_colors(const EditorAppearance &appearance,
+                                              const EditorRole role) {
+  if (const auto &contrast = editor_style_contrast_palette())
+    return contrast->roles[static_cast<std::size_t>(role)];
+  return theme_role_colors(appearance, role);
+}
+
 void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_Widget *sidebar,
                 const Fl_Widget *preview, const Fl_Color label) {
   if (const auto role = role_of(widget, sidebar, preview)) {
-    auto colors = theme_role_colors(appearance, *role);
+    auto colors = applied_role_colors(appearance, *role);
     if (!colors) {
       colors = system_colors(widget, *role);
       const auto &item = appearance.overrides[static_cast<std::size_t>(*role)];
@@ -134,11 +143,12 @@ void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_
       if (item.selection) colors->selection = *item.selection;
     }
     paint(widget, *colors, label,
-          !appearance.overrides[static_cast<std::size_t>(*role)].text.has_value());
+          editor_style_contrast_palette() ||
+              !appearance.overrides[static_cast<std::size_t>(*role)].text.has_value());
     // Fl_Tabs fills each unselected tab with its page's selection colour and
     // only the selected tab with its own: neutral pages keep the accent tint
     // on the selected tab alone.
-    if (const auto button = theme_role_colors(appearance, EditorRole::button);
+    if (const auto button = applied_role_colors(appearance, EditorRole::button);
         button && widget->as_group() && dynamic_cast<Fl_Tabs *>(widget->parent()))
       widget->selection_color(fl(button->fill));
   }
@@ -217,6 +227,13 @@ public:
     end();
     set_modal();
     load();
+  }
+
+  void refresh_contrast_notice() {
+    if (invalid_fields_) return;
+    status->label(editor_style_contrast_palette()
+        ? "A contrast theme is on, so Windows colors are in use." : "");
+    status->redraw();
   }
 
   EditorAppearance staged;
@@ -308,14 +325,15 @@ private:
     auto &item = staged.overrides[static_cast<std::size_t>(role->value())];
     RoleOverride next{read(fill, "Role fill"), read(text, "Role text"), read(selection, "Role selection")};
     if (!invalid.empty()) {
+      invalid_fields_ = true;
       status->copy_label((invalid + " must be #RRGGBB or empty; the last valid colors stay previewed.").c_str());
       status->redraw();
       return false;
     }
     staged.accent = accent_value;
     item = next;
-    status->copy_label("");
-    status->redraw();
+    invalid_fields_ = false;
+    refresh_contrast_notice();
     return true;
   }
   void preview_changes() {
@@ -323,6 +341,8 @@ private:
     apply_editor_appearance(staged, *this);
     name_choosers();
   }
+
+  bool invalid_fields_{};
 
   struct Target {
     AppearanceDialog *dialog{};
@@ -340,26 +360,48 @@ private:
   const Fl_Widget *preview_;
 };
 
-} // namespace
-
-void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root,
-                             const Fl_Widget *sidebar, const Fl_Widget *preview) {
+void set_appearance_palette(const EditorAppearance &appearance) {
   system_palette.capture();
-  const auto window = theme_role_colors(appearance, EditorRole::window);
-  const auto edit = theme_role_colors(appearance, EditorRole::edit);
+  set_editor_style_appearance(appearance);
+  const auto window = applied_role_colors(appearance, EditorRole::window);
+  const auto edit = applied_role_colors(appearance, EditorRole::edit);
   if (window && edit) set_global(*window, *edit);
   else system_palette.restore();
-  // Resolve the tokens before anything paints, or a preset change would draw
-  // with the previous theme (DesignSystem.md, Themes).
-  set_editor_style_appearance(appearance);
-  const auto label = theme_role_colors(appearance, EditorRole::label);
+  const auto toolbar = current_editor_toolbar_colors();
+  Fl_Tooltip::color(fl(toolbar.fill));
+  Fl_Tooltip::textcolor(fl(toolbar.text));
+  Fl_Tooltip::size(FL_NORMAL_SIZE);
+  Fl_Tooltip::wrap_width(360);
+}
+
+void paint_appearance_window(const EditorAppearance &appearance, Fl_Window &root,
+                             const Fl_Widget *sidebar, const Fl_Widget *preview) {
+  const auto label = applied_role_colors(appearance, EditorRole::label);
   const auto &label_override = appearance.overrides[static_cast<std::size_t>(EditorRole::label)];
   const Fl_Color label_color = label ? fl(label->text)
                                : label_override.text ? fl(*label_override.text) : FL_FOREGROUND_COLOR;
   apply_tree(&root, appearance, sidebar, preview, label_color);
-  // Authored drawing (status marks, focus rings) resolves the same tokens.
-  set_editor_style_appearance(appearance);
+  if (auto *dialog = dynamic_cast<AppearanceDialog *>(&root)) dialog->refresh_contrast_notice();
   root.redraw();
+}
+
+} // namespace
+
+void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root,
+                             const Fl_Widget *sidebar, const Fl_Widget *preview) {
+  set_appearance_palette(appearance);
+  paint_appearance_window(appearance, root, sidebar, preview);
+  refresh_editor_window_chrome();
+}
+
+void reapply_editor_desktop_appearance(Fl_Window &root, const Fl_Widget *sidebar,
+                                       const Fl_Widget *preview) {
+  const auto appearance = current_editor_style_appearance();
+  set_appearance_palette(appearance);
+  paint_appearance_window(appearance, root, sidebar, preview);
+  for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
+    if (window != &root) paint_appearance_window(appearance, *window, nullptr, nullptr);
+  refresh_editor_window_chrome();
 }
 
 std::optional<EditorAppearance>

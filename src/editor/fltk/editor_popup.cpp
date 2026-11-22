@@ -69,7 +69,7 @@ public:
     for (auto &window : windows) window->hide();
   }
   int handle(int event);
-  void start(int initial_title);
+  void start(int initial_title, std::optional<EditorBounds> anchor);
 };
 PopupWindow::PopupWindow(PopupSession &session, int first, int x, int y, int minimum_width)
     : Fl_Menu_Window(x, y, 1, 1), items(level_items(session.owner, first)), session_(session) {
@@ -277,12 +277,14 @@ int PopupSession::handle(int event) {
   }
   return 0;
 }
-void PopupSession::start(int initial_title) {
+void PopupSession::start(int initial_title, const std::optional<EditorBounds> anchor) {
   if (bar) { highlight(-1, initial_title); return; }
   auto *window = owner.top_window();
   const bool choice = dynamic_cast<Fl_Choice *>(&owner) != nullptr;
-  const int x = choice ? window->x_root() + owner.x() : Fl::event_x_root();
-  const int y = choice ? window->y_root() + owner.y() : Fl::event_y_root();
+  const int x = anchor ? window->x_root() + anchor->x
+      : choice ? window->x_root() + owner.x() : Fl::event_x_root();
+  const int y = anchor ? window->y_root() + anchor->y
+      : choice ? window->y_root() + owner.y() : Fl::event_y_root();
   windows.push_back(std::make_unique<PopupWindow>(*this, 0, x, y, choice ? owner.w() : 0));
   if (choice && owner.mvalue()) {
     current = static_cast<int>(owner.mvalue() - array);
@@ -293,13 +295,13 @@ void PopupSession::start(int initial_title) {
   windows.front()->show();
 }
 }
-void track_editor_popup(Fl_Menu_ &owner, int title) {
+void track_editor_popup(Fl_Menu_ &owner, int title, const std::optional<EditorBounds> anchor) {
   if (tracking || !owner.menu() || !owner.menu()->label() || !owner.active_r() || !owner.top_window()) return;
   auto *group = Fl_Group::current(); Fl_Group::current(nullptr);
   PopupSession session(owner);
   Fl_Widget_Tracker focus(Fl::focus());
   tracking = &session;
-  session.start(title);
+  session.start(title, anchor);
   while (!session.done && !session.windows.empty() && !session.tracker.deleted() &&
          owner.menu() == session.array && owner.visible_r() && owner.top_window()->shown()) Fl::wait();
   session.windows.clear();
@@ -387,7 +389,8 @@ namespace {
   a11y::set_popup_menus({&layerc::editor::popup_owner, &layerc::editor::popup_current,
                          &layerc::editor::popup_item_bounds,
                          &layerc::editor::popup_document_window,
-                         &layerc::editor::popup_pick, &layerc::editor::track_editor_popup,
+                         &layerc::editor::popup_pick,
+                         +[](Fl_Menu_ &owner, int title) { track_editor_popup(owner, title); },
                          &layerc::editor::dismiss_session, &layerc::editor::open_title});
   return true;
 }();

@@ -1,13 +1,13 @@
 #include "window_settings.hpp"
 
 #include "settings_store.hpp"
-#include "layerc/platform/window_query.hpp"
+#include "layerc/platform/settings_store.hpp"
 
 #include <FL/Fl.H>
-#include <FL/Fl_Window.H>
-#include <FL/platform.H>
+#include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <utility>
 #include <vector>
@@ -16,7 +16,7 @@ namespace layerc::editor {
 namespace {
 
 int applied_text_scale = text_scale_choices.front();
-bool capture_exclusion{};
+float desktop_text_scale = 1.0F;
 const WindowsTextScaleShortcuts::Reporter *scale_reporter{};
 
 void apply_text_scale(const int percent) {
@@ -43,34 +43,17 @@ int text_scale_shortcut(const int event) {
     return 0;
   }
 
-  if (next != current) {
-    const auto written = platform::write_editor_text_scale(static_cast<std::uint32_t>(*next));
-    apply_text_scale(*next);
-    if (written)
-      (*scale_reporter)(StatusKind::success, "Text size " + std::to_string(*next) + " %.");
-    else
-      (*scale_reporter)(StatusKind::warning, "Could not save the text size.");
-  }
+  select_editor_text_scale(*next);
   return 1;
-}
-
-int capture_before_paint(void *event, void *) {
-  const auto &message = *static_cast<const MSG *>(event);
-  if (message.message == WM_PAINT && fl_find(message.hwnd)) {
-    const HWND root = GetAncestor(message.hwnd, GA_ROOT);
-    DWORD affinity{};
-    if (root != nullptr &&
-        (!GetWindowDisplayAffinity(root, &affinity) ||
-         affinity != platform::capture_exclusion_affinity)) {
-      (void)platform::apply_capture_exclusion(root, true);
-    }
-  }
-  return 0;
 }
 
 } // namespace
 
-void multiply_windows_screen_scales(const float ratio) {
+void multiply_windows_screen_scales(const float ratio, const int target_screen) {
+  if (target_screen >= 0) {
+    Fl::screen_scale(target_screen, Fl::screen_scale(target_screen) * ratio);
+    return;
+  }
   // On equal-DPI monitors FLTK's setter changes every screen at once.
   const int count = Fl::screen_count();
   std::vector<float> target_scales;
@@ -81,6 +64,22 @@ void multiply_windows_screen_scales(const float ratio) {
     const float target = target_scales[static_cast<std::size_t>(screen)];
     if (Fl::screen_scale(screen) != target) Fl::screen_scale(screen, target);
   }
+}
+
+void set_windows_desktop_text_scale(const float ratio) {
+  multiply_windows_screen_scales(ratio / desktop_text_scale);
+  desktop_text_scale = ratio;
+}
+
+void restore_windows_screen_text_scale(const int screen) {
+  float dpi{}, dpi_y{};
+  Fl::screen_dpi(dpi, dpi_y, screen);
+  const float raw = dpi / static_cast<float>(USER_DEFAULT_SCREEN_DPI);
+  const float ratio = desktop_text_scale * static_cast<float>(applied_text_scale) / 100.0F;
+  // FLTK writes DPI/96 on a same-screen change; a cross-screen move keeps
+  // the destination scale. Only restore a DPI-only scale, never compound it.
+  if (dpi > 0 && ratio != 1.0F && std::abs(Fl::screen_scale(screen) - raw) < 1e-4F)
+    multiply_windows_screen_scales(ratio, screen);
 }
 
 void load_startup_text_scale() { apply_text_scale(load_editor_text_scale()); }
@@ -98,15 +97,16 @@ WindowsTextScaleShortcuts::~WindowsTextScaleShortcuts() {
   scale_reporter = nullptr;
 }
 
-bool editor_capture_exclusion_enabled() noexcept { return capture_exclusion; }
-
-void set_editor_capture_exclusion(const bool enabled) {
-  if (capture_exclusion == enabled) return;
-  capture_exclusion = enabled;
-  if (enabled) Fl::add_system_handler(capture_before_paint, nullptr);
-  else Fl::remove_system_handler(capture_before_paint);
-  for (auto *window = Fl::first_window(); window != nullptr; window = Fl::next_window(window))
-    (void)platform::apply_capture_exclusion(GetAncestor(fl_xid(window), GA_ROOT), enabled);
+void select_editor_text_scale(const int percent) {
+  if (percent == applied_text_scale) return;
+  const auto written = platform::write_editor_text_scale(static_cast<std::uint32_t>(percent));
+  apply_text_scale(percent);
+  if (scale_reporter) {
+    if (written)
+      (*scale_reporter)(StatusKind::success, "Text size " + std::to_string(percent) + " %.");
+    else
+      (*scale_reporter)(StatusKind::warning, "Could not save the text size.");
+  }
 }
 
 void apply_editor_options_live(const EditorOptions &options) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "editor_appearance.hpp"
+#include "platform/contrast.hpp"
 #include "status_kind.hpp"
 
 #include <FL/Fl.H>
@@ -31,6 +31,9 @@ inline constexpr int editor_button_height = 30;
 
 // The appearance the authored drawing resolves its tokens from.
 void set_editor_style_appearance(const EditorAppearance &appearance);
+[[nodiscard]] const EditorAppearance &current_editor_style_appearance() noexcept;
+[[nodiscard]] const std::optional<ContrastPalette> &editor_style_contrast_palette() noexcept;
+[[nodiscard]] RoleColors current_editor_toolbar_colors();
 
 // Paints the status strip's leading mark from the producer's semantic kind.
 void draw_editor_status_glyph(StatusKind kind, int x, int y, int size = 12);

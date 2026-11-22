@@ -631,6 +631,18 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
   return table;
 }
 
+std::span<const EditorListShortcut> editor_list_shortcuts() {
+  if constexpr (!windows_editor_keys) return {};
+  static constexpr unsigned lists = profiles | cooldowns | bindings | context_bit(Context::panels);
+  static constexpr EditorListShortcut table[]{
+      {FL_Delete, "Delete", "Delete the selected profile", profiles, EditorCommand::delete_profile},
+      {FL_Delete, "Delete", "Remove the selected cooldown", cooldowns, EditorCommand::delete_cooldown},
+      {FL_SHIFT | (FL_F + 10), "Shift+F10", "Open the focused list's context menu", lists, std::nullopt},
+      {FL_Menu, "Menu", "Open the focused list's context menu", lists, std::nullopt},
+  };
+  return table;
+}
+
 std::span<const EditorCommandSpec> editor_command_specs() {
   return EditorCommandRegistry::rows();
 }
@@ -665,6 +677,8 @@ std::string shortcut_help() {
     if (spec.shortcut != 0) describe(spec, spec.shortcut);
   for (const auto &spec : EditorCommandRegistry::rows())
     if (spec.alternate_shortcut != 0) describe(spec, spec.alternate_shortcut);
+  for (const auto &item : editor_list_shortcuts())
+    text += std::string(item.keys) + "\t" + item.label + "\n";
   return text + "Tab / Shift+Tab\tMove between fields\n"
                 "Alt+letter\tOpen the menu with that underlined letter\n"
                 "Right-click\tList context menu\n"

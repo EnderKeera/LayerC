@@ -1,23 +1,36 @@
 #include "accessible_widgets.hpp"
+#include "appearance_window.hpp"
 #include "editor_style.hpp"
 #include "options_window.hpp"
+#include "platform/contrast.hpp"
+#include "platform/win32/desktop_listener.hpp"
 #include "platform/win32/settings_store.hpp"
+#include "platform/win32/startup.hpp"
+#include "platform/win32/window_chrome.hpp"
 #include "platform/win32/window_settings.hpp"
+#include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "test_support.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Double_Window.H>
+#include <FL/Fl_Tooltip.H>
 #include <FL/platform.H>
+#include <dwmapi.h>
 
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <cstdio>
 #include <string>
 #include <string_view>
 #include <vector>
+
+void editor_tooltips_keys_and_menu();
+void stepped_fields_and_preview_nudge();
+void show_evidence_tooltip(void *);
 
 namespace {
 namespace editor = layerc::editor;
@@ -226,11 +239,11 @@ bool has_affinity(Fl_Window &window, const DWORD expected) {
   return GetWindowDisplayAffinity(fl_xid(&window), &actual) != FALSE && actual == expected;
 }
 
-bool wait_for_affinity(Fl_Window &window, const DWORD expected) {
+template <class Predicate> bool wait_for(Predicate ready) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   do {
     Fl::check();
-    if (has_affinity(window, expected)) return true;
+    if (ready()) return true;
     Sleep(1);
   } while (std::chrono::steady_clock::now() < deadline);
   return false;
@@ -239,6 +252,7 @@ bool wait_for_affinity(Fl_Window &window, const DWORD expected) {
 void capture_exclusion_on_existing_and_new_windows() {
   const SettingsFixture fixture;
   if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  editor::WindowsWindowDecorator decorator;
   Fl_Double_Window first(220, 100, "Settings capture fixture");
   first.end();
   first.show();
@@ -247,7 +261,8 @@ void capture_exclusion_on_existing_and_new_windows() {
   Fl_Double_Window later(220, 100, "Later capture fixture");
   later.end();
   later.show();
-  expect(wait_for_affinity(later, platform::capture_exclusion_affinity), "first paint excludes a later window");
+  expect(wait_for([&] { return has_affinity(later, platform::capture_exclusion_affinity); }),
+         "first paint excludes a later window");
   editor::set_editor_capture_exclusion(false);
   expect(has_affinity(first, WDA_NONE) && has_affinity(later, WDA_NONE), "turning off clears both affinities");
   Fl_Double_Window last(220, 100, "Capturable fixture");
@@ -256,7 +271,7 @@ void capture_exclusion_on_existing_and_new_windows() {
   last.wait_for_expose();
   Fl::check();
   expect(!editor::editor_capture_exclusion_enabled() && has_affinity(last, WDA_NONE),
-         "no capture handler applies affinity after exclusion is turned off");
+         "the decorator does not exclude new windows after capture exclusion is turned off");
 }
 
 int shortcut(Fl_Window &window, const int key, const int modifiers, char *text) {
@@ -329,9 +344,193 @@ void text_scale_startup_and_keys() {
          "an unsupported stored text size normalizes to 100 percent");
 }
 
+struct ContrastOverride {
+  ~ContrastOverride() { platform::set_native_high_contrast_override(std::nullopt); }
+};
+
+std::uint32_t system_rgb(const int index) { return platform::native_rgb_value(GetSysColor(index)); }
+
+void contrast_mapping_and_desktop_listener() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  expect(!editor::platform_contrast_palette(), "contrast forced off supplies no override");
+  editor::EditorAppearance appearance;
+  appearance.theme = editor::EditorTheme::plum;
+  const auto role = static_cast<std::size_t>(editor::EditorRole::window);
+  const auto button = static_cast<std::size_t>(editor::EditorRole::button);
+  appearance.overrides[role].fill = editor::theme_role_colors(appearance, editor::EditorRole::window)->text;
+  const auto saved = appearance;
+  Fl_Double_Window window(220, 100, "Contrast fixture");
+  window.end();
+  window.show();
+  editor::apply_editor_appearance(appearance, window);
+  const auto normal_tokens = editor::current_editor_tokens();
+  unsigned reapplies{};
+  const editor::WindowsDesktopListener listener(GetModuleHandleW(nullptr), [&] {
+    ++reapplies;
+    editor::reapply_editor_desktop_appearance(window);
+  });
+  const HWND target = listener.native_handle();
+  if (!expect(target && !IsWindowVisible(target) && !GetWindow(target, GW_OWNER) &&
+                  (GetWindowLongPtrW(target, GWL_STYLE) & WS_POPUP) &&
+                  (GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOOLWINDOW),
+              "desktop listener is an invisible, unowned top-level tool window")) return;
+  platform::set_native_high_contrast_override(true);
+  const auto palette = editor::platform_contrast_palette();
+  if (!expect(palette.has_value(), "contrast forced on supplies the palette")) return;
+  const auto fill = system_rgb(COLOR_WINDOW), text = system_rgb(COLOR_WINDOWTEXT);
+  const auto face = system_rgb(COLOR_BTNFACE), button_text = system_rgb(COLOR_BTNTEXT);
+  const auto gray = system_rgb(COLOR_GRAYTEXT), selection = system_rgb(COLOR_HIGHLIGHT);
+  const auto on_selection = system_rgb(COLOR_HIGHLIGHTTEXT);
+  for (std::size_t i = 0; i < palette->roles.size(); ++i) {
+    const editor::RoleColors expected{i == button ? face : fill,
+                                      i == button ? button_text : text, selection};
+    expect(palette->roles[i] == expected, "each contrast role maps to its Windows system colors");
+  }
+  const editor::EditorTokens tokens{
+      .background = fill, .panel = face, .input = fill, .border = text, .divider = gray,
+      .text = text, .secondary = text, .subtext = text, .verbose = text, .disabled = gray,
+      .button_hover = face, .row_hover = fill, .pressed = face, .accent = selection,
+      .selection = selection, .on_accent = on_selection, .yes = text, .no = text,
+      .warning = text, .accent_2 = text, .on_status = fill};
+  expect(palette->tokens == tokens, "every contrast token maps to the DesignSystem table");
+  Fl_Double_Window other(220, 100, "Second contrast fixture");
+  other.end();
+  other.show();
+  SendMessageW(target, WM_SYSCOLORCHANGE, 0, 0);
+  SendMessageW(target, WM_SETTINGCHANGE, SPI_SETHIGHCONTRAST, 0);
+  SendMessageW(target, WM_THEMECHANGED, 0, 0);
+  expect(!reapplies, "sent messages never repaint synchronously");
+  expect(wait_for([&] { return reapplies == 1; }), "desktop notifications coalesce into one reapply");
+  expect(editor::current_editor_tokens() == tokens && Fl::get_color(window.color()) == (fill << 8U) &&
+             Fl::get_color(other.color()) == (fill << 8U) &&
+             Fl::get_color(FL_FOREGROUND_COLOR) == (text << 8U) &&
+             Fl::get_color(Fl_Tooltip::color()) == (fill << 8U) &&
+             Fl::get_color(Fl_Tooltip::textcolor()) == (text << 8U) &&
+             Fl_Tooltip::size() == FL_NORMAL_SIZE && Fl_Tooltip::wrap_width() == 360,
+         "all shown windows, global palette, draw tokens and tooltips switch together");
+  platform::set_native_high_contrast_override(false);
+  SendMessageW(target, WM_SETTINGCHANGE, SPI_SETHIGHCONTRAST, 0);
+  expect(wait_for([&] { return reapplies == 2; }) && editor::current_editor_tokens() == normal_tokens &&
+             appearance == saved && Fl::get_color(window.color()) == (*saved.overrides[role].fill << 8U),
+         "disabling contrast restores the preset and retained override");
+}
+
+void caption_decoration_and_pruning() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  editor::WindowsWindowDecorator decorator;
+  Fl_Double_Window first(220, 100, "Caption fixture");
+  first.end();
+  first.show();
+  editor::EditorAppearance dark;
+  dark.theme = editor::EditorTheme::dark;
+  editor::apply_editor_appearance(dark, first);
+  const auto check_frame = [](Fl_Window &window) {
+    const auto toolbar = editor::current_editor_toolbar_colors();
+    const std::array attributes{35UL, 34UL, 36UL}; // Caption, border, text (Windows 11).
+    const std::array expected{platform::native_color_ref(toolbar.fill),
+        platform::native_color_ref(editor::current_editor_tokens().divider),
+        platform::native_color_ref(toolbar.text)};
+    for (std::size_t i = 0; i < attributes.size(); ++i) {
+      COLORREF actual{};
+      const auto result = DwmGetWindowAttribute(fl_xid(&window), attributes[i], &actual, sizeof(actual));
+      if (result == E_INVALIDARG || result == E_NOTIMPL) {
+        std::puts("[skip] DWM does not read caption colours back on this Windows version.");
+        return;
+      }
+      expect(SUCCEEDED(result) && actual == expected[i], "DWM reads back the current role color");
+    }
+  };
+  expect(decorator.decorated_window_count() == 1, "appearance refresh decorates the shown window");
+  check_frame(first);
+  Fl_Double_Window later(220, 100, "Later caption fixture");
+  later.end();
+  later.show();
+  expect(wait_for([&] { return decorator.decorated_window_count() == 2; }),
+         "first paint decorates a later captioned window");
+  check_frame(later);
+  platform::set_native_high_contrast_override(true);
+  editor::reapply_editor_desktop_appearance(first);
+  check_frame(first);
+  check_frame(later);
+  const HWND old = fl_xid(&later);
+  later.hide();
+  decorator.refresh();
+  expect(!IsWindow(old) && decorator.decorated_window_count() == 1, "destroyed HWND is pruned");
+}
+
+void dpi_changes_keep_text_scale() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  editor::WindowsWindowDecorator decorator;
+  constexpr float desktop = 1.15F, stored = 1.30F;
+  editor::set_windows_desktop_text_scale(desktop);
+  expect(static_cast<bool>(platform::write_editor_text_scale(130)), "seed editor text size");
+  editor::load_startup_text_scale();
+  Fl_Double_Window window(220, 100, "DPI fixture");
+  window.end();
+  window.show();
+  window.wait_for_expose();
+  const auto native = fl_xid(&window);
+  const int screen = window.screen_num();
+  float dpi{}, vertical{};
+  Fl::screen_dpi(dpi, vertical, screen);
+  RECT position{};
+  if (!expect(native && GetWindowRect(native, &position) && dpi > 0, "shown editor window and initial DPI")) return;
+  const auto different = static_cast<WORD>(dpi == 144.0F ? dpi - 24.0F : dpi + 24.0F);
+  SendMessageW(native, WM_DPICHANGED, MAKEWPARAM(different, different), reinterpret_cast<LPARAM>(&position));
+  const float raw = static_cast<float>(different) / 96.0F;
+  expect(std::abs(Fl::screen_scale(screen) - raw) < 1e-3F, "FLTK drops the multiplier on a sent same-screen DPI change");
+  InvalidateRect(native, nullptr, FALSE);
+  expect(wait_for([&] { return std::abs(Fl::screen_scale(screen) - raw * desktop * stored) < 1e-3F; }),
+         "next paint restores both multipliers once for the changed screen");
+  if (Fl::screen_count() > 1) {
+    const int destination = (screen + 1) % Fl::screen_count();
+    int x{}, y{}, width{}, height{};
+    Fl::screen_xywh(x, y, width, height, destination);
+    const float scale = Fl::screen_scale(destination);
+    const LONG left = static_cast<LONG>(std::lround(static_cast<float>(x + width / 2) * scale));
+    const LONG top = static_cast<LONG>(std::lround(static_cast<float>(y + height / 2) * scale));
+    RECT suggested{left - 100, top - 50, left + 100, top + 50};
+    float destination_dpi{};
+    Fl::screen_dpi(destination_dpi, vertical, destination);
+    const auto message_dpi = static_cast<WORD>(destination_dpi);
+    SendMessageW(native, WM_DPICHANGED, MAKEWPARAM(message_dpi, message_dpi), reinterpret_cast<LPARAM>(&suggested));
+    InvalidateRect(native, nullptr, FALSE);
+    Fl::check();
+    expect(window.screen_num() == destination && std::abs(Fl::screen_scale(destination) - scale) < 1e-3F,
+           "a cross-screen move retains the destination's already-composed scale");
+    SendMessageW(native, WM_DPICHANGED, MAKEWPARAM(different, different), reinterpret_cast<LPARAM>(&position));
+  } else {
+    std::puts("[skip] Synthetic cross-screen WM_DPICHANGED needs a second logical display.");
+  }
+  const auto original = static_cast<WORD>(dpi);
+  SendMessageW(native, WM_DPICHANGED, MAKEWPARAM(original, original), reinterpret_cast<LPARAM>(&position));
+  InvalidateRect(native, nullptr, FALSE);
+  Fl::check();
+  editor::set_windows_desktop_text_scale(1.0F);
+  expect(static_cast<bool>(platform::write_editor_text_scale(100)), "reset test text size");
+  editor::load_startup_text_scale();
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char **argv) {
+  if (argc == 2 && (std::string_view(argv[1]) == "--evidence-contrast" ||
+                    std::string_view(argv[1]) == "--evidence-tooltip")) {
+    if (GetEnvironmentVariableW(L"LAYERC_PROFILE_DIR", nullptr, 0) <= 1 ||
+        GetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", nullptr, 0) <= 1) return 2;
+    if (std::string_view(argv[1]) == "--evidence-contrast")
+      platform::set_native_high_contrast_override(true);
+    else
+      Fl::add_timeout(0.25, show_evidence_tooltip);
+    return editor::run_windows_editor(GetModuleHandleW(nullptr), L"");
+  }
   Fl::keyboard_screen_scaling(0);
   fl_open_display();
   return layerc::test::run({
@@ -342,5 +541,10 @@ int main() {
       LAYERC_TEST_CASE(options_dialog_actions_and_descriptions),
       LAYERC_TEST_CASE(capture_exclusion_on_existing_and_new_windows),
       LAYERC_TEST_CASE(text_scale_startup_and_keys),
+      LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
+      LAYERC_TEST_CASE(caption_decoration_and_pruning),
+      LAYERC_TEST_CASE(dpi_changes_keep_text_scale),
+      LAYERC_TEST_CASE(editor_tooltips_keys_and_menu),
+      LAYERC_TEST_CASE(stepped_fields_and_preview_nudge),
   });
 }

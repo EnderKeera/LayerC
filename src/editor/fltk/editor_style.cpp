@@ -34,6 +34,7 @@ std::uint32_t rgb_of(const Fl_Color color) {
 // The appearance the authored drawing resolves its tokens from; the dialogs
 // and the shell set it when they apply an appearance.
 EditorAppearance style_appearance;
+std::optional<ContrastPalette> contrast_palette;
 
 Fl_Color fl_of(const std::uint32_t rgb) {
   return fl_rgb_color(static_cast<uchar>(rgb >> 16U), static_cast<uchar>(rgb >> 8U),
@@ -42,6 +43,11 @@ Fl_Color fl_of(const std::uint32_t rgb) {
 
 // An inactive control's outline fades halfway into its fill.
 Fl_Color outline_for(const Fl_Color fill) {
+  if (contrast_palette) {
+    const auto &tokens = contrast_palette->tokens;
+    return fl_of(!Fl::draw_box_active() ? tokens.disabled
+                 : fill == fl_of(tokens.accent) ? tokens.accent : tokens.border);
+  }
   const auto rgb = rgb_of(fill);
   const auto border = fl_of(control_border(rgb));
   return Fl::draw_box_active() ? border : fl_color_average(border, fill, 0.5F);
@@ -98,7 +104,8 @@ void flat_box(const int x, const int y, const int w, const int h, const Fl_Color
 void bar_box(const int x, const int y, const int w, const int h, const Fl_Color color) {
   const Fl_Color fill = Fl::box_color(color);
   fl_rectf(x, y, w, h, fill);
-  fl_color(fl_color_average(outline_for(fill), fill, 0.5F));
+  fl_color(contrast_palette ? fl_of(contrast_palette->tokens.divider)
+                            : fl_color_average(outline_for(fill), fill, 0.5F));
   fl_xyline(x, y + h - 1, x + w - 1);
 }
 
@@ -129,7 +136,7 @@ void apply_desktop_font() {
   const auto metrics = desktop_text_metrics(font->pixels);
   FL_NORMAL_SIZE = metrics.normal_size;
 #ifdef _WIN32
-  multiply_windows_screen_scales(metrics.scale);
+  set_windows_desktop_text_scale(metrics.scale);
 #else
   for (int screen = 0; screen < Fl::screen_count(); ++screen)
     Fl::screen_scale(screen, Fl::screen_scale(screen) * metrics.scale);
@@ -159,9 +166,28 @@ Fl_Boxtype editor_menu_bar_box() noexcept { return installed ? menu_bar_box : FL
 
 void set_editor_style_appearance(const EditorAppearance &appearance) {
   style_appearance = appearance;
+  contrast_palette = platform_contrast_palette();
+}
+
+const EditorAppearance &current_editor_style_appearance() noexcept { return style_appearance; }
+
+const std::optional<ContrastPalette> &editor_style_contrast_palette() noexcept {
+  return contrast_palette;
+}
+
+RoleColors current_editor_toolbar_colors() {
+  constexpr auto role = EditorRole::toolbar;
+  constexpr auto index = static_cast<std::size_t>(role);
+  if (contrast_palette) return contrast_palette->roles[index];
+  if (const auto colors = theme_role_colors(style_appearance, role)) return *colors;
+  const auto tokens = current_editor_tokens();
+  const auto &overrides = style_appearance.overrides[index];
+  return {overrides.fill.value_or(tokens.background), overrides.text.value_or(tokens.text),
+          overrides.selection.value_or(tokens.selection)};
 }
 
 EditorTokens current_editor_tokens() {
+  if (contrast_palette) return contrast_palette->tokens;
   if (style_appearance.theme != EditorTheme::system)
     return editor_tokens(style_appearance);
   // System keeps FLTK's own palette: the tokens follow it so authored drawing
@@ -183,7 +209,7 @@ EditorTokens current_editor_tokens() {
 void draw_editor_focus(int x, int y, int width, int height, bool primary) {
   if (width < 4 || height < 4) return;
   const auto tokens = current_editor_tokens();
-  const auto color = primary ? (style_appearance.theme == EditorTheme::system
+  const auto color = primary ? (contrast_palette || style_appearance.theme == EditorTheme::system
       ? tokens.on_accent : tokens.text) : tokens.accent;
   fl_color(fl_of(color));
   fl_rect(x, y, width, height);
@@ -197,8 +223,8 @@ bool is_primary_button(const Fl_Widget &widget) noexcept {
 void refresh_primary_button(Fl_Button &button) {
   const auto tokens = current_editor_tokens();
   button.color(fl_of(tokens.accent));
-  button.selection_color(fl_color_average(fl_of(tokens.accent), fl_of(tokens.panel),
-                                           195.0F / 255.0F));
+  button.selection_color(contrast_palette ? fl_of(tokens.accent)
+      : fl_color_average(fl_of(tokens.accent), fl_of(tokens.panel), 195.0F / 255.0F));
   button.labelcolor(fl_of(tokens.on_accent));
   button.redraw();
 }

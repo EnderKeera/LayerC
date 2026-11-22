@@ -3,6 +3,7 @@
 // regressions live in this target; remote AT-SPI behaviour is covered by the
 // disposable GUI walkthrough.
 #include "editor_app.hpp"
+#include "a11y/fltk_semantics.hpp"
 #include "profile_edit.hpp"
 #include "automation_graph.hpp"
 #include "calibration_window.hpp"
@@ -166,6 +167,16 @@ void empty_draft_save_and_reopen() {
   show(app);
   expect(!app.session.has_document() && !editor::EditorAppTestAccess::tabs(app)->active(),
          "an empty store has no phantom open document");
+  auto &window = editor::EditorAppTestAccess::window(app);
+  for (const auto &[label, text] : {std::pair{"&New", "New profile (Ctrl+N)"},
+                                   std::pair{"Delete", "Delete profile"}}) {
+    auto *button = find_button(window, label);
+    expect(button && button->tooltip() && std::string_view(button->tooltip()) == text &&
+               editor::a11y::description({button, editor::a11y::TargetKind::widget}) == text,
+           "portable profile tooltip also supplies the accessible description");
+  }
+  expect(!editor::EditorAppTestAccess::duration(app)->tooltip(),
+         "Windows numeric-step instructions are not advertised on Linux");
   app.command(editor::EditorCommand::new_profile);
   expect(app.session.is_draft() && editor::EditorAppTestAccess::tabs(app)->active(), "New enables the draft controls");
   editor::EditorAppTestAccess::name(app)->value("Widget draft"); app.field_changed(editor::EditorAppTestAccess::name(app));
@@ -292,6 +303,16 @@ void capture_cancel_and_small_window() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
   tab(app, editor::EditorAppTestAccess::binding_tab(app));
+  auto &window = editor::EditorAppTestAccess::window(app);
+  if (auto *capture = find_button(window, "Capture focused chord...")) {
+    const auto described = editor::a11y::description({capture, editor::a11y::TargetKind::widget});
+    expect(described.starts_with("Press the key or chord that starts this cooldown. ") &&
+               described.find("Capture reads only events in its focused editor dialog.") !=
+                   std::string::npos,
+           "the capture tooltip and its note are both the accessible description");
+  } else {
+    expect(false, "the binding capture button exists");
+  }
   const auto before = app.session.document().profile();
   {
     Answer answer("Cancel");

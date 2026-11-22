@@ -62,8 +62,12 @@ Fl_Color rgb(std::uint32_t color) {
 PanelPreview::PanelPreview(int x, int y, int width, int height, EditorApp &app)
     : Fl_Widget(x, y, width, height, "Local panel preview"), app_(app) {
   accessibility::set_accessible_role(*this, a11y::Role::canvas);
-  accessibility::set_accessible_description(*this,
-      "Drag a panel to change its anchor. The Panel fields edit the same values.");
+  if constexpr (windows_editor_keys)
+    accessibility::describe_with_tooltip(*this,
+        "Drag the selected bar. Arrow keys nudge it 1 px (Shift: 10 px).");
+  else
+    accessibility::set_accessible_description(*this,
+        "Drag a panel to change its anchor. The Panel fields edit the same values.");
   // The Preview role's default; Appearance may override it.
   color(token_color(current_editor_tokens().input));
 }
@@ -163,15 +167,77 @@ void PanelPreview::draw() {
       }
     }
   }
+  if constexpr (windows_editor_keys)
+    if (Fl::focus() == this && Fl::visible_focus())
+      draw_editor_focus(x(), y(), w(), h());
   fl_pop_clip();
   if (next && visible_r()) {
     const auto seconds = std::chrono::duration<double>(*next - core::MonotonicClock::now()).count();
     Fl::add_timeout(std::max(seconds, 0.001), wake, this);
   }
 }
+
+void PanelPreview::move_anchor(const std::string_view panel_id,
+                               const std::function<void(core::Panel &)> &move) {
+  const auto error = app_.session.edit([&](auto &profile) {
+    for (auto &panel : profile.panels)
+      if (panel.id == panel_id) move(panel);
+  }, true);
+  if (error) app_.report(StatusKind::failure, *error);
+  else {
+    app_.refresh_forms();
+    app_.report(StatusKind::information, app_.placement_active()
+        ? "Positioning on the window: the live draft moves LayerD's overlay."
+        : "Unsaved preview placement.", StatusVoice::silent);
+    redraw();
+  }
+}
+
+void PanelPreview::finish_move() {
+  dragging_.clear();
+  app_.session.end_text_edit();
+}
+
+bool PanelPreview::nudge(const int key) {
+  if (key != FL_Left && key != FL_Right && key != FL_Up && key != FL_Down)
+    return false;
+  if (!app_.apply_fields()) return true;
+  const auto selected = app_.panel_index();
+  if (!selected) return true;
+  const auto &panel = app_.session.document().profile().panels[*selected];
+  const auto view = present(panel);
+  if (!view.presentation.visible || view.presentation.items.empty()) return true;
+  const auto frame = frame_of(*this, app_);
+  const int width = app_.placement_active() ? app_.placement()->width : frame.width;
+  const int height = app_.placement_active() ? app_.placement()->height : frame.height;
+  const double step = Fl::event_shift() ? 10.0 : 1.0;
+  const auto panel_id = panel.id;
+  app_.session.end_text_edit();
+  move_anchor(panel_id, [&](core::Panel &item) {
+    if (key == FL_Left || key == FL_Right)
+      item.anchor_x = std::clamp(item.anchor_x +
+          (key == FL_Left ? -step : step) / std::max(width, 1), 0.0, 1.0);
+    else
+      item.anchor_y = std::clamp(item.anchor_y +
+          (key == FL_Up ? -step : step) / std::max(height, 1), 0.0, 1.0);
+  });
+  finish_move();
+  return true;
+}
+
 int PanelPreview::handle(int event) {
+  if constexpr (windows_editor_keys) {
+    if (event == FL_FOCUS || event == FL_UNFOCUS) {
+      redraw();
+      return event == FL_UNFOCUS || app_.session.has_document();
+    }
+    if (event == FL_KEYDOWN && Fl::focus() == this && app_.session.has_document() &&
+        nudge(Fl::event_key()))
+      return 1;
+  }
   if (!app_.session.has_document()) return Fl_Widget::handle(event);
   if (event == FL_PUSH && Fl::event_button() == FL_LEFT_MOUSE) {
+    if constexpr (windows_editor_keys) take_focus();
     if (!app_.apply_fields()) return 1;
     const auto frame = frame_of(*this, app_);
     for (const auto &panel : app_.session.document().profile().panels) {
@@ -187,36 +253,26 @@ int PanelPreview::handle(int event) {
     }
   } else if (event == FL_DRAG && !dragging_.empty()) {
     const auto frame = frame_of(*this, app_);
-    const auto error = app_.session.edit([&](auto &profile) {
-      for (auto &panel : profile.panels) if (panel.id == dragging_) {
-        const auto view = present(panel);
-        const auto placed = placement(view.panel, frame, view.presentation.items.size());
-        const auto width = static_cast<int>(placed.geometry.size.width * placed.scale);
-        const auto height = static_cast<int>(placed.geometry.size.height * placed.scale);
-        if (frame.scale > 0.0) { // positioning: the cursor is the overlay's centre
-          const auto anchor = anchor_at(frame, Fl::event_x(), Fl::event_y());
-          panel.anchor_x = anchor.x;
-          panel.anchor_y = anchor.y;
-          continue;
-        }
-        panel.anchor_x = std::clamp(static_cast<double>(Fl::event_x() - frame.x - width / 2) /
-                                      std::max(frame.width - width, 1), 0.0, 1.0);
-        panel.anchor_y = std::clamp(static_cast<double>(Fl::event_y() - frame.y - height / 2) /
-                                      std::max(frame.height - height, 1), 0.0, 1.0);
+    move_anchor(dragging_, [&](core::Panel &panel) {
+      const auto view = present(panel);
+      const auto placed = placement(view.panel, frame, view.presentation.items.size());
+      const auto width = static_cast<int>(placed.geometry.size.width * placed.scale);
+      const auto height = static_cast<int>(placed.geometry.size.height * placed.scale);
+      if (frame.scale > 0.0) { // positioning: the cursor is the overlay's centre
+        const auto anchor = anchor_at(frame, Fl::event_x(), Fl::event_y());
+        panel.anchor_x = anchor.x;
+        panel.anchor_y = anchor.y;
+        return;
       }
-    }, true);
-    if (error) app_.report(StatusKind::failure, *error);
-    else {
-      app_.refresh_forms();
-      // Every drag of the bar says this again; the reader hears it once.
-      app_.report(StatusKind::information, app_.placement_active() ? "Positioning on the window: the live draft moves LayerD's overlay."
-                                          : "Unsaved preview placement.",
-                  StatusVoice::silent);
-      redraw();
-    }
+      panel.anchor_x = std::clamp(static_cast<double>(Fl::event_x() - frame.x - width / 2) /
+                                    std::max(frame.width - width, 1), 0.0, 1.0);
+      panel.anchor_y = std::clamp(static_cast<double>(Fl::event_y() - frame.y - height / 2) /
+                                    std::max(frame.height - height, 1), 0.0, 1.0);
+    });
     return 1;
   } else if (event == FL_RELEASE && !dragging_.empty()) {
-    dragging_.clear(); app_.session.end_text_edit(); return 1;
+    finish_move();
+    return 1;
   }
   return Fl_Widget::handle(event);
 }

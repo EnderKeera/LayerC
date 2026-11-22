@@ -21,6 +21,7 @@ struct EditorOptionsLoad {
 };
 
 [[nodiscard]] bool editor_options_supported() noexcept;
+void select_editor_text_scale(int percent);
 [[nodiscard]] EditorOptionsLoad load_editor_options(bool editor_capture_exclusion, int text_scale);
 void notify_editor_options_reload();
 [[nodiscard]] std::optional<std::string_view>

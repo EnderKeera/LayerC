@@ -72,6 +72,11 @@ void set_accessible_description(Fl_Widget &control, std::string text) {
   drop_if_empty(entry);
 }
 
+void describe_with_tooltip(Fl_Widget &control, std::string text) {
+  control.copy_tooltip(text.empty() ? nullptr : text.c_str());
+  set_accessible_description(control, std::move(text));
+}
+
 void describe_with(Fl_Widget &control, Fl_Widget &hint) {
   auto &entry = entry_for(control);
   entry.description.clear();

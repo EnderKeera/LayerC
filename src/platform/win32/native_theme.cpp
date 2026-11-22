@@ -62,6 +62,8 @@ std::uint32_t system_accent() {
 // -1 follows SPI_GETHIGHCONTRAST; 0 or 1 is the test seam's forced value.
 std::atomic<int> high_contrast_override{-1};
 
+} // namespace
+
 // A Windows contrast theme: every role in the theme's system colors, with
 // the preset and the Appearance overrides set aside.
 NativeThemeColors high_contrast_colors(const EditorControlRole role) {
@@ -93,6 +95,8 @@ NativeThemeColors high_contrast_colors(const EditorControlRole role) {
       .high_contrast = true,
   };
 }
+
+namespace {
 
 NativeThemeColors default_theme_colors(const EditorTheme theme,
                                        const std::uint32_t accent,

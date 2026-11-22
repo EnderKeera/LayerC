@@ -53,6 +53,10 @@ private:
                                              bool *simulated = nullptr) const;
   static void wake(void *data);
   EditorApp &app_;
+  void move_anchor(std::string_view panel_id, const std::function<void(core::Panel &)> &move);
+  void finish_move();
+  bool nudge(int key);
+
   std::string dragging_;
   core::TimePoint epoch_{core::MonotonicClock::now()};
 };
@@ -92,11 +96,13 @@ public:
   void show();
   [[nodiscard]] bool shown() const;
   [[nodiscard]] Fl_Window *main_window() noexcept { return &window; }
+  void refresh_desktop_appearance();
 #ifdef _WIN32
   [[nodiscard]] bool sync_accessibility();
 #endif
   [[nodiscard]] bool handle_shortcut(int key, int modifiers);
-  void show_context_menu(EditorMenuContext context, bool has_target);
+  void show_context_menu(EditorMenuContext context, bool has_target,
+                         std::optional<EditorBounds> anchor = std::nullopt);
   void refresh();
   void redraw_preview();
   void fill_lists();

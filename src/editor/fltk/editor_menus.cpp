@@ -1,5 +1,6 @@
 #include "editor_menus.hpp"
 #include "editor_app.hpp"
+#include "platform/editor_options.hpp"
 #include "editor_style.hpp"
 #include "editor_popup.hpp"
 
@@ -16,6 +17,17 @@
 #include <vector>
 
 namespace layerc::editor {
+namespace {
+
+constexpr const char *text_size_paths[]{
+    "&View/&Text size/&100 %", "&View/&Text size/11&5 %", "&View/&Text size/1&30 %"};
+template <std::size_t index> void choose_text_size(Fl_Widget *, void *) {
+  select_editor_text_scale(text_scale_choices[index]);
+}
+constexpr Fl_Callback *text_size_callbacks[]{
+    choose_text_size<0>, choose_text_size<1>, choose_text_size<2>};
+
+} // namespace
 
 EditorMenus::EditorMenus(EditorApp &app, Fl_Window &window)
     : app_(app), window_(window) {
@@ -29,6 +41,9 @@ EditorMenus::EditorMenus(EditorApp &app, Fl_Window &window)
     if (spec.menu_path != nullptr)
       bar_->add(spec.menu_path, spec.shortcut, invoke,
                 &actions_[static_cast<std::size_t>(spec.command)], spec.menu_flags);
+  if constexpr (windows_editor_keys)
+    for (std::size_t i = 0; i < text_scale_choices.size(); ++i)
+      bar_->add(text_size_paths[i], 0, text_size_callbacks[i], nullptr, FL_MENU_RADIO);
 }
 void EditorMenus::invoke(Fl_Widget *widget, void *data) {
   auto &action = *static_cast<Action *>(data);
@@ -49,6 +64,13 @@ void EditorMenus::update() {
     bar_->mode(index, spec.menu_flags |
         (command_enabled(app_, spec.command) ? 0 : FL_MENU_INACTIVE));
   }
+  if constexpr (windows_editor_keys)
+    for (std::size_t i = 0; i < text_scale_choices.size(); ++i) {
+      const auto index = bar_->find_index(text_size_paths[i]);
+      if (index >= 0)
+        bar_->mode(index, FL_MENU_RADIO |
+            (text_scale_choices[i] == current_editor_text_scale() ? FL_MENU_VALUE : 0));
+    }
   bar_->redraw();
 }
 bool EditorMenus::shortcut(int key, int modifiers) {
@@ -124,14 +146,15 @@ void EditorMenus::configure_context(Fl_Menu_Button &menu, EditorMenuContext cont
              available ? 0 : FL_MENU_INACTIVE);
   }
 }
-void EditorMenus::popup(EditorMenuContext context, bool has_target) {
+void EditorMenus::popup(EditorMenuContext context, bool has_target,
+                        const std::optional<EditorBounds> anchor) {
   // The temporary menu is a child of our window, never another application.
   auto *previous = Fl_Group::current();
   Fl_Group::current(&window_);
   Fl_Menu_Button menu(Fl::event_x(), Fl::event_y(), 0, 0);
   Fl_Group::current(previous);
   configure_context(menu, context, has_target);
-  track_editor_popup(menu);
+  track_editor_popup(menu, -1, anchor);
 }
 
 EditorEmptyState editor_empty_state(EditorMenuContext context) noexcept {
@@ -253,6 +276,26 @@ int ContextBrowser::handle(int event) {
     const int result = Fl_Hold_Browser::handle(event);
     redraw();
     return result;
+  }
+  if constexpr (windows_editor_keys) {
+    if (event == FL_KEYDOWN && Fl::focus() == this && active_r()) {
+      constexpr int modifiers = FL_CTRL | FL_SHIFT | FL_ALT | FL_META;
+      const int shortcut = Fl::event_key() | (Fl::event_state() & modifiers);
+      for (const auto &item : editor_list_shortcuts()) {
+        if (item.shortcut != shortcut || (item.contexts & context_bit(context_)) == 0)
+          continue;
+        const int row = value();
+        const bool has_target = row > 0 && row <= size();
+        if (item.command) {
+          if (has_target) run_command(app_, *item.command);
+        } else {
+          if (has_target && !row_bounds(row)) display(row);
+          app_.show_context_menu(context_, has_target,
+              row_bounds(row).value_or(EditorBounds{x(), y(), 0, 0}));
+        }
+        return 1;
+      }
+    }
   }
   if (event != FL_PUSH || Fl::event_button() != FL_RIGHT_MOUSE)
     return Fl_Hold_Browser::handle(event);

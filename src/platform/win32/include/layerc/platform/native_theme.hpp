@@ -43,6 +43,8 @@ struct NativeThemeColors {
   bool high_contrast{};
 };
 
+[[nodiscard]] NativeThemeColors high_contrast_colors(EditorControlRole role);
+
 // Neutral dark ramp shared by every preset (Windows 11 / Fluent dark values);
 // presets differ only in their accent. Also the color picker's swatch source.
 struct ThemeBase {

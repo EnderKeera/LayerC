@@ -2,6 +2,7 @@
 
 #include "editor_geometry.hpp"
 
+#include <optional>
 #include <span>
 #include <string>
 
@@ -42,6 +43,15 @@ struct EditorCommandSpec {
   void (*run)(EditorApp &);
 };
 
+struct EditorListShortcut {
+  int shortcut;
+  const char *keys;
+  const char *label;
+  unsigned contexts;
+  std::optional<EditorCommand> command;
+};
+
+[[nodiscard]] std::span<const EditorListShortcut> editor_list_shortcuts();
 [[nodiscard]] std::span<const EditorCommandSpec> editor_command_specs();
 [[nodiscard]] const EditorCommandSpec &command_spec(EditorCommand command);
 [[nodiscard]] bool command_enabled(const EditorApp &app, EditorCommand command);

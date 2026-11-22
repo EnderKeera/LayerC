@@ -147,6 +147,10 @@ void EditorApp::load_appearance(std::optional<AppearanceLoad> startup_appearance
 }
 
 
+void EditorApp::refresh_desktop_appearance() {
+  reapply_editor_desktop_appearance(window, profiles, preview);
+}
+
 void EditorApp::open_profiles_folder() {
   const auto directory = session.directory();
   if (directory.empty()) { report(StatusKind::failure, profile_directory_unavailable_reason()); return; }

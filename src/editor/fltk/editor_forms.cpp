@@ -1,4 +1,5 @@
 #include "editor_app.hpp"
+#include "accessible_widgets.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 
@@ -29,8 +30,9 @@ bool EditorApp::handle_shortcut(const int key, const int modifiers) {
   return menus && menus->shortcut(key, modifiers);
 }
 
-void EditorApp::show_context_menu(const EditorMenuContext context, const bool has_target) {
-  if (menus) menus->popup(context, has_target);
+void EditorApp::show_context_menu(const EditorMenuContext context, const bool has_target,
+                                  const std::optional<EditorBounds> anchor) {
+  if (menus) menus->popup(context, has_target, anchor);
 }
 
 void EditorApp::build(std::optional<AppearanceLoad> startup_appearance) {
@@ -49,9 +51,12 @@ void EditorApp::build(std::optional<AppearanceLoad> startup_appearance) {
   // Sidebar (profiles, their commands, preservation and daemon state) beside
   // the tabbed form and preview; one footer row. Everything fits the default
   // window without scrolling; smaller windows scroll instead of overlapping.
-  button(15, 15, 70, "&New", EditorCommand::new_profile)->shortcut(FL_CTRL | 'n');
+  auto *new_profile = button(15, 15, 70, "&New", EditorCommand::new_profile);
+  new_profile->shortcut(FL_CTRL | 'n');
+  accessibility::describe_with_tooltip(*new_profile, "New profile (Ctrl+N)");
   button(90, 15, 85, "Duplicate", EditorCommand::duplicate);
-  button(180, 15, 75, "Delete", EditorCommand::delete_profile);
+  accessibility::describe_with_tooltip(*button(180, 15, 75, "Delete", EditorCommand::delete_profile),
+                                       "Delete profile");
   profiles = browser(15, 70, 240, 300, "Profiles", EditorMenuContext::profiles);
   button(15, 380, 115, "Toggle saved", EditorCommand::toggle_enabled);
   button(140, 380, 115, "&Import...", EditorCommand::import_profiles);

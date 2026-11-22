@@ -7,6 +7,10 @@
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
@@ -38,6 +42,66 @@ private:
   EditorCommand action_;
 };
 
+class SteppedField final : public EditorField<Fl_Input> {
+public:
+  SteppedField(int x, int y, int width, const char *label, EditorApp &app,
+               NumberStep step)
+      : EditorField<Fl_Input>(x, y, width, editor_input_height, label), app_(app), step_(step) {
+    accessibility::describe_with_tooltip(*this, step == NumberStep::duration
+        ? "Up / Down or the mouse wheel step 0.1 s (Shift: 1 s)"
+        : "Up / Down or the mouse wheel step 1 px");
+  }
+
+  int handle(const int event) override {
+    if (Fl::focus() == this) {
+      const int key = Fl::event_key();
+      const int steps = event == FL_KEYDOWN ? (key == FL_Up ? 1 : key == FL_Down ? -1 : 0)
+                        : event == FL_MOUSEWHEEL ? -Fl::event_dy() : 0;
+      if (steps != 0) {
+        change(static_cast<std::int64_t>(steps) * (Fl::event_shift() ? 10 : 1));
+        return 1;
+      }
+    }
+    return EditorField<Fl_Input>::handle(event);
+  }
+
+private:
+  void change(const std::int64_t steps) {
+    const bool duration = step_ == NumberStep::duration;
+    const std::int64_t minimum = duration ? 1 : step_ == NumberStep::bar_width
+        ? core::min_bar_width : core::min_bar_height;
+    const std::int64_t maximum = duration ? core::max_cooldown_duration.count() / 100
+        : step_ == NumberStep::bar_width ? core::max_bar_width : core::max_bar_height;
+    const std::string_view text(value());
+    double current{};
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), current);
+    const auto units = parsed.ec == std::errc{} && std::isfinite(current)
+        ? std::llround(std::clamp(current * (duration ? 10.0 : 1.0),
+                                 static_cast<double>(minimum), static_cast<double>(maximum)))
+        : minimum;
+    const auto next = std::clamp(static_cast<std::int64_t>(units) + steps, minimum, maximum);
+    const auto replacement = duration ? format_seconds(core::Milliseconds(next * 100))
+                                      : std::to_string(next);
+    if (value(replacement.c_str())) {
+      app_.session.end_text_edit();
+      do_callback();
+      app_.session.end_text_edit();
+    }
+    insert_position(size(), 0);
+  }
+
+  EditorApp &app_;
+  NumberStep step_;
+};
+
+void describe_application(Fl_Input &field, const core::GameMatch &game) {
+  const auto tip = !game.executable_path.empty() ? "Matches exactly " + game.executable_path
+      : !game.executable_name.empty() ? "Matches any " + game.executable_name + " regardless of folder"
+      : "No application chosen yet";
+  if (!field.tooltip() || tip != field.tooltip())
+    accessibility::describe_with_tooltip(field, tip);
+}
+
 } // namespace
 
 void add_choice(Fl_Choice &choice, const std::string &name) {
@@ -48,8 +112,10 @@ void add_choice(Fl_Choice &choice, const std::string &name) {
   choice.replace(index, label.c_str());
 }
 
-Fl_Input *FormBuilder::input(int x, int y, int width, const char *label) {
-  auto *field = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
+Fl_Input *FormBuilder::input(int x, int y, int width, const char *label, NumberStep step) {
+  Fl_Input *field = windows_editor_keys && step != NumberStep::none
+      ? static_cast<Fl_Input *>(new SteppedField(x, y, width, label, app_, step))
+      : new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
   field->align(FL_ALIGN_TOP_LEFT);
   field->when(FL_WHEN_CHANGED);
   field->callback([](Fl_Widget *w, void *data) {
@@ -171,6 +237,7 @@ void ProfilePage::build(FormBuilder &builder) {
   name_ = builder.input(285, 80, 340, "Profile name");
   executable_ = builder.input(660, 80, 370, "Executable name");
   executable_path_ = builder.input(285, 145, 745, "Executable path (optional)");
+  describe_application(*executable_path_, {});
   window_class_ = builder.input(285, 210, 340, "Window class (optional)");
   window_title_ = builder.input(660, 210, 370, "Window title (optional)");
   enabled_ = builder.check(285, 265, 260, "Profile enabled");
@@ -191,6 +258,7 @@ void ProfilePage::show(const layerc::core::GameProfile &profile) {
   name_->value(profile.name.c_str());
   executable_->value(profile.game.executable_name.c_str());
   executable_path_->value(profile.game.executable_path.c_str());
+  describe_application(*executable_path_, profile.game);
   window_class_->value(profile.game.window_class.c_str());
   window_title_->value(profile.game.window_title.c_str());
   enabled_->value(profile.enabled ? 1 : 0);
@@ -200,6 +268,7 @@ void ProfilePage::show(const layerc::core::GameProfile &profile) {
 void ProfilePage::show(const layerc::core::GameProfile *profile) {
   if (profile == nullptr) {
     profile_id_->value("");
+    describe_application(*executable_path_, {});
     return;
   }
   show(*profile);
@@ -217,6 +286,7 @@ void ProfilePage::read(layerc::core::GameProfile &candidate) const {
   candidate.name = name_->value();
   candidate.game.executable_name = executable_->value();
   candidate.game.executable_path = executable_path_->value();
+  describe_application(*executable_path_, candidate.game);
   candidate.game.window_class = window_class_->value();
   candidate.game.window_title = window_title_->value();
   candidate.enabled = enabled_->value() != 0;
@@ -243,7 +313,7 @@ void CooldownPage::build(FormBuilder &builder) {
   cooldown_fields_ = new Fl_Group(535, 65, 495, 325);
   cooldown_fields_->begin();
   cooldown_name_ = builder.input(545, 90, 470, "Cooldown name");
-  duration_ = builder.input(545, 155, 220, "Duration (seconds)");
+  duration_ = builder.input(545, 155, 220, "Duration (seconds)", NumberStep::duration);
   charges_ = builder.input(795, 155, 220, "Max charges");
   recovery_ = builder.choice(545, 225, 470, "Recovery mode", "Single|Sequential|Parallel");
   retrigger_ = builder.choice(545, 280, 470, "Retrigger policy", "Ignore|Restart");
@@ -338,15 +408,22 @@ void BindingPage::build(FormBuilder &builder) {
                        EditorCommand::capture_binding);
   const bool hid = hid_binding_capture_available();
   if (hid)
-    (void)builder.button(710, 313, 320, "Capture HID binding...",
-                         EditorCommand::capture_hid_binding);
+    accessibility::describe_with_tooltip(
+        *builder.button(710, 313, 320, "Capture HID binding...", EditorCommand::capture_hid_binding),
+        "Bind a control on a generic HID device");
   auto *capture_note = new Fl_Box(710, hid ? 352 : 330, 320, hid ? 65 : 80);
   std::string capture_text = "Capture reads only events in its focused editor dialog.";
   if (!hid) capture_text += "\n" + std::string(focused_binding_hid_note());
   capture_note->copy_label(capture_text.c_str());
   capture_note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   capture_note->labelsize(11);
-  accessibility::describe_with(*capture, *capture_note);
+  // The tooltip and the note under the button are both its description
+  // (DesignSystem.md, Screen readers).
+  constexpr auto capture_tip = "Press the key or chord that starts this cooldown";
+  capture->tooltip(capture_tip);
+  std::string capture_description = std::string(capture_tip) + ". " + capture_text;
+  std::ranges::replace(capture_description, '\n', ' ');
+  accessibility::set_accessible_description(*capture, std::move(capture_description));
   binding_tab_->end();
 }
 
@@ -396,6 +473,8 @@ void PanelPage::build(FormBuilder &builder) {
   (void)builder.button(385, 325, 90, "Remove", EditorCommand::delete_panel);
   position_button_ =
       builder.button(285, 365, 190, "Position on window...", EditorCommand::position);
+  accessibility::describe_with_tooltip(*position_button_,
+      "Place the bars directly on the running game window");
   panel_fields_ = new Fl_Group(490, 60, 550, 380);
   panel_fields_->begin();
   panel_name_ = builder.input(500, 85, 260, "Panel name");
@@ -403,8 +482,8 @@ void PanelPage::build(FormBuilder &builder) {
   style_ = builder.choice(915, 85, 115, "Style", "Card|Bar");
   anchor_x_ = builder.input(500, 145, 120, "X (0–1)");
   anchor_y_ = builder.input(635, 145, 125, "Y (0–1)");
-  bar_width_ = builder.input(780, 145, 120, "Bar width");
-  bar_height_ = builder.input(915, 145, 115, "Bar height");
+  bar_width_ = builder.input(780, 145, 120, "Bar width", NumberStep::bar_width);
+  bar_height_ = builder.input(915, 145, 115, "Bar height", NumberStep::bar_height);
   fill_ = builder.input(500, 205, 120, "Fill #RRGGBB");
   background_ = builder.input(635, 205, 125, "Background");
   border_ = builder.input(780, 205, 120, "Border");

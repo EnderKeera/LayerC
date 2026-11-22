@@ -8,7 +8,8 @@ namespace layerc::editor {
 
 // Tracking, drawing and accessibility share this one source of popup state.
 // It owns transient windows, never application commands or menu arrays.
-void track_editor_popup(Fl_Menu_ &owner, int title = -1);
+void track_editor_popup(Fl_Menu_ &owner, int title = -1,
+                        std::optional<EditorBounds> anchor = std::nullopt);
 [[nodiscard]] Fl_Menu_ *popup_owner();
 [[nodiscard]] bool popup_current(const Fl_Menu_ &owner, int index);
 [[nodiscard]] std::optional<EditorBounds> popup_item_bounds(const Fl_Menu_ &owner, int index);

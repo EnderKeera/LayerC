@@ -1,7 +1,9 @@
+#include "platform/contrast.hpp"
 #include "platform/editor_appearance_store.hpp"
 #include "platform/editor_options.hpp"
 #include "platform/product_text.hpp"
 #include "platform/services.hpp"
+#include "platform/window_chrome.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
 
 #include <cstdlib>
@@ -40,6 +42,10 @@ std::optional<std::string> save_platform_appearance(const EditorAppearance &appe
 const char *appearance_replacement_prompt() noexcept {
   return "Applying a new choice replaces the file.";
 }
+
+std::optional<ContrastPalette> platform_contrast_palette() { return std::nullopt; }
+
+void refresh_editor_window_chrome() {}
 
 bool editor_options_supported() noexcept { return false; }
 

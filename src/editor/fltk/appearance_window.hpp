@@ -10,6 +10,9 @@ class Fl_Window;
 
 namespace layerc::editor {
 
+void reapply_editor_desktop_appearance(Fl_Window &root, const Fl_Widget *sidebar = nullptr,
+                                       const Fl_Widget *preview = nullptr);
+
 // Sets FLTK's palette for the theme and each widget's role colours below
 // `root`. The system theme restores FLTK's startup palette and class colours;
 // `preview` keeps its own dark default and `sidebar` is the profile list.

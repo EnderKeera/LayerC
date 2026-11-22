@@ -1,8 +1,10 @@
 #include "startup.hpp"
 
+#include "desktop_listener.hpp"
 #include "editor_app.hpp"
 #include "editor_style.hpp"
 #include "settings_store.hpp"
+#include "window_chrome.hpp"
 #include "window_settings.hpp"
 #include "layerc/platform/editor_instance.hpp"
 #include "layerc/platform/native_theme.hpp"
@@ -36,10 +38,6 @@ void install_editor_icon(const HINSTANCE instance) {
   };
   Fl_Window::default_icons(load(SM_CXICON), load(SM_CXSMICON));
 }
-
-struct CaptureExclusionScope {
-  ~CaptureExclusionScope() { set_editor_capture_exclusion(false); }
-};
 
 struct StartupSettings {
   StartupAppearance appearance;
@@ -123,13 +121,13 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
     std::fputs("Smoke requires LAYERC_PROFILE_DIR and LAYERC_SETTINGS_KEY overrides.\n", stderr);
     return 1;
   }
+  WindowsWindowDecorator decorator;
   if (const auto error = recover_startup_profiles(platform::profile_directory())) {
     fl_message_title("LayerC profile recovery");
     fl_alert("%s", error->c_str());
     return 1;
   }
 
-  const CaptureExclusionScope capture;
   auto settings = load_startup_settings();
   install_editor_style();
   EditorApp app;
@@ -137,17 +135,15 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
   const WindowsTextScaleShortcuts text_shortcuts([&app](StatusKind kind, std::string text) {
     app.report(kind, std::move(text));
   });
+  const WindowsDesktopListener desktop(instance, [&app] { app.refresh_desktop_appearance(); });
+  if (!desktop.native_handle())
+    std::fputs("The LayerE desktop change listener could not be created.\n", stderr);
   app.show();
   auto *const window = app.main_window();
   const HWND handle = fl_xid(window);
   if (handle == nullptr) return 1;
   fit_initial_window(handle);
-  if (!platform::native_high_contrast()) {
-    const auto colors = platform::native_theme_colors(
-        settings.appearance.native, platform::EditorControlRole::toolbar);
-    platform::set_dark_title_bar(handle);
-    platform::set_window_frame_colors(handle, colors.fill, colors.border, colors.text);
-  }
+  decorator.refresh();
   if (!app.sync_accessibility()) return 1;
   if (settings.capture_exclusion_read_failed)
     app.report(StatusKind::warning, "Could not read the editor capture-exclusion setting.");

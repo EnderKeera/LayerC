@@ -36,7 +36,8 @@ public:
   void update();
   [[nodiscard]] bool shortcut(int key, int modifiers);
   void configure_context(Fl_Menu_Button &menu, EditorMenuContext context, bool has_target);
-  void popup(EditorMenuContext context, bool has_target);
+  void popup(EditorMenuContext context, bool has_target,
+             std::optional<EditorBounds> anchor = std::nullopt);
   // One "shortcut<TAB>action" line per keyboard shortcut.
   [[nodiscard]] static std::string shortcut_help();
 private:
