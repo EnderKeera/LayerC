@@ -298,6 +298,11 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |
 | `layerc_editor_document_tests` | Shared editor document: cooldown-removal dependencies, undo/redo, the commit pipeline, store round trip, sidecar recovery, and upgrade consent |
+| `layerc_editor_automation_tests` | Shared automation editor: presets and graph edits, JSON error locations, trace files and control messages, simulator replay, and panel item previews |
+| `layerc_editor_diagnostics_view_tests` | Runtime diagnostics text: connection and snapshot states, foreground session summary, Linux provider details, visual worker states, and error precedence |
+| `layerc_editor_visual_tests` | Visual assignment: calibration defaults and bounds, template cropping and masks, reference validation, shared observation updates and clones, invalid sidecar replacement, and observation limits |
+| `layerc_editor_color_tests` | Editor color math: contrast ratios, hue and accent selection, and overlay contrast warning text |
+| `layerc_editor_overlay_preview_tests` | Overlay preview painting (CTest label `editor`): Windows mirrors the daemon's GDI bar, card, charge and text painting; Linux takes geometry and paint operations from the shared display list |
 | `layerc_editor_accessibility_model_tests` | Toolkit-neutral editor accessibility model: validated atomic tree publication, text geometry checks, and value-copy boundaries |
 | `layerc_editor_accessibility_changes_tests` | Toolkit-neutral differences between two accessibility snapshots: additions, ordered structure, property and state changes, text/value spans, caret and selection, one focused node, window activation, announcements as occurrences, and silent geometry changes |
 | `layerc_fltk_accessibility_tree_tests` | FLTK widgets published to the toolkit-neutral accessibility tree (CTest label `editor`; on Linux under an X display): consistent snapshots, expansion and scroll state, actions, button roles, and field text equivalence, work bound and snapshots |
@@ -315,6 +320,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_isolated_visual_tests` | `layerw` protocol, bounds, authentication, and quarantine behavior |
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |
 | `layerc_editor_tests` | Editor dialogs, v2 contrast/focus/glyph and contrast-theme seams, layout and accessibility contracts, schema helpers, and automation palette |
+| `layerc_editor_live_edit_tests` | Editor live-edit session: package authentication, pending target expiry, reconnect and target loss, anchor revisions and throttling, heartbeats, and committed-profile publication |
 | `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
 | `layerc_windows_fltk_accessibility_tests` | FLTK editor (`layere_fltk.exe`, built but not shipped): a real `IUIAutomation` client reads a fixture window's names, roles, descriptions and reading order, edits and invokes through Value/Invoke, checks read-only refusal, text ranges, text/selection/value/focus events and status notifications, and sees providers disconnect on close |
 | `layerc_windows_fltk_notification_tests` | FLTK editor: a real UI Automation client receives child-list and accessible-name changes, but not announcements made before it connected |
@@ -340,9 +346,14 @@ tests skip with code 77 when a display or required extension is unavailable.
 | Target | Coverage |
 | --- | --- |
 | `layerc_linux_profile_store_tests` | XDG roots, permissions, journaling, fault injection, and recovery |
+| `layerc_linux_visual_assets_tests` | Profile template assets: canonical PNG storage and import, retained references, unsafe destination refusal, atomic batch publication, writer contention, and interrupted-journal recovery |
 | `layerc_linux_profile_pack_tests` | Byte-deterministic bundle export and import roundtrip |
 | `layerc_linux_event_loop_tests` | Monotonic timerfd deadlines, signal shutdown, and zero idle wakeups |
 | `layerc_linux_display_adapters_tests` | Display selection, strict overrides, compositor hints, headless/provider reasons, and no-graphics builds |
+| `layerc_linux_display_types_tests` | Display geometry: DPI-scaled panel paint operations, byte-stable display list JSON, and monitor overlap and fallback |
+| `layerc_linux_session_engine_tests` | Provider-neutral session engine with fixtures: admission, capability demand, input and overlay dispatch, resource release, and automation checkpoint retry after provider loss |
+| `layerc_linux_display_route_tests` | Display route planning with fixture capabilities: provider priorities and fallbacks, degradation reasons, and stable provider names |
+| `layerc_linux_display_route_binding_tests` | Display route execution with fake providers: session admission, matching input, overlay and capture dispatch, XI2 fallback after evdev failure, and rebinding as window reports change |
 | `layerc_linux_display_x11_tests` | X11 orchestration/status compatibility and an idle blocking event loop (CTest label `x11`) |
 | `layerc_linux_wayland_connection_tests` | Optional Wayland transport: private failed/timeout sockets, bounded startup, descriptor cleanup |
 | `layerc_linux_wayland_registry_tests` | Optional test-only Wayland server: registry/removal, connection loss, and compositor selection |
@@ -356,6 +367,8 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_evdev_boundary` | Lexical check that evdev sources never grab, write, or open a device for writing |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
+| `layerc_linux_live_draft_tests` | Live profile drafts: request and reply validation, in-memory replacement, revision and owner checks, monotonic renewal and expiry, and control dispatch |
+| `layerc_linux_lease_worker_tests` | Editor lease worker: submission wakeups, monotonic deadlines, stopping an idle worker and refusing further work, and bounded client identifiers |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
 | `layerc_linux_editor_atspi_mapping_tests` | Display-free (CTest label `editor`) AT-SPI mapping of the editor accessibility model: role codes and names, refined text-field roles, state bits and state-event names, exposed interfaces, UTF-8/character offset translation and reading-unit boundaries |
 | `layerc_linux_atspi_adaptor_tests` | The editor's own sd-bus AT-SPI bridge on a private bus with fake `org.a11y.Bus`/registry services (CTest label `editor`): idle until a consumer listens, one embedded application, tree reads, protocol events and throttling, actions, values, selection, component geometry, character-offset text and edits through the field's own path, `NO_AT_BRIDGE`, and reported/recovered missing launcher, failed bus, refused embed and lost bus |
@@ -363,6 +376,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_editor_model_tests` | Production editor session: validated profile edits and durable save/roundtrip with retained cooldown/panel/binding fields, selection identity across a rescan, atomically refused invalid candidates, honest offline reload, and appearance (preset and override contrast floors with the shared refusal wording, status glyph classification, outlines, desktop text scaling and XSETTINGS parsing)/task/placement helpers |
 | `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |
 | `layerc_linux_editor_widget_tests` | FLTK editor under an X display (CTest label `editor`): drafts and history, cooldown/binding/panel forms, dirty prompts, binding capture, menus, measured shortcuts, Appearance's contrast refusal, small-window layout, AT-SPI semantics, and offscreen focus/tab/glyph painting |
+| `layerc_linux_editor_autosave_tests` | FLTK autosave under an X display (CTest label `editor`): debounced edits, undo and redo, offline save, first explicit save for new drafts, recovery from invalid fields and write failures, upgrade consent, modal suspension, and flush on close |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |
 | `layerc_linux_x11_registry_tests` | Display-free session admission, automation health, checkpoint retry, and bounded status diagnostics |
 | `layerc_linux_x11_input_tests` | XI2 normalization, hotplug, mouse/wheel mapping, and session replay |
