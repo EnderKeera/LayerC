@@ -59,6 +59,10 @@ std::optional<std::string_view> commit_editor_options(const EditorOptions &, voi
 
 int current_editor_text_scale() noexcept { return text_scale_choices.front(); }
 
+// Linux follows the desktop text size; the Windows View > Text size menu is
+// never added here, so there is no editor-owned size to select.
+void select_editor_text_scale(int) {}
+
 bool editor_capture_exclusion_enabled() noexcept { return false; }
 
 void apply_editor_options_live(const EditorOptions &) {}

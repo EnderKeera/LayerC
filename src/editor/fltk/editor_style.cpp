@@ -73,7 +73,7 @@ void focused_frame(const int x, const int y, const int w, const int h) {
 void focus_box(Fl_Boxtype, const int x, const int y, const int w, const int h,
                Fl_Color, Fl_Color) {
   const auto *focus = Fl::focus();
-  if (!has_visible_focus(focus)) return;
+  if (focus == nullptr || !has_visible_focus(focus)) return;
   if (dynamic_cast<const Fl_Browser_ *>(focus) && focus->x() == x &&
       focus->y() == y && focus->w() == w && focus->h() == h) {
     focused_frame(x, y, w, h);
