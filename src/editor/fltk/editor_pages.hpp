@@ -8,6 +8,7 @@
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Multiline_Output.H>
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -29,6 +30,8 @@ class EditorStatusMark;
 
 // Adds an authored name as a labelled choice item ('/' and '&' are text).
 void add_choice(Fl_Choice &choice, const std::string &name);
+
+[[nodiscard]] Fl_Box *make_disabled_reason(int x, int y, int width, int height);
 
 enum class NumberStep { none, duration, bar_width, bar_height };
 
@@ -104,7 +107,9 @@ private:
   [[nodiscard]] Fl_Input *window_class() const { return window_class_; }
   [[nodiscard]] Fl_Input *window_title() const { return window_title_; }
   [[nodiscard]] Fl_Check_Button *enabled() const { return enabled_; }
-  [[nodiscard]] Fl_Multiline_Output *profile_id() const { return profile_id_; }
+  [[nodiscard]] Fl_Input *profile_id() const { return profile_id_; }
+  void browse_application();
+  std::function<std::optional<std::string>()> choose_application_;
   EditorApp &app_;
   Fl_Group *profile_tab_{};
   Fl_Input *name_{};
@@ -113,7 +118,8 @@ private:
   Fl_Input *window_class_{};
   Fl_Input *window_title_{};
   Fl_Check_Button *enabled_{};
-  Fl_Multiline_Output *profile_id_{};
+  Fl_Input *profile_id_{};
+  Fl_Button *browse_{};
 };
 
 // The Cooldowns tab: the list, its buttons and the five selected-item fields.
@@ -145,6 +151,8 @@ private:
   Fl_Group *cooldown_tab_{};
   Fl_Group *cooldown_fields_{};
   ContextBrowser *cooldowns_{};
+  Fl_Button *remove_{};
+  Fl_Box *remove_reason_{};
   Fl_Input *cooldown_name_{};
   Fl_Input *duration_{}, *active_duration_{};
   Fl_Input *charges_{};

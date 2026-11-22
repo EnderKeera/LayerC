@@ -200,6 +200,7 @@ private:
   [[nodiscard]] const RemoteAnchor *remote_anchor(std::string_view panel_id) const;
   [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);
+  friend class ProfilePage;
   friend class PanelPreview;
   friend class PanelPage;
   friend struct EditorCommandRegistry;

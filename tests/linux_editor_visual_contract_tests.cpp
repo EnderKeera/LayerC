@@ -402,7 +402,15 @@ void linux_editor_main_window_text_and_tab_labels() {
     if (expect(output->wrap() != 0, "every multiline output wraps its text") && output->label())
       wrapped_labels.insert(output->label());
   });
-  expect(outputs >= 8, "the main window owns its multiline outputs");
+  expect(outputs >= (editor::windows_editor_keys ? 7 : 8),
+         "the main window owns its multiline outputs");
+  if constexpr (editor::windows_editor_keys) {
+    auto *id = dynamic_cast<Fl_Input *>(control(editor::EditorAppTestAccess::window(app), "Profile ID"));
+    expect(id && !id->readonly(), "Windows replaces the Profile ID output with an editable field");
+  } else {
+    expect(wrapped_labels.count("Profile ID (read-only)") == 1,
+           "Linux retains the wrapped Profile ID output");
+  }
   for (const char *label : {"Preservation / module faults", "Save / reload outcome",
                             "LayerD status and capability faults", "Visual assignment"})
     expect(wrapped_labels.count(label) == 1, "the labelled multiline output is present and wrapped");

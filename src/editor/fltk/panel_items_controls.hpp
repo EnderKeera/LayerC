@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 
+class Fl_Box;
 class Fl_Button;
 class Fl_Group;
 class Fl_Hold_Browser;
@@ -31,6 +32,7 @@ private:
   EditorApp &app_;
   Fl_Group *group_{};
   Fl_Hold_Browser *items_{};
+  Fl_Box *reason_{};
   Fl_Button *add_{}, *edit_{}, *remove_{}, *up_{}, *down_{};
 };
 

@@ -7,6 +7,7 @@
 #include "platform/services.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -18,6 +19,7 @@
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Native_File_Chooser.H>
 
 #include <algorithm>
 #include <cstring>
@@ -104,7 +106,27 @@ void describe_application(Fl_Input &field, const core::GameMatch &game) {
     accessibility::describe_with_tooltip(field, tip);
 }
 
+class DisabledReason final : public Fl_Box {
+public:
+  using Fl_Box::Fl_Box;
+private:
+  void draw() override {
+    const auto ink = current_editor_tokens().subtext;
+    labelcolor(fl_rgb_color(static_cast<uchar>(ink >> 16U),
+                            static_cast<uchar>(ink >> 8U), static_cast<uchar>(ink)));
+    Fl_Box::draw();
+  }
+};
+
 } // namespace
+
+Fl_Box *make_disabled_reason(const int x, const int y, const int width, const int height) {
+  auto *reason = new DisabledReason(x, y, width, height);
+  reason->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
+  reason->labelsize(FL_NORMAL_SIZE);
+  reason->hide();
+  return reason;
+}
 
 void add_choice(Fl_Choice &choice, const std::string &name) {
   // FLTK menu paths interpret '/', '&' and '\'. Authored names are text.
@@ -238,14 +260,28 @@ void ProfilePage::build(FormBuilder &builder) {
   profile_tab_->begin();
   name_ = builder.input(285, 80, 340, "Profile name");
   executable_ = builder.input(660, 80, 370, "Executable name");
-  executable_path_ = builder.input(285, 145, 745, "Executable path (optional)");
+  executable_path_ = builder.input(285, 145, windows_editor_keys ? 615 : 745,
+                                   "Executable path (optional)");
+  if constexpr (windows_editor_keys) {
+    browse_ = new Fl_Button(915, 145, 115, editor_button_height, "&Browse...");
+    browse_->labelsize(FL_NORMAL_SIZE);
+    browse_->callback([](Fl_Widget *, void *data) {
+      static_cast<ProfilePage *>(data)->browse_application();
+    }, this);
+    accessibility::describe_with_tooltip(*browse_, "Choose the game's .exe file");
+  }
   describe_application(*executable_path_, {});
   window_class_ = builder.input(285, 210, 340, "Window class (optional)");
   window_title_ = builder.input(660, 210, 370, "Window title (optional)");
   enabled_ = builder.check(285, 265, 260, "Profile enabled");
-  profile_id_ = new EditorField<Fl_Multiline_Output>(285, 320, 745, 30, "Profile ID (read-only)");
-  profile_id_->wrap(1);
-  profile_id_->align(FL_ALIGN_TOP_LEFT);
+  if constexpr (windows_editor_keys) {
+    profile_id_ = builder.input(285, 320, 745, "Profile ID");
+  } else {
+    auto *id = new EditorField<Fl_Multiline_Output>(285, 320, 745, 30, "Profile ID (read-only)");
+    id->wrap(1);
+    id->align(FL_ALIGN_TOP_LEFT);
+    profile_id_ = id;
+  }
   auto *note = new Fl_Box(285, 370, 745, 65);
   const auto note_text = std::string(
       "Explicit Save publishes edits and requests an authenticated LayerD reload.\n"
@@ -284,8 +320,38 @@ void ProfilePage::set_enabled_value(const bool enabled) {
   enabled_->value(enabled ? 1 : 0);
 }
 
+void ProfilePage::browse_application() {
+  std::optional<std::string> chosen;
+  if (choose_application_) {
+    chosen = choose_application_();
+  } else {
+    Fl_Native_File_Chooser chooser(Fl_Native_File_Chooser::BROWSE_FILE);
+    chooser.title("Choose the game application");
+    chooser.filter("Applications\t*.exe");
+    if (chooser.show() == 0 && chooser.filename() && *chooser.filename())
+      chosen = chooser.filename();
+  }
+  if (!chosen) return;
+  const auto path = platform::path_from_utf8(*chosen);
+  if (!path) return;
+  std::error_code file_error;
+  if (!std::filesystem::is_regular_file(*path, file_error)) return;
+  const auto name = platform::path_to_utf8(path->filename());
+  if (!name || name->empty()) return;
+  app_.session.end_text_edit();
+  const auto error = app_.session.edit([&](auto &profile) {
+    read(profile);
+    profile.game.executable_name = *name;
+    if (!profile.game.executable_path.empty()) profile.game.executable_path = *chosen;
+  });
+  if (error) { app_.changed(error); return; }
+  app_.refresh();
+  app_.report(StatusKind::information, "Application set to " + *name + ".");
+}
+
 void ProfilePage::read(layerc::core::GameProfile &candidate) const {
   candidate.name = name_->value();
+  if constexpr (windows_editor_keys) candidate.id = profile_id_->value();
   candidate.game.executable_name = executable_->value();
   candidate.game.executable_path = executable_path_->value();
   describe_application(*executable_path_, candidate.game);
@@ -303,7 +369,8 @@ bool ProfilePage::owns(const Fl_Widget *widget) const {
   return widget != nullptr &&
          (widget == profile_tab_ || widget == name_ || widget == executable_ ||
           widget == executable_path_ || widget == window_class_ ||
-          widget == window_title_ || widget == enabled_ || widget == profile_id_);
+          widget == window_title_ || widget == enabled_ || widget == profile_id_ ||
+          widget == browse_);
 }
 
 void CooldownPage::build(FormBuilder &builder) {
@@ -311,7 +378,10 @@ void CooldownPage::build(FormBuilder &builder) {
   cooldown_tab_->begin();
   cooldowns_ = builder.browser(285, 80, 230, 290, "Cooldowns", EditorMenuContext::cooldowns);
   (void)builder.button(285, 390, 110, "Add cooldown", EditorCommand::add_cooldown);
-  (void)builder.button(405, 390, 110, "Remove", EditorCommand::delete_cooldown);
+  remove_ = builder.button(405, 390, 110, "Remove", EditorCommand::delete_cooldown);
+  remove_->deactivate();
+  remove_reason_ = make_disabled_reason(cooldowns_->x(), remove_->y() + remove_->h(),
+                                        cooldowns_->w(), editor_input_height);
   cooldown_fields_ = new Fl_Group(535, 65, 495, 325);
   cooldown_fields_->begin();
   cooldown_name_ = builder.input(545, 90, 470, "Cooldown name");
@@ -331,6 +401,12 @@ void CooldownPage::fill_list(const layerc::core::GameProfile &profile,
   cooldowns_->clear();
   for (const auto &item : profile.cooldowns) cooldowns_->add(item.name.c_str());
   if (selected) cooldowns_->value(static_cast<int>(*selected + 1));
+  const bool last = selected && profile.cooldowns.size() == 1;
+  const char *reason = last ? "A profile needs at least one cooldown." : "";
+  if (selected && !last) remove_->activate(); else remove_->deactivate();
+  accessibility::describe_with_tooltip(*remove_, reason);
+  remove_reason_->label(reason);
+  if (last) remove_reason_->show(); else remove_reason_->hide();
 }
 
 void CooldownPage::show(const layerc::core::GameProfile &profile,

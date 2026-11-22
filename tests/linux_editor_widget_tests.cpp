@@ -201,9 +201,10 @@ void text_history_and_invalid_navigation() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
   const auto original = app.session.document().profile().name;
-  expect(editor::EditorAppTestAccess::profile_id(app)->readonly() &&
-         std::string(editor::EditorAppTestAccess::profile_id(app)->value()) == app.session.document().profile().id,
-         "read-only profile identity identifies even same-name imports");
+  auto *id = editor::EditorAppTestAccess::profile_id(app);
+  expect((id->readonly() != 0) != editor::windows_editor_keys &&
+         std::string_view(id->value()) == app.session.document().profile().id,
+         "profile identity identifies even same-name imports and is editable only on Windows");
   editor::EditorAppTestAccess::name(app)->value("First"); app.field_changed(editor::EditorAppTestAccess::name(app));
   editor::EditorAppTestAccess::name(app)->value("First edited"); app.field_changed(editor::EditorAppTestAccess::name(app));
   app.command(editor::EditorCommand::undo);
@@ -1063,8 +1064,13 @@ void windows_editor_platform_exclusions();
 #define LAYERC_TASK_PICK_CASES
 #endif
 
+void profile_identity_and_browse();
+void disabled_action_reasons();
+
 LAYERC_TEST_MAIN(
   LAYERC_PLATFORM_WIDGET_CASES
+  LAYERC_TEST_CASE(profile_identity_and_browse),
+  LAYERC_TEST_CASE(disabled_action_reasons),
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_shortcuts_columns),
   LAYERC_TEST_CASE(linux_editor_diagnostic_text_contracts),

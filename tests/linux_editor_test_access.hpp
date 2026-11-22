@@ -74,11 +74,20 @@ struct EditorAppTestAccess {
   static Fl_Check_Button *enabled(EditorApp &app) {
     return app.profile_page_ ? app.profile_page_->enabled() : nullptr;
   }
-  static Fl_Multiline_Output *profile_id(EditorApp &app) {
+  static Fl_Input *profile_id(EditorApp &app) {
     return app.profile_page_ ? app.profile_page_->profile_id() : nullptr;
+  }
+  static Fl_Button *browse_application(EditorApp &app) {
+    return app.profile_page_->browse_;
+  }
+  static void set_application_chooser(EditorApp &app,
+                                      std::function<std::optional<std::string>()> choose) {
+    app.profile_page_->choose_application_ = std::move(choose);
   }
 
   // The Cooldowns tab.
+  static Fl_Button *remove_cooldown(EditorApp &app) { return app.cooldown_page_->remove_; }
+  static Fl_Box *remove_cooldown_reason(EditorApp &app) { return app.cooldown_page_->remove_reason_; }
   static ContextBrowser *cooldowns(EditorApp &app) {
     return app.cooldown_page_ ? app.cooldown_page_->list() : nullptr;
   }
@@ -167,6 +176,7 @@ struct EditorAppTestAccess {
   static Fl_Button *remove_item(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->items_.remove_ : nullptr;
   }
+  static Fl_Box *item_reason(EditorApp &app) { return app.panel_page_->items_.reason_; }
   static Fl_Button *item_up(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->items_.up_ : nullptr;
   }

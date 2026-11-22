@@ -1,6 +1,9 @@
 // Actual FLTK item controls in private fixtures, not physical-input evidence.
 #include "linux_editor_test_access.hpp"
-#include "panel_items.hpp"
+#include "a11y/fltk_semantics.hpp"
+#include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/text.hpp"
+#include "platform/services.hpp"
 #include "profile_edit.hpp"
 #include "editor_test_environment.hpp"
 
@@ -15,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <optional>
 #include <stdexcept>
@@ -148,6 +152,141 @@ const core::Panel &panel(const editor::EditorApp &app) {
   return app.session.document().profile().panels.front();
 }
 } // namespace
+
+void profile_identity_and_browse() {
+  Fixture fixture;
+  auto profile = editor::make_new_profile();
+  profile.game.executable_name = "fixture.exe";
+  const auto path = layerc::platform::profile_directory() / "identity.json";
+  expect(layerc::platform::write_profile_file(path, core::serialize_profile_json(profile)).ok(),
+         "seed the private profile store");
+  editor::EditorApp app;
+  app.build();
+  using Access = editor::EditorAppTestAccess;
+  auto *id = Access::profile_id(app);
+  auto *browse = Access::browse_application(app);
+  const auto accepted = [&]() -> const core::GameProfile & { return app.session.document().profile(); };
+  if constexpr (!editor::windows_editor_keys) {
+    expect(id->readonly() && std::string_view(id->label()) == "Profile ID (read-only)" && !browse,
+           "Linux keeps read-only Profile ID and no Browse button");
+    id->value("local-only");
+    app.field_changed(id);
+    expect(accepted().id == profile.id && !app.session.can_undo(),
+           "Linux's displayed ID cannot edit the profile");
+    return;
+  }
+  expect(!id->readonly() && std::string_view(id->label()) == "Profile ID",
+         "Windows shows an editable Profile ID");
+  id->value("new"); id->do_callback();
+  id->value("new-id"); id->do_callback();
+  expect(accepted().id == "new-id" && app.session.can_undo(), "accepted ID typing edits the document");
+  app.command(editor::EditorCommand::undo);
+  expect(accepted().id == profile.id && id->value() == std::string_view(profile.id) &&
+             !app.session.can_undo(), "one Undo restores the ID and field");
+  app.command(editor::EditorCommand::redo);
+  expect(accepted().id == "new-id" && id->value() == std::string_view("new-id"),
+         "Redo restores the ID and field");
+  id->value(""); id->do_callback();
+  expect(accepted().id == "new-id" && std::string_view(Access::status(app)->value()).starts_with("Invalid input: $.id:"),
+         "empty ID is refused with the ID validation status");
+  id->value("new-id"); id->do_callback();
+  expect(app.save() && app.session.document().path() == path && !app.session.open_path(path) &&
+             accepted().id == "new-id", "Save and reopen preserve the new ID using the same file");
+  app.refresh();
+
+  constexpr std::string_view tip = "Choose the game's .exe file";
+  expect(browse && browse->tooltip() && browse->tooltip() == tip &&
+             editor::a11y::description({browse, editor::a11y::TargetKind::widget}) == tip,
+         "Browse tooltip and accessible description match Win32");
+  if (!browse) return;
+  std::optional<std::string> chosen;
+  Access::set_application_chooser(app, [&] { return chosen; });
+  browse->do_callback();
+  expect(accepted().game == profile.game && !app.session.has_unsaved_changes(),
+         "Cancel changes nothing");
+  const auto application = path.parent_path() / "another.exe";
+  chosen = layerc::platform::path_to_utf8(application);
+  if (!expect(chosen.has_value(), "the private fixture path is representable as UTF-8")) return;
+  browse->do_callback();
+  expect(accepted().game == profile.game && !app.session.has_unsaved_changes(),
+         "a nonexistent selection changes nothing");
+  expect(std::ofstream(application).good(), "create a disposable application file");
+  browse->do_callback();
+  expect(accepted().game.executable_name == "another.exe" && accepted().game.executable_path.empty() &&
+             std::string_view(Access::executable(app)->value()) == "another.exe" &&
+             std::string_view(Access::status(app)->value()) == "Application set to another.exe.",
+         "Browse without exact matching sets only the executable name and reports it");
+  app.command(editor::EditorCommand::undo);
+  expect(accepted().game == profile.game, "one Undo restores the original executable");
+  auto *path_field = Access::executable_path(app);
+  path_field->value("C:\\Games\\fixture.exe"); path_field->do_callback();
+  const auto before_browse = accepted().game;
+  browse->do_callback();
+  expect(accepted().game.executable_name == "another.exe" && accepted().game.executable_path == *chosen &&
+             path_field->value() == std::string_view(*chosen) &&
+             path_field->tooltip() && std::string_view(path_field->tooltip()) == "Matches exactly " + *chosen,
+         "Browse replaces the exact match and refreshes its description");
+  app.command(editor::EditorCommand::undo);
+  expect(accepted().game == before_browse, "one Undo restores both application fields");
+  app.command(editor::EditorCommand::undo);
+  app.command(editor::EditorCommand::new_profile);
+  expect(app.session.is_draft() && accepted().game.executable_name.empty(),
+         "a newly created draft has no application yet");
+  browse->do_callback();
+  expect(accepted().game.executable_name == "another.exe" && accepted().game.executable_path.empty(),
+         "Browse can supply the first application on a new draft");
+}
+
+void disabled_action_reasons() {
+  Fixture fixture;
+  editor::EditorApp app;
+  setup(app);
+  using Access = editor::EditorAppTestAccess;
+  const auto reason = [](Fl_Button &button, const std::string_view text) {
+    return !button.active() && button.tooltip() && button.tooltip() == text &&
+        editor::a11y::description({&button, editor::a11y::TargetKind::widget}) == text;
+  };
+  const auto shows = [](Fl_Box &line, const std::string_view text) {
+    return line.visible() && line.label() && line.label() == text;
+  };
+  auto *cooldown_remove = Access::remove_cooldown(app);
+  auto *cooldown_reason = Access::remove_cooldown_reason(app);
+  constexpr std::string_view cooldown = "A profile needs at least one cooldown.";
+  expect(reason(*cooldown_remove, cooldown) && shows(*cooldown_reason, cooldown),
+         "last cooldown has the visible, tooltip and accessible reason");
+  app.command(editor::EditorCommand::add_cooldown);
+  expect(cooldown_remove->active() && !cooldown_remove->tooltip() && !cooldown_reason->visible() &&
+             editor::a11y::description({cooldown_remove, editor::a11y::TargetKind::widget}).empty(),
+         "second cooldown clears every reason and enables Remove");
+  constexpr std::string_view last = "A panel needs at least one item.";
+  const std::string opaque = "This item kind is kept as it is and can't be edited here.";
+  const std::string full = "A panel holds at most " +
+      std::to_string(core::max_overlay_items_per_panel) + " items.";
+  auto *line = Access::item_reason(app);
+  expect(reason(*Access::remove_item(app), last) && shows(*line, last),
+         "last panel item cannot be removed");
+  const auto populate = [&](const std::size_t count) {
+    expect(!app.session.edit_items([&](auto &candidate, auto &) -> std::optional<std::string> {
+      using Value = core::json::Value;
+      auto &target = candidate.panels.front();
+      core::OverlayItem row;
+      row.content = core::OpaqueOverlayItem{Value(Value::Object{{"kind", Value(std::string("future"))}})};
+      target.items.emplace(count, row);
+      target.cooldown_ids.clear();
+      return std::nullopt;
+    }), "seed the opaque panel rows");
+    app.refresh();
+  };
+  populate(1);
+  expect(reason(*Access::edit_item(app), opaque) && reason(*Access::remove_item(app), last) &&
+             shows(*line, opaque + " " + std::string(last)),
+         "opaque last item shows Edit and Remove reasons side by side in one line");
+  populate(core::max_overlay_items_per_panel);
+  expect(reason(*Access::add_item(app), full) && reason(*Access::edit_item(app), opaque) &&
+             Access::remove_item(app)->active() && shows(*line, full + " " + opaque),
+         "full panel shows Add and Edit reasons in order and permits Remove");
+  Access::window(app).hide();
+}
 
 void linux_editor_typed_item_controls() {
   Fixture fixture;

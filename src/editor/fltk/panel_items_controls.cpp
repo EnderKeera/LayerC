@@ -1,4 +1,6 @@
 #include "panel_items_controls.hpp"
+#include "accessible_widgets.hpp"
+#include "editor_pages.hpp"
 #include "panel_item_dialog.hpp"
 #include "panel_items.hpp"
 #include "editor_app.hpp"
@@ -30,7 +32,10 @@ std::size_t row_count(const core::Panel &panel) {
 void PanelItemsControls::build() {
   group_ = new Fl_Group(495, 295, 540, 140);
   group_->begin();
-  items_ = new Fl_Hold_Browser(500, 310, 355, 112, "Panel items (ordered)");
+  const int reason_height = 2 * editor_input_height;
+  const int reason_y = group_->y() + group_->h() - reason_height;
+  items_ = new Fl_Hold_Browser(500, 310, 355, reason_y - 310, "Panel items (ordered)");
+  reason_ = make_disabled_reason(items_->x(), reason_y, items_->w(), reason_height);
   items_->align(FL_ALIGN_TOP_LEFT);
   items_->format_char(0);
   items_->callback([](Fl_Widget *, void *data) {
@@ -86,22 +91,35 @@ std::optional<std::size_t> PanelItemsControls::selected() const {
 }
 
 void PanelItemsControls::select() {
-  const auto panel = app_.panel_index();
+  const auto index = app_.panel_index();
+  const auto *panel = index ? &app_.session.document().profile().panels[*index] : nullptr;
   const auto row = selected();
-  bool supported = false;
-  if (panel && row) {
-    const auto &value = app_.session.document().profile().panels[*panel];
-    supported = *row < row_count(value) &&
-                core::overlay_item_kind(row_item(value, *row)).has_value();
-  }
+  const auto count = panel ? row_count(*panel) : 0;
+  const bool has_row = panel && row && *row < count;
+  const bool opaque = has_row && !core::overlay_item_kind(row_item(*panel, *row));
+  const bool last = has_row && count == 1;
+  const bool full = count >= core::max_overlay_items_per_panel;
   const auto active = [](Fl_Widget *widget, const bool enabled) {
     if (enabled) widget->activate(); else widget->deactivate();
   };
-  active(add_, panel.has_value());
-  active(edit_, supported);
-  active(remove_, row.has_value());
-  active(up_, row && *row > 0);
-  active(down_, row && *row + 1 < static_cast<std::size_t>(items_->size()));
+  std::string line;
+  const auto action = [&](Fl_Button *button, const bool enabled, const std::string &reason) {
+    active(button, enabled);
+    accessibility::describe_with_tooltip(*button, reason);
+    if (reason.empty()) return;
+    if (!line.empty()) line += ' ';
+    line += reason;
+  };
+  action(add_, panel && !full,
+         full ? "A panel holds at most " + std::to_string(core::max_overlay_items_per_panel) +
+                    " items." : "");
+  action(edit_, has_row && !opaque,
+         opaque ? "This item kind is kept as it is and can't be edited here." : "");
+  action(remove_, has_row && !last, last ? "A panel needs at least one item." : "");
+  active(up_, has_row && *row > 0);
+  active(down_, has_row && *row + 1 < count);
+  reason_->copy_label(line.c_str());
+  if (line.empty()) reason_->hide(); else reason_->show();
 }
 
 void PanelItemsControls::edit(const bool adding) {
