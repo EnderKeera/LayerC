@@ -17,6 +17,7 @@ set(LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES
     src/editor/fltk/diagnostics_window.cpp
     src/editor/fltk/appearance_window.cpp
     src/editor/fltk/editor_tools.cpp
+    src/editor/fltk/options_window.cpp
     src/editor/fltk/editor_placement.cpp
     src/editor/fltk/tasks_window.cpp
     src/editor/fltk/automation_editor.cpp

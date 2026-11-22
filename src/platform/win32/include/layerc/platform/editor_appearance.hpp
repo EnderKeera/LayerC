@@ -49,6 +49,8 @@ struct EditorAppearanceOverrides {
   std::uint32_t disabled{};
 };
 
+inline constexpr std::uint32_t editor_explicit_black_accent = 0x010101U;
+
 struct EditorAppearanceSettings {
   EditorTheme theme{EditorTheme::copper};
   std::uint32_t accent{};

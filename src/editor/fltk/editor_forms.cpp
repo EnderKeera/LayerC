@@ -15,6 +15,7 @@
 #include <FL/Fl_Tabs.H>
 
 #include <algorithm>
+#include <utility>
 
 namespace layerc::editor {
 
@@ -32,7 +33,7 @@ void EditorApp::show_context_menu(const EditorMenuContext context, const bool ha
   if (menus) menus->popup(context, has_target);
 }
 
-void EditorApp::build() {
+void EditorApp::build(std::optional<AppearanceLoad> startup_appearance) {
   window.begin();
   menus = std::make_unique<EditorMenus>(*this, window);
   content = new EditorScroll(0, 0, window.w(), window.h() - EditorMenus::bar_height);
@@ -100,7 +101,7 @@ void EditorApp::build() {
   accessibility->set_status_handler([this](const AccessibilityStatus &status) {
     status_pane_->set_accessibility(accessibility_status_line(status));
   });
-  load_appearance();
+  load_appearance(std::move(startup_appearance));
   if (!session.profiles().profiles.empty()) {
     if (const auto error = session.open(0)) report(StatusKind::failure, *error);
   }

@@ -7,6 +7,8 @@
 #include "editor_app.hpp"
 #include "editor_menus.hpp"
 #include "editor_tools.hpp"
+#include "options_window.hpp"
+#include "platform/editor_appearance_store.hpp"
 #include "hid_binding_dialog.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
@@ -558,18 +560,17 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        }},
       {EditorCommand::options, "&Tools/&Options...", "&Options...", FL_CTRL | ',',
        0, 0, 0, 0, +[](const EditorApp &) { return true; },
-       +[](EditorApp &) { show_text_dialog("Options — LayerE", options_text()); }},
+       +[](EditorApp &app) {
+         if (editor_options_supported()) show_options_dialog(app);
+         else show_text_dialog("Options — LayerE", options_text());
+       }},
       {EditorCommand::appearance, "&Tools/A&ppearance...", "A&ppearance...", 0, 0,
        FL_MENU_DIVIDER, 0, 0, +[](const EditorApp &) { return true; },
        +[](EditorApp &app) {
-         if (!editor_appearance_file_supported()) {
-           app.report(StatusKind::warning, editor_appearance_file_unavailable_reason());
-           return;
-         }
          if (!app.appearance_error_.empty()) {
            fl_message_title("Editor appearance");
-           if (fl_choice("%s\nApplying a new choice replaces the file.", "Cancel",
-                         "Continue", nullptr, app.appearance_error_.c_str()) != 1)
+           if (fl_choice("%s\n%s", "Cancel", "Continue", nullptr,
+                         app.appearance_error_.c_str(), appearance_replacement_prompt()) != 1)
              return;
          }
          const auto chosen =
@@ -580,7 +581,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          }
          app.appearance_ = *chosen;
          if (const auto error =
-                 save_editor_appearance(app.appearance_path_, app.appearance_)) {
+                 save_platform_appearance(app.appearance_)) {
            app.report(StatusKind::warning, *error + " The choice applies until LayerE closes.");
          } else {
            app.appearance_error_.clear();

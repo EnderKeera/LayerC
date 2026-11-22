@@ -88,7 +88,7 @@ private:
   std::unique_ptr<EditorAccessibility> accessibility;
 
 public:
-  void build();
+  void build(std::optional<AppearanceLoad> startup_appearance = std::nullopt);
   void show();
   [[nodiscard]] bool shown() const;
   [[nodiscard]] Fl_Window *main_window() noexcept { return &window; }
@@ -118,7 +118,7 @@ public:
   void command(EditorCommand action);
   void import_profiles();
   // Restores the saved editor appearance (Tools > Appearance) at startup.
-  void load_appearance();
+  void load_appearance(std::optional<AppearanceLoad> startup_appearance);
   [[nodiscard]] const EditorAppearance &appearance() const noexcept { return appearance_; }
   void export_profile(bool pack);
   [[nodiscard]] std::optional<std::size_t> cooldown_index() const;
@@ -155,7 +155,6 @@ private:
   static void opener_tick(void *);
   void stop_opener();
   EditorAppearance appearance_;
-  std::filesystem::path appearance_path_;
   std::string appearance_error_;
   FolderOpener opener_;
   std::string opener_path_;

@@ -27,6 +27,7 @@ find_package(Threads REQUIRED)
 add_library(layerc_editor_fltk_support STATIC
     ${LAYERC_EDITOR_FLTK_PORTABLE_SUPPORT_SOURCES}
     src/editor/fltk/platform/win32/paths.cpp
+    src/editor/fltk/platform/win32/settings_store.cpp
     src/editor/fltk/platform/win32/folder_opener.cpp
     src/editor/fltk/platform/win32/tasks.cpp
     src/editor/fltk/platform/win32/overlay_preview.cpp
@@ -48,7 +49,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/platform/win32/calibration_service.cpp
     src/editor/fltk/platform/win32/binding_events.cpp
     src/editor/fltk/platform/win32/hid_binding_capture.cpp
-    src/editor/fltk/platform/win32/startup.cpp)
+    src/editor/fltk/platform/win32/startup.cpp
+    src/editor/fltk/platform/win32/window_settings.cpp)
 target_include_directories(layerc_editor_fltk PUBLIC src/editor/fltk)
 # Calibration types only; the Windows capture backend arrives with its service.
 target_link_libraries(layerc_editor_fltk PUBLIC

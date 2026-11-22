@@ -66,14 +66,8 @@ ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
 }
 
 int stored_text_scale() {
-  const auto stored = layerc::platform::read_editor_text_scale();
-  if (!stored.value)
-    return 100;
-  const auto percent = static_cast<int>(*stored.value);
-  return std::ranges::find(text_scale_choices, percent) !=
-                 text_scale_choices.end()
-             ? percent
-             : 100;
+  return normalize_editor_text_scale(
+      layerc::platform::read_editor_text_scale().value.value_or(0));
 }
 
 bool profile_checkbox_hit(const RECT &row, const POINT point,

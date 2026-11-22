@@ -2,6 +2,8 @@
 
 #include "editor_app.hpp"
 #include "editor_style.hpp"
+#include "settings_store.hpp"
+#include "window_settings.hpp"
 #include "layerc/platform/editor_instance.hpp"
 #include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -15,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <utility>
 
 namespace layerc::editor {
 namespace {
@@ -34,8 +37,21 @@ void install_editor_icon(const HINSTANCE instance) {
   Fl_Window::default_icons(load(SM_CXICON), load(SM_CXSMICON));
 }
 
-void load_startup_settings() {
-  // P2-E: migrate appearance, load text size and read editor capture exclusion.
+struct CaptureExclusionScope {
+  ~CaptureExclusionScope() { set_editor_capture_exclusion(false); }
+};
+
+struct StartupSettings {
+  StartupAppearance appearance;
+  bool capture_exclusion_read_failed{};
+};
+
+StartupSettings load_startup_settings() {
+  auto appearance = load_startup_appearance();
+  load_startup_text_scale();
+  const auto capture = platform::read_bool_setting(platform::BoolSetting::editor_capture_exclusion);
+  set_editor_capture_exclusion(capture.value.value_or(false));
+  return {std::move(appearance), capture.failed()};
 }
 
 void fit_initial_window(const HWND window) {
@@ -85,6 +101,7 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
   if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
     return 1;
   const ComScope com;
+  Fl::keyboard_screen_scaling(0);
   fl_open_display();
   Fl_Window::default_xclass(platform::editor_fltk_window_class);
   install_editor_icon(instance);
@@ -112,10 +129,14 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
     return 1;
   }
 
-  load_startup_settings();
+  const CaptureExclusionScope capture;
+  auto settings = load_startup_settings();
   install_editor_style();
   EditorApp app;
-  app.build();
+  app.build(std::move(settings.appearance.editor));
+  const WindowsTextScaleShortcuts text_shortcuts([&app](StatusKind kind, std::string text) {
+    app.report(kind, std::move(text));
+  });
   app.show();
   auto *const window = app.main_window();
   const HWND handle = fl_xid(window);
@@ -123,11 +144,13 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
   fit_initial_window(handle);
   if (!platform::native_high_contrast()) {
     const auto colors = platform::native_theme_colors(
-        platform::EditorAppearanceSettings{}, platform::EditorControlRole::toolbar);
+        settings.appearance.native, platform::EditorControlRole::toolbar);
     platform::set_dark_title_bar(handle);
     platform::set_window_frame_colors(handle, colors.fill, colors.border, colors.text);
   }
   if (!app.sync_accessibility()) return 1;
+  if (settings.capture_exclusion_read_failed)
+    app.report(StatusKind::warning, "Could not read the editor capture-exclusion setting.");
 
   if (smoke) Fl::add_timeout(0.2, close_smoke_window, window);
   const int result = Fl::run();

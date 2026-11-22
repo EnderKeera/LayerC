@@ -46,6 +46,7 @@ describe_attachable_window(HWND window);
 [[nodiscard]] bool
 profile_matches_window(const WindowCandidate &candidate,
                        const layerc::core::GameProfile &profile);
+inline constexpr DWORD capture_exclusion_affinity = 0x00000011;
 [[nodiscard]] bool apply_capture_exclusion(HWND window, bool enabled);
 [[nodiscard]] UINT monitor_dpi_for_rect(const RECT &rect);
 [[nodiscard]] bool is_gamebar_overlay_process(DWORD process_id);

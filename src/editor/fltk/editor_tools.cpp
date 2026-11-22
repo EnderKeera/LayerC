@@ -3,6 +3,7 @@
 #include "editor_tools.hpp"
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
+#include "platform/editor_appearance_store.hpp"
 #include "platform/product_text.hpp"
 #include "appearance_window.hpp"
 #include "cooldown_groups_window.hpp"
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 namespace layerc::editor {
 namespace {
@@ -136,16 +138,10 @@ PanelColorsLayout panel_colors_layout() {
   return layout;
 }
 
-void EditorApp::load_appearance() {
-  appearance_path_ = editor_appearance_path();
-  if (editor_appearance_file_supported()) {
-    auto loaded = load_editor_appearance(appearance_path_);
-    appearance_ = loaded.appearance;
-    appearance_error_ = std::move(loaded.error);
-  } else {
-    appearance_ = {};
-    appearance_error_.clear();
-  }
+void EditorApp::load_appearance(std::optional<AppearanceLoad> startup_appearance) {
+  auto loaded = startup_appearance ? std::move(*startup_appearance) : load_platform_appearance();
+  appearance_ = loaded.appearance;
+  appearance_error_ = std::move(loaded.error);
   // The default is a preset too, so it is always applied.
   apply_editor_appearance(appearance_, window, profiles, preview);
 }

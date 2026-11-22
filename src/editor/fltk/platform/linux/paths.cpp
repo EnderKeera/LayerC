@@ -1,3 +1,5 @@
+#include "platform/editor_appearance_store.hpp"
+#include "platform/editor_options.hpp"
 #include "platform/product_text.hpp"
 #include "platform/services.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
@@ -27,9 +29,33 @@ std::filesystem::path editor_appearance_path() {
   return roots.config_profiles.parent_path() / "editor-appearance.json";
 }
 
-bool editor_appearance_file_supported() noexcept { return true; }
+AppearanceLoad load_platform_appearance() {
+  return load_editor_appearance(editor_appearance_path());
+}
 
-std::string editor_appearance_file_unavailable_reason() { return {}; }
+std::optional<std::string> save_platform_appearance(const EditorAppearance &appearance) {
+  return save_editor_appearance(editor_appearance_path(), appearance);
+}
+
+const char *appearance_replacement_prompt() noexcept {
+  return "Applying a new choice replaces the file.";
+}
+
+bool editor_options_supported() noexcept { return false; }
+
+EditorOptionsLoad load_editor_options(bool, int) { return {}; }
+
+void notify_editor_options_reload() {}
+
+std::optional<std::string_view> commit_editor_options(const EditorOptions &, void (*)()) {
+  return std::nullopt;
+}
+
+int current_editor_text_scale() noexcept { return text_scale_choices.front(); }
+
+bool editor_capture_exclusion_enabled() noexcept { return false; }
+
+void apply_editor_options_live(const EditorOptions &) {}
 
 std::string_view folder_opener_name() noexcept { return "xdg-open"; }
 

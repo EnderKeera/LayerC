@@ -14,11 +14,6 @@
 #include <shellscalingapi.h>
 
 namespace layerc::platform {
-namespace {
-
-constexpr DWORD capture_exclusion_affinity = 0x00000011;
-
-} // namespace
 
 std::filesystem::path sibling_image_path(const wchar_t *filename) {
   std::vector<wchar_t> module(32'768);

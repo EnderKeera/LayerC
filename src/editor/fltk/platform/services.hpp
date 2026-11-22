@@ -57,8 +57,6 @@ using StandaloneLiveDraftsResult =
 [[nodiscard]] StandaloneLiveDraftsResult
 make_standalone_live_drafts(std::function<void()> ready);
 
-[[nodiscard]] bool editor_appearance_file_supported() noexcept;
-[[nodiscard]] std::string editor_appearance_file_unavailable_reason();
 [[nodiscard]] std::string_view folder_opener_name() noexcept;
 
 // A bounded, demand-opened scan. Matching excludes this editor's own process.

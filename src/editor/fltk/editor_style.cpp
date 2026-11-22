@@ -1,4 +1,7 @@
 #include "editor_style.hpp"
+#ifdef _WIN32
+#include "platform/win32/window_settings.hpp"
+#endif
 #include "editor_appearance.hpp"
 #include "platform/services.hpp"
 
@@ -125,8 +128,12 @@ void apply_desktop_font() {
   // (DesignSystem.md, Density).
   const auto metrics = desktop_text_metrics(font->pixels);
   FL_NORMAL_SIZE = metrics.normal_size;
+#ifdef _WIN32
+  multiply_windows_screen_scales(metrics.scale);
+#else
   for (int screen = 0; screen < Fl::screen_count(); ++screen)
     Fl::screen_scale(screen, Fl::screen_scale(screen) * metrics.scale);
+#endif
 }
 
 } // namespace

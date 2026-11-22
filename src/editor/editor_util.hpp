@@ -4,6 +4,7 @@
 #include "layerc/core/visual.hpp"
 #include "daemon_process.hpp"
 #include "editor_prompt.hpp"
+#include "editor_text_scale.hpp"
 #include "profile_edit.hpp"
 #include "layerc/platform/native_theme.hpp"
 
@@ -44,8 +45,6 @@ struct ProfileCheckboxMetrics {
 
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
-// Options > Text size, stored through platform::write_editor_text_scale.
-inline constexpr std::array text_scale_choices{100, 115, 130};
 [[nodiscard]] int stored_text_scale();
 
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);

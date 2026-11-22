@@ -30,26 +30,11 @@ std::string profile_directory_unavailable_reason() {
   return "The Windows profile directory is unavailable.";
 }
 
-std::filesystem::path editor_appearance_path() { return {}; }
-
-bool editor_appearance_file_supported() noexcept { return false; }
-
-std::string editor_appearance_file_unavailable_reason() {
-  return "Appearance settings are unavailable in this editor.";
-}
-
 std::string_view folder_opener_name() noexcept { return "Explorer"; }
 
 std::string_view editor_product_line() noexcept { return "Windows editor"; }
 
-const char *editor_options_text() noexcept {
-  return "Exclude editor windows from screen capture\n"
-         "  This setting is unavailable in this editor.\n\n"
-         "Isolated visual recognition\n"
-         "  LayerD manages visual recognition. The profile's isolated worker setting is preserved.\n\n"
-         "Advanced settings\n"
-         "  All fields are shown, including IDs, charges, retrigger and recovery.";
-}
+const char *editor_options_text() noexcept { return nullptr; }
 
 const char *visual_tab_note() noexcept {
   return "The Visual tab calibrates visual recognition. Game Bar companion data are preserved.";

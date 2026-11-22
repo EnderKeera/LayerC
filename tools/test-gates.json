@@ -38,6 +38,7 @@
         "layerc_windows_fltk_daemon_link_tests",
         "layerc_windows_fltk_notification_tests",
         "layerc_windows_fltk_patterns_tests",
+        "layerc_windows_fltk_settings_tests",
         "layerc_windows_fltk_smoke",
         "layerc_windows_fltk_startup_tests",
         "layerc_windows_fltk_text_tests",
