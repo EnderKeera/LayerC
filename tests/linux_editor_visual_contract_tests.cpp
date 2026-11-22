@@ -9,11 +9,10 @@
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "linux_editor_test_access.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
-#include <sys/stat.h>
 
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
@@ -71,22 +70,8 @@ void visit(Fl_Group &group, const std::function<void(Fl_Widget &)> &visit_widget
 class PrivateStore final {
 public:
   PrivateStore()
-      : temp_("layerc-editor-visual-contract"),
-        home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        cache_("XDG_CACHE_HOME", temp_.path() / "cache"),
-        state_("XDG_STATE_HOME", temp_.path() / "state"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt),
-        store_override_("LAYERC_STORE_ROOT", std::nullopt),
-        bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
-        accessibility_bus_("AT_SPI_BUS_ADDRESS", std::nullopt),
-        backend_("FLTK_BACKEND", std::filesystem::path("x11")) {
-    layerc::test::require_x11();
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "fixture control namespace is private");
+      : temp_("layerc-editor-visual-contract", layerc::test::EditorTestScope::widget,
+              "fixture control namespace is private") {
     auto profile = editor::make_new_profile();
     profile.game.executable_name = "fixture.exe";
     expect(platform::write_profile_file(platform::profile_directory() / "fixture.json",
@@ -95,9 +80,7 @@ public:
   }
 
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, cache_, state_,
-      override_, store_override_, bus_, accessibility_bus_, backend_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 // Drives the real modal once FLTK has mapped it, then stops retrying.
@@ -134,9 +117,11 @@ private:
 
 } // namespace
 
+// Native sampling dialog on Windows: layerc_windows_fltk_calibration_tests.
+#ifndef _WIN32
 void linux_editor_calibration_layout_contracts() {
   layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
-  layerc::test::require_x11();
+  layerc::test::require_editor_window();
   auto profile = editor::make_new_profile();
   auto seed = editor::CalibrationModel::open(profile, profile.cooldowns.front().id, std::nullopt);
   if (!expect(seed.has_value(), "the layout contract seeds from the selected cooldown")) return;
@@ -287,10 +272,11 @@ void linux_editor_calibration_layout_contracts() {
   expect(action.delivered() && inspected && !result,
          "the inspected calibration modal is dismissed without a draft");
 }
+#endif
 
 void linux_editor_black_accent_dialog_contracts() {
   layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
-  layerc::test::require_x11();
+  layerc::test::require_editor_window();
   Fl_Window root(400, 300);
   auto *list = new Fl_Hold_Browser(10, 10, 380, 280);
   root.end();
@@ -414,7 +400,7 @@ void linux_editor_main_window_text_and_tab_labels() {
 
 void linux_editor_text_views_fit_content() {
   layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
-  layerc::test::require_x11();
+  layerc::test::require_editor_window();
   Fl_Double_Window window(560, 400);
   auto *text = new Fl_Multiline_Output(10, 10, 540, 340);
   auto *close = new Fl_Button(440, 360, 110, 30, "Close");

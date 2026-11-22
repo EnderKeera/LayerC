@@ -612,30 +612,6 @@ void linux_editor_accessibility_popup_focus_events() {
   Fl::check();
 }
 
-// Every shortcut row is "key<TAB>description" from the command table, F1
-// included, so the dialog can measure two columns (DesignSystem.md, Keyboard).
-void linux_editor_shortcuts_columns() {
-  const std::string rows = layerc::editor::shortcut_help();
-  expect(rows.find("F1\t") != std::string::npos, "F1 appears in the shortcut table");
-  bool tabbed = true;
-  std::size_t start = 0;
-  while (start < rows.size()) {
-    const auto end = rows.find('\n', start);
-    const auto line =
-        rows.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    if (!line.empty())
-      tabbed = tabbed && line.find('\t') != std::string::npos &&
-               line.find('\t') == line.rfind('\t');
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-  expect(tabbed, "every shortcut row has exactly one tab and no space-aligned columns");
-  expect(rows.find("\tSave") != std::string::npos &&
-             rows.find("\tUndo") != std::string::npos &&
-             rows.find("\tRedo") != std::string::npos,
-         "command-table shortcut rows appear with their keys");
-}
-
 // The visible line says the same thing the status reports, and it changes while
 // the editor stays open.
 void linux_editor_accessibility_status_lines() {

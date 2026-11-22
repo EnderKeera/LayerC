@@ -2,7 +2,7 @@
 #include "linux_editor_test_access.hpp"
 #include "panel_items.hpp"
 #include "profile_edit.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -22,7 +22,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-#include <sys/stat.h>
 
 namespace {
 namespace editor = layerc::editor;
@@ -33,27 +32,10 @@ using test::expect;
 class Fixture final {
 public:
   Fixture()
-      : temp_("layerc-editor-items"),
-        home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        cache_("XDG_CACHE_HOME", temp_.path() / "cache"),
-        state_("XDG_STATE_HOME", temp_.path() / "state"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt),
-        store_("LAYERC_STORE_ROOT", std::nullopt),
-        bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
-        accessibility_bus_("AT_SPI_BUS_ADDRESS", std::nullopt),
-        backend_("FLTK_BACKEND", std::filesystem::path("x11")) {
-    test::require_x11();
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "item tests use a private control namespace");
-  }
+      : temp_("layerc-editor-items", layerc::test::EditorTestScope::widget,
+              "item tests use a private control namespace") {}
 private:
-  test::TempDirectory temp_;
-  test::ScopedEnvironment home_, config_, data_, runtime_, cache_, state_,
-      override_, store_, bus_, accessibility_bus_, backend_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 template <typename T>

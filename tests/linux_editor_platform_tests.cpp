@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -17,6 +18,7 @@ namespace core = layerc::core;
 namespace test = layerc::test;
 using test::expect;
 
+#ifndef _WIN32
 std::optional<editor::FolderOpenExit> wait_for_exit(editor::FolderOpener &opener) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
   while (std::chrono::steady_clock::now() < deadline) {
@@ -25,6 +27,7 @@ std::optional<editor::FolderOpenExit> wait_for_exit(editor::FolderOpener &opener
   }
   return std::nullopt;
 }
+#endif
 
 void process_identity_is_stable() {
   const auto first = editor::current_process_id();
@@ -32,6 +35,8 @@ void process_identity_is_stable() {
          "the service exposes a stable, nonzero process identity");
 }
 
+#ifndef _WIN32
+// POSIX launcher and in-process Linux calibration contracts are not the Windows shell/helper.
 void missing_folder_launcher_remains_idle() {
   test::TempDirectory temporary{"layerc-folder-unavailable"};
   test::ScopedEnvironment path{"PATH", temporary.path()};
@@ -96,10 +101,22 @@ void unavailable_calibration_has_a_fault_and_rejects_unknown_keys() {
   expect(!source.running(), "headless source cleanup is repeatable");
 }
 
+#endif
 } // namespace
 
+#ifdef _WIN32
+void windows_editor_platform_contracts() {
+  process_identity_is_stable();
+  std::cout << "Not applicable: missing_folder_launcher_remains_idle, "
+               "folder_launcher_preserves_arguments_and_exit_status "
+               "(xdg-open/POSIX; Windows uses the shell, no matching fake launcher)\n"
+               "Not applicable: unavailable_calibration_has_a_fault_and_rejects_unknown_keys "
+               "(headless X11 capture; Windows: layerc_windows_fltk_calibration_tests)\n";
+}
+#else
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(process_identity_is_stable),
     LAYERC_TEST_CASE(missing_folder_launcher_remains_idle),
     LAYERC_TEST_CASE(folder_launcher_preserves_arguments_and_exit_status),
     LAYERC_TEST_CASE(unavailable_calibration_has_a_fault_and_rejects_unknown_keys))
+#endif

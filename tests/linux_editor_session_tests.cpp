@@ -5,15 +5,16 @@
 #include "automation_graph.hpp"
 #include "visual_calibration.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
-#include "layerc/platform/profile_store_linux.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include "template_png_fixture.hpp"
 #include <array>
 #include <span>
 #include "layerc/core/companion.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
+#ifdef _WIN32
+#include "layerc/platform/win32_handle.hpp"
+#endif
 
-#include <sys/stat.h>
 #include <algorithm>
 #include <filesystem>
 #include <optional>
@@ -31,14 +32,8 @@ using layerc::test::expect;
 class Fixture {
 public:
   Fixture()
-      : temp_("layerc-editor-session"), home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt) {
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "the control namespace is private and disposable");
+      : temp_("layerc-editor-session", layerc::test::EditorTestScope::store,
+              "the control namespace is private and disposable") {
     directory = platform::profile_directory();
     path = directory / "fixture.json";
     external = temp_.path() / "export";
@@ -74,8 +69,7 @@ public:
   std::filesystem::path directory, path, external;
   core::GameProfile profile;
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, override_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 std::optional<platform::ProfileBundleLoad> load(const std::filesystem::path &path) {
@@ -488,8 +482,16 @@ void visual_candidates_history_and_recovery() {
   expect(session.redo() && !session.document().has_unreadable_module(),
          "redo restores the explicit validated repair");
   {
-    platform::TransactionFileLock lock(platform::profile_store_roots());
+#ifdef _WIN32
+    platform::OwnedHandle lock(CreateFileW(bad.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!expect(lock.valid(), "prevent replacement of the disposable visual sidecar")) return;
+#else
+    const auto scope = platform::profile_transaction_scope(fixture.directory);
+    if (!expect(scope.has_value(), "resolve the private transaction scope")) return;
+    platform::TransactionFileLock lock(*scope);
     expect(lock.locked(), "take the disposable store writer lock");
+#endif
     const auto failed = session.save([] { return true; });
     expect(!failed.saved() && !failed.reload && session.document().dirty() &&
                layerc::test::read_file(bad) == std::optional<std::string>("{broken"),
@@ -549,13 +551,23 @@ void duplicate_templates_retains_bytes_and_commits_atomically() {
              !std::filesystem::exists(copied_first),
          "refused copy Save publishes neither the bundle nor a prefix of the asset set");
   std::filesystem::remove(copied_second);
+#ifdef _WIN32
+  std::filesystem::create_directory(platform::visual_sidecar_path(destination));
+#endif
   {
-    platform::TransactionFileLock lock(platform::profile_store_roots());
+#ifndef _WIN32
+    const auto scope = platform::profile_transaction_scope(fixture.directory);
+    if (!expect(scope.has_value(), "resolve the private transaction scope")) return;
+    platform::TransactionFileLock lock(*scope);
     expect(lock.locked(), "hold only the disposable store writer");
+#endif
     const auto busy = session.save([] { return true; });
     expect(!busy.saved() && !busy.reload && !std::filesystem::exists(destination),
            "busy writer preserves the complete duplicate draft");
   }
+#ifdef _WIN32
+  std::filesystem::remove(platform::visual_sidecar_path(destination));
+#endif
   expect(session.save([] { return true; }).saved() &&
              layerc::test::read_file(copied_first) == std::optional<std::string>(canonical.bytes) &&
              layerc::test::read_file(copied_second) == std::optional<std::string>(original),
@@ -619,10 +631,18 @@ void calibration_assets_publish_with_bundle_and_survive_undo() {
   auto *accepted_again = std::get_if<editor::AcceptedCalibration>(&again);
   expect(accepted_again && !session.apply_calibration(std::move(*accepted_again)) &&
              session.owned_template_assets().size() == 1,
-         "the calibration applies again with fresh owned bytes");
+          "the calibration applies again with fresh owned bytes");
   {
-    platform::TransactionFileLock lock(platform::profile_store_roots());
+#ifdef _WIN32
+    platform::OwnedHandle lock(CreateFileW(sidecar.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!expect(lock.valid(), "prevent replacement of the disposable visual sidecar")) return;
+#else
+    const auto scope = platform::profile_transaction_scope(fixture.directory);
+    if (!expect(scope.has_value(), "resolve the private transaction scope")) return;
+    platform::TransactionFileLock lock(*scope);
     expect(lock.locked(), "hold only the disposable store writer");
+#endif
     const auto busy = session.save([] { return true; });
     expect(!busy.saved() && !busy.reload && !std::filesystem::exists(asset) &&
                layerc::test::read_file(sidecar) == before && session.document().dirty() &&
@@ -643,7 +663,12 @@ void calibration_assets_publish_with_bundle_and_survive_undo() {
          }), "remove the duplicate's visual module before its first Save");
   const auto destination = editor::default_profile_path(fixture.directory, session.document().profile());
   const auto copied = platform::profile_visual_asset_path(destination, canonical.sha256);
-  expect(session.save([] { return true; }).saved() && !std::filesystem::exists(copied) &&
+  expect(session.save([] { return true; }).saved() &&
+#ifdef _WIN32
+             copied == asset && layerc::test::read_file(copied) == std::optional<std::string>(canonical.bytes) &&
+#else
+             !std::filesystem::exists(copied) &&
+#endif
              session.owned_template_assets().size() == 1,
          "an unreferenced owned asset stays owned after the first Save");
   std::filesystem::remove(asset);

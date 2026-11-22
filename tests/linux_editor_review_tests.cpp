@@ -8,7 +8,7 @@
 #include "editor_scroll.hpp"
 #include "editor_style.hpp"
 #include "fltk_a11y_snapshot_support.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -19,7 +19,9 @@
 #include <FL/Fl_Value_Input.H>
 #include <FL/Fl_Window.H>
 #include <FL/platform.H>
+#ifndef _WIN32
 #include <X11/Xutil.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -84,36 +86,36 @@ void scroll_focus_and_effective_extents() {
   Fl_Window window(500, 300);
   editor::EditorScroll host(0, 0, 500, 300);
   Fl_Group canvas(0, 0, 900, 700);
-  Fl_Input near(12, 12, 160, 28, "Near");
-  Fl_Input far(680, 600, 160, 28, "Far");
+  Fl_Input near_field(12, 12, 160, 28, "Near");
+  Fl_Input far_field(680, 600, 160, 28, "Far");
   canvas.end(); host.end(); window.resizable(host); window.end();
-  window.show(); near.take_focus(); Fl::check();
+  window.show(); near_field.take_focus(); Fl::check();
   a11y::FltkTree tree;
   auto snapshot = tree.snapshot();
-  const a11y::Node *object = find(tree, snapshot, far);
+  const a11y::Node *object = find(tree, snapshot, far_field);
   if (!expect(object != nullptr, "LNX-01 offscreen widget stays exported")) return;
   const auto far_id = object->id;
   expect(!a11y_snapshot::showing(object) &&
              a11y_snapshot::bounds(object) == a11y_snapshot::Bounds{},
          "LNX-01 fully clipped controls are not showing and have zero extents");
-  expect(far.take_focus() != 0, "LNX-01 offscreen input can take keyboard focus");
+  expect(far_field.take_focus() != 0, "LNX-01 offscreen input can take keyboard focus");
   Fl::check();
   snapshot = tree.snapshot();
   object = a11y_snapshot::lookup(snapshot, far_id);
   const auto view = host.viewport();
-  expect(host.xposition() > 0 && host.yposition() > 0 && far.x() >= view.x && far.y() >= view.y &&
-             far.x() + far.w() <= view.x + view.width && far.y() + far.h() <= view.y + view.height,
+  expect(host.xposition() > 0 && host.yposition() > 0 && far_field.x() >= view.x && far_field.y() >= view.y &&
+             far_field.x() + far_field.w() <= view.x + view.width && far_field.y() + far_field.h() <= view.y + view.height,
          "LNX-01 a focus transition reveals the whole input on both axes, excluding scrollbars");
   expect(a11y_snapshot::showing(object) && a11y_snapshot::focused(object),
          "LNX-01 revealed input reports focused and showing");
-  host.scroll_to(host.xposition() + far.x() - host.viewport().x + far.w() / 2, host.yposition());
+  host.scroll_to(host.xposition() + far_field.x() - host.viewport().x + far_field.w() / 2, host.yposition());
   Fl::check();
   snapshot = tree.snapshot();
   object = a11y_snapshot::lookup(snapshot, far_id);
   const auto partial = a11y_snapshot::bounds(object);
-  expect(partial[2] > 0 && partial[2] < far.w() && a11y_snapshot::showing(object),
+  expect(partial[2] > 0 && partial[2] < far_field.w() && a11y_snapshot::showing(object),
          "LNX-01 partially clipped extents are intersected, without undoing manual scroll");
-  near.take_focus();
+  near_field.take_focus();
   Fl::check();
   snapshot = tree.snapshot();
   object = a11y_snapshot::lookup(snapshot, far_id);
@@ -247,6 +249,20 @@ void text_dialog_layouts() {
     if (!expect(close != nullptr, "LNX-03 dialog has a Close action")) { modal.hide(); return; }
     const int width = close->w(), height = close->h();
     const int right = modal.w() - close->x() - width, bottom = modal.h() - close->y() - height;
+#ifdef _WIN32
+    int min_width{}, min_height{};
+    modal.get_size_range(&min_width, &min_height, nullptr, nullptr, nullptr, nullptr, nullptr);
+    MINMAXINFO info{};
+    SendMessageW(fl_xid(&modal), WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&info));
+    const float scale = Fl::screen_scale(modal.screen_num());
+    expect(min_width > width && min_height > height &&
+               info.ptMinTrackSize.x >= static_cast<LONG>(scale * static_cast<float>(min_width)) &&
+               info.ptMinTrackSize.y >= static_cast<LONG>(scale * static_cast<float>(min_height)),
+           "measured minimum geometry is published in Windows track sizes");
+    const std::array sizes{std::array{1400, 320}, std::array{min_width, 850}, std::array{560, 400}};
+    for (const auto size : sizes) {
+      modal.size(std::max(size[0], min_width), std::max(size[1], min_height));
+#else
     XSizeHints hints{}; long supplied{};
     expect(XGetWMNormalHints(fl_display, fl_xid(&modal), &hints, &supplied) && (hints.flags & PMinSize) &&
                hints.min_width > width && hints.min_height > height,
@@ -254,6 +270,7 @@ void text_dialog_layouts() {
     for (const auto size : {std::array{1400, 320}, std::array{static_cast<int>(hints.min_width), 850}, std::array{560, 400}}) {
       modal.size(std::max(size[0], static_cast<int>(hints.min_width)),
                    std::max(size[1], static_cast<int>(hints.min_height)));
+#endif
       expect(close->w() == width && close->h() == height && modal.w() - close->x() - close->w() == right &&
                  modal.h() - close->y() - close->h() == bottom,
              "LNX-03 resizing preserves fixed action dimensions and right/bottom anchors");
@@ -316,7 +333,7 @@ void named_color_chooser_and_roles() {
 } // namespace
 void linux_editor_review_regressions() {
   layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
-  layerc::test::require_x11();
+  layerc::test::require_editor_window();
   scroll_focus_and_effective_extents();
   popup_semantics_and_recovery();
   text_dialog_layouts();

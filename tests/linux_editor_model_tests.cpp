@@ -4,11 +4,10 @@
 #include "profile_edit.hpp"
 #include "task_list.hpp"
 #include "status_voice.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
 
-#include <sys/stat.h>
-#include <unistd.h>
+#include "platform/services.hpp"
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -25,15 +24,8 @@ using layerc::editor::CommitResult;
 class Fixture {
 public:
   Fixture()
-      : temp_("layerc-editor-model"),
-        home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt) {
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "the fixture owns its private control directory");
+      : temp_("layerc-editor-model", layerc::test::EditorTestScope::store,
+              "the fixture owns its private control directory") {
     directory = layerc::platform::profile_directory();
     path = directory / "fixture.json";
     profile = layerc::editor::make_new_profile();
@@ -57,8 +49,7 @@ public:
   std::filesystem::path path;
   layerc::core::GameProfile profile;
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, override_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 void edit_save_roundtrip_and_disconnected() {
@@ -207,7 +198,7 @@ void native_style_helpers() {
 void appearance_persistence() {
   using namespace layerc::editor;
   const auto root = std::filesystem::temp_directory_path() /
-                    ("layerc-appearance-" + std::to_string(::getpid()));
+                    ("layerc-appearance-" + std::to_string(current_process_id()));
   std::filesystem::remove_all(root);
   const auto path = root / "layerc" / "editor-appearance.json";
   const auto missing = load_editor_appearance(path);
@@ -490,7 +481,11 @@ void daemon_status_kind_contracts() {
   expect(status.kind() == StatusKind::warning, "a running daemon with a payload error warns");
   status.error.clear();
   status.x11_connected = false;
-  expect(status.kind() == StatusKind::warning, "an X11 session needs its X11 connection");
+  if constexpr (layerc::editor::windows_editor_keys) {
+    expect(status.kind() == StatusKind::success, "Windows does not require an X11 connection");
+  } else {
+    expect(status.kind() == StatusKind::warning, "an X11 session needs its X11 connection");
+  }
   status.display.emplace();
   status.display->session = layerc::runtime::DisplaySession::wayland;
   expect(status.kind() == StatusKind::success, "a Wayland session does not require XWayland");
@@ -559,7 +554,15 @@ void save_report_kind_contracts() {
 
 } // namespace
 
+#ifdef _WIN32
+void windows_editor_platform_contracts();
+#define LAYERC_WINDOWS_PLATFORM_CASE LAYERC_TEST_CASE(windows_editor_platform_contracts),
+#else
+#define LAYERC_WINDOWS_PLATFORM_CASE
+#endif
+
 LAYERC_TEST_MAIN(
+    LAYERC_WINDOWS_PLATFORM_CASE
     LAYERC_TEST_CASE(save_report_kind_contracts),
     LAYERC_TEST_CASE(daemon_status_kind_contracts),
     LAYERC_TEST_CASE(edit_save_roundtrip_and_disconnected),

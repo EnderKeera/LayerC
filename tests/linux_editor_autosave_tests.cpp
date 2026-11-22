@@ -2,7 +2,7 @@
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
 #include "linux_editor_test_access.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -13,7 +13,6 @@
 #include <FL/Fl_Window.H>
 #include <chrono>
 #include <filesystem>
-#include <sys/stat.h>
 namespace {
 namespace editor = layerc::editor;
 namespace core = layerc::core;
@@ -21,17 +20,9 @@ namespace platform = layerc::platform;
 using layerc::test::expect;
 class Fixture {
 public:
-  Fixture() : temp_("layerc-autosave"),
-      home_("HOME", temp_.path()), config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-      data_("XDG_DATA_HOME", temp_.path() / "data"),
-      runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-      bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
-      accessibility_("AT_SPI_BUS_ADDRESS", std::nullopt),
-      backend_("FLTK_BACKEND", std::filesystem::path("x11")),
-      override_("LAYERC_PROFILE_DIR", std::nullopt) {
-    layerc::test::require_x11();
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0, "private control runtime");
+  Fixture()
+      : temp_("layerc-autosave", layerc::test::EditorTestScope::autosave,
+              "private control runtime") {
     path = platform::profile_directory() / "fixture.json";
   }
   void store(bool legacy = false) {
@@ -53,8 +44,7 @@ public:
   }
   std::filesystem::path path;
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, bus_, accessibility_, backend_, override_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 void wait(double seconds) {
   const auto until = core::MonotonicClock::now() + std::chrono::duration_cast<core::MonotonicClock::duration>(
@@ -220,7 +210,18 @@ void refused_save_and_presentation_only_report() {
   editor::EditorAppTestAccess::window(app_with_listener).hide();
 }
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(debounce_undo_and_offline_save),
+void windows_locked_target_save_and_retry();
+void windows_interrupted_import_recovery();
+#ifdef _WIN32
+#define LAYERC_WINDOWS_RECOVERY_CASES \
+  LAYERC_TEST_CASE(windows_locked_target_save_and_retry), \
+  LAYERC_TEST_CASE(windows_interrupted_import_recovery),
+#else
+#define LAYERC_WINDOWS_RECOVERY_CASES
+#endif
+
+LAYERC_TEST_MAIN(LAYERC_WINDOWS_RECOVERY_CASES
+                 LAYERC_TEST_CASE(debounce_undo_and_offline_save),
                  LAYERC_TEST_CASE(draft_first_save_then_autosave),
                  LAYERC_TEST_CASE(invalid_buffer_then_recovery),
                  LAYERC_TEST_CASE(write_failure_then_recovery),

@@ -11,7 +11,9 @@
 #include "export_selection_window.hpp"
 #include "appearance_window.hpp"
 #include "linux_editor_test_access.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
+#include "platform/calibration_service.hpp"
+#include "platform/services.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/calibration_readiness.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -30,11 +32,12 @@
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Window.H>
+#ifndef _WIN32
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <unistd.h>
-#include <sys/stat.h>
+#endif
 #include <algorithm>
 #include <filesystem>
 #include <functional>
@@ -82,22 +85,8 @@ using layerc::test::expect;
 class Fixture final {
 public:
   Fixture()
-      : temp_("layerc-editor-widget"),
-        home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        cache_("XDG_CACHE_HOME", temp_.path() / "cache"),
-        state_("XDG_STATE_HOME", temp_.path() / "state"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt),
-        store_override_("LAYERC_STORE_ROOT", std::nullopt),
-        bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
-        accessibility_bus_("AT_SPI_BUS_ADDRESS", std::nullopt),
-        backend_("FLTK_BACKEND", std::filesystem::path("x11")) {
-    layerc::test::require_x11();
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "fixture control namespace is private");
+      : temp_("layerc-editor-widget", layerc::test::EditorTestScope::widget,
+              "fixture control namespace is private") {
     path = platform::profile_directory() / "fixture.json";
   }
   void store() {
@@ -108,9 +97,7 @@ public:
   }
   std::filesystem::path path;
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, cache_, state_,
-      override_, store_override_, bus_, accessibility_bus_, backend_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 struct Reply {
@@ -175,8 +162,15 @@ void empty_draft_save_and_reopen() {
                editor::a11y::description({button, editor::a11y::TargetKind::widget}) == text,
            "portable profile tooltip also supplies the accessible description");
   }
-  expect(!editor::EditorAppTestAccess::duration(app)->tooltip(),
-         "Windows numeric-step instructions are not advertised on Linux");
+  auto *duration = editor::EditorAppTestAccess::duration(app);
+  if constexpr (editor::windows_editor_keys) {
+    constexpr std::string_view hint = "Up / Down or the mouse wheel step 0.1 s (Shift: 1 s)";
+    expect(duration->tooltip() && duration->tooltip() == hint &&
+               editor::a11y::description({duration, editor::a11y::TargetKind::widget}) == hint,
+           "Windows Duration advertises its numeric stepping keys");
+  } else {
+    expect(!duration->tooltip(), "Windows numeric-step instructions are not advertised on Linux");
+  }
   app.command(editor::EditorCommand::new_profile);
   expect(app.session.is_draft() && editor::EditorAppTestAccess::tabs(app)->active(), "New enables the draft controls");
   editor::EditorAppTestAccess::name(app)->value("Widget draft"); app.field_changed(editor::EditorAppTestAccess::name(app));
@@ -568,6 +562,10 @@ void automation_json_and_simulator_lifetime() {
          "a failed view change preserves invalid JSON");
   app.command(editor::EditorCommand::undo);
   auto replacement = app.session.document().automation();
+  if (!replacement || replacement->automations.empty()) {
+    expect(false, "undo leaves the accepted automation available for JSON editing");
+    return;
+  }
   replacement->automations.front().name = "Applied JSON";
   const auto text = editor::automation_graph_json(replacement);
   json.value(text.c_str()); json.do_callback();
@@ -677,6 +675,7 @@ void visual_page_history_and_cancel() {
   app.command(editor::EditorCommand::undo);
   expect(app.session.document().visual().has_value(), "Undo restores the removed visual module");
   const auto before = *app.session.document().visual();
+#ifndef _WIN32
   {
     Answer cancel("Cancel calibration");
     visual_control<Fl_Button>(app, "Calibrate visual...").do_callback();
@@ -685,12 +684,35 @@ void visual_page_history_and_cancel() {
   expect(*app.session.document().visual() == before &&
          std::string(editor::EditorAppTestAccess::status(app)->value()).find("Calibration cancelled") == 0,
          "Cancel preserves the complete unsaved visual draft and explains no writes");
+#else
+  editor::CalibrationModel seed_for_cancel = std::move(*seed);
+  const editor::CalibrationHost host{
+      .report = [&](editor::StatusKind kind, const std::string &text) { app.report(kind, text); },
+      .resolve_target = [] { return std::optional<editor::TaskCandidate>{}; },
+      .owner = app.main_window(),
+  };
+  const auto declined = editor::run_platform_calibration(
+      host, app.session.document(), id, std::move(seed_for_cancel),
+      [](const editor::CalibrationDraft &) -> editor::CalibrationAcceptance {
+        return std::string("Unexpected Apply");
+      }, {});
+  expect(std::get<editor::CalibrationEnd>(declined) == editor::CalibrationEnd::reported &&
+             *app.session.document().visual() == before,
+         "Windows target cancellation never opens the helper or edits the draft");
+#endif
   auto &isolated = visual_control<Fl_Check_Button>(app, "Isolated visual runtime");
   isolated.value(1); isolated.do_callback();
-  expect(app.session.document().profile().visual_runtime == core::VisualRuntime::isolated &&
-         std::string(visual_control<Fl_Multiline_Output>(app,
-             "Visual availability / preservation").value()).find("Unavailable:") != std::string::npos,
-         "unsupported isolated runtime is retained with an explicit reason");
+  if constexpr (editor::windows_editor_keys) {
+    expect(app.session.document().profile().visual_runtime == core::VisualRuntime::isolated &&
+               std::string_view(visual_control<Fl_Multiline_Output>(app,
+                   "Visual availability / preservation").value()).find("Job-bounded worker") != std::string_view::npos,
+           "Windows isolated runtime is retained and explains the worker");
+  } else {
+    expect(app.session.document().profile().visual_runtime == core::VisualRuntime::isolated &&
+            std::string(visual_control<Fl_Multiline_Output>(app,
+                "Visual availability / preservation").value()).find("Unavailable:") != std::string::npos,
+            "unsupported isolated runtime is retained with an explicit reason");
+  }
   app.command(editor::EditorCommand::undo);
   expect(app.session.document().profile().visual_runtime == core::VisualRuntime::inline_process,
          "runtime setting participates in document history");
@@ -739,6 +761,7 @@ void visual_remove_refuses_nested_selection_change() {
          "changed document refuses stale removal without discarding the nested edit");
   editor::EditorAppTestAccess::window(app).hide();
 }
+#ifndef _WIN32
 struct CalibrationProbe {
   bool delivered{};
   bool capture{};
@@ -810,6 +833,7 @@ std::size_t open_fds() {
   return static_cast<std::size_t>(std::distance(
       std::filesystem::directory_iterator("/proc/self/fd"), std::filesystem::directory_iterator{}));
 }
+#endif
 void calibration_mask_coalesced_pointer_strokes() {
   Fixture fixture;
   struct EventState {
@@ -848,6 +872,7 @@ void calibration_mask_coalesced_pointer_strokes() {
   expect(preview.handle(FL_PUSH) == 0, "a collapsed preview refuses degenerate pointer coordinates");
 }
 
+#ifndef _WIN32
 void calibration_unavailable_and_owned_capture() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
@@ -978,6 +1003,7 @@ void calibration_unavailable_and_owned_capture() {
   expect(open_fds() == with_fixture, "identity failure joins and releases its private connections");
   editor::EditorAppTestAccess::window(app).hide();
 }
+#endif
 
 
 } // namespace
@@ -990,14 +1016,26 @@ void linux_editor_focused_keyboard_capture_contracts();
 #define LAYERC_FOCUSED_CAPTURE_CASE
 #endif
 
-LAYERC_TEST_MAIN(
-  LAYERC_TEST_CASE(linux_editor_accessibility_tree_rows),
-  LAYERC_TEST_CASE(linux_editor_accessibility_descriptions),
-  LAYERC_TEST_CASE(linux_editor_accessibility_hint_and_names),
-  LAYERC_TEST_CASE(linux_editor_accessibility_color_names),
-  LAYERC_TEST_CASE(linux_editor_accessibility_announcements),
-  LAYERC_TEST_CASE(linux_editor_accessibility_popup_focus_events),
+#ifdef _WIN32
+void windows_editor_platform_exclusions();
+#define LAYERC_PLATFORM_WIDGET_CASES LAYERC_TEST_CASE(windows_editor_platform_exclusions),
+#define LAYERC_CALIBRATION_LAYOUT_CASE
+#define LAYERC_NATIVE_CAPTURE_CASE
+#else
+#define LAYERC_PLATFORM_WIDGET_CASES \
+  LAYERC_TEST_CASE(linux_editor_accessibility_tree_rows), \
+  LAYERC_TEST_CASE(linux_editor_accessibility_descriptions), \
+  LAYERC_TEST_CASE(linux_editor_accessibility_hint_and_names), \
+  LAYERC_TEST_CASE(linux_editor_accessibility_color_names), \
+  LAYERC_TEST_CASE(linux_editor_accessibility_announcements), \
+  LAYERC_TEST_CASE(linux_editor_accessibility_popup_focus_events), \
   LAYERC_TEST_CASE(linux_editor_accessibility_keeps_fltk_file_chooser),
+#define LAYERC_CALIBRATION_LAYOUT_CASE LAYERC_TEST_CASE(linux_editor_calibration_layout_contracts),
+#define LAYERC_NATIVE_CAPTURE_CASE , LAYERC_TEST_CASE(calibration_unavailable_and_owned_capture)
+#endif
+
+LAYERC_TEST_MAIN(
+  LAYERC_PLATFORM_WIDGET_CASES
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_shortcuts_columns),
   LAYERC_TEST_CASE(linux_editor_diagnostic_text_contracts),
@@ -1007,7 +1045,7 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_field_error_contracts),
   LAYERC_TEST_CASE(linux_editor_pending_automation_status_contracts),
-  LAYERC_TEST_CASE(linux_editor_calibration_layout_contracts),
+  LAYERC_CALIBRATION_LAYOUT_CASE
   LAYERC_TEST_CASE(linux_editor_black_accent_dialog_contracts),
   LAYERC_TEST_CASE(linux_editor_main_window_text_and_tab_labels),
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
@@ -1035,6 +1073,6 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(automation_trace_disconnect),
   LAYERC_TEST_CASE(visual_page_history_and_cancel),
   LAYERC_TEST_CASE(visual_remove_refuses_nested_selection_change),
-  LAYERC_TEST_CASE(calibration_mask_coalesced_pointer_strokes),
-  LAYERC_TEST_CASE(calibration_unavailable_and_owned_capture)
+  LAYERC_TEST_CASE(calibration_mask_coalesced_pointer_strokes)
+  LAYERC_NATIVE_CAPTURE_CASE
   LAYERC_FOCUSED_CAPTURE_CASE)

@@ -93,6 +93,31 @@ if(TARGET layerc_editor_fltk_support)
         LINK layerc_editor_fltk_support TIMEOUT 30 LABELS required editor)
 endif()
 if(WIN32 AND TARGET layerc_editor_fltk)
+    set(editor_test_daemon tests/windows_fltk_test_daemon.cpp)
+    layerc_add_test(layerc_windows_fltk_model_tests WIN32
+        SOURCES tests/linux_editor_model_tests.cpp tests/linux_editor_platform_tests.cpp
+            ${editor_test_daemon}
+        LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_session_tests WIN32
+        SOURCES tests/linux_editor_session_tests.cpp ${editor_test_daemon}
+        LINK layerc_editor_fltk_support TIMEOUT 60 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_widget_tests WIN32
+        SOURCES tests/linux_editor_widget_tests.cpp
+            tests/linux_editor_items_tests.cpp tests/linux_editor_dialog_tests.cpp
+            tests/linux_editor_visual_contract_tests.cpp tests/linux_editor_diagnostics_tests.cpp
+            tests/linux_editor_review_tests.cpp tests/linux_editor_command_registry_tests.cpp
+            tests/linux_editor_design_system_paint_tests.cpp tests/windows_fltk_widget_exclusions.cpp
+            src/editor/fltk/calibration_preview.cpp ${editor_test_daemon}
+        LINK layerc_editor_fltk TIMEOUT 90 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_autosave_tests WIN32
+        SOURCES tests/linux_editor_autosave_tests.cpp tests/windows_fltk_save_recovery_tests.cpp
+            ${editor_test_daemon}
+        LINK layerc_editor_fltk TIMEOUT 60 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_ime_tests WIN32
+        SOURCES tests/windows_fltk_ime_tests.cpp ${editor_test_daemon}
+        LINK layerc_editor_fltk imm32 uiautomationcore oleaut32 ole32 uuid
+        TIMEOUT 60 LABELS required editor)
+    unset(editor_test_daemon)
     layerc_add_test(layerc_windows_fltk_binding_tests WIN32
         SOURCES tests/windows_fltk_binding_tests.cpp
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)

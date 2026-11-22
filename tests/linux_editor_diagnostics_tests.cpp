@@ -9,7 +9,7 @@
 #include "layerc/core/profile.hpp"
 #include "profile_edit.hpp"
 #include "linux_editor_test_access.hpp"
-#include "test_support.hpp"
+#include "editor_test_environment.hpp"
 #include "fltk_a11y_snapshot_support.hpp"
 #include "a11y/fltk_semantics.hpp"
 
@@ -42,21 +42,8 @@ using layerc::test::expect;
 class Fixture final {
 public:
   Fixture()
-      : temp_("layerc-editor-diagnostics"), home_("HOME", temp_.path()),
-        config_("XDG_CONFIG_HOME", temp_.path() / "config"),
-        data_("XDG_DATA_HOME", temp_.path() / "data"),
-        runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
-        cache_("XDG_CACHE_HOME", temp_.path() / "cache"),
-        state_("XDG_STATE_HOME", temp_.path() / "state"),
-        override_("LAYERC_PROFILE_DIR", std::nullopt),
-        store_override_("LAYERC_STORE_ROOT", std::nullopt),
-        bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
-        accessibility_bus_("AT_SPI_BUS_ADDRESS", std::nullopt),
-        backend_("FLTK_BACKEND", std::filesystem::path("x11")) {
-    layerc::test::require_x11();
-    std::filesystem::create_directories(temp_.path() / "runtime");
-    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0,
-           "fixture control namespace is private");
+      : temp_("layerc-editor-diagnostics", layerc::test::EditorTestScope::widget,
+              "fixture control namespace is private") {
     path = layerc::platform::profile_directory() / "fixture.json";
   }
   void store() {
@@ -70,9 +57,7 @@ public:
   std::filesystem::path path;
 
 private:
-  layerc::test::TempDirectory temp_;
-  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, cache_, state_,
-      override_, store_override_, bus_, accessibility_bus_, backend_;
+  layerc::test::EditorTestEnvironment temp_;
 };
 
 void show(layerc::editor::EditorApp &app) {
@@ -111,7 +96,9 @@ Widget &automation_control(layerc::editor::EditorApp &app,
 
 void linux_editor_diagnostic_text_contracts() {
   namespace editor = layerc::editor;
+#ifndef _WIN32
   setenv("FLTK_BACKEND", "x11", 1);
+#endif
   const auto layout = editor::panel_colors_layout();
   expect(layout.label_width > 0 && 15 + layout.label_width <= layout.input_x - 12,
          "the widest label fits left of the first input");

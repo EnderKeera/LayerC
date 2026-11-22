@@ -850,11 +850,6 @@ std::optional<std::string> enqueue_trace_locked(
 
 } // namespace
 
-DaemonHub &product_daemon_hub() {
-  static DaemonHub hub(product_daemon_hub_environment());
-  return hub;
-}
-
 DaemonHubEnvironment product_daemon_hub_environment() {
   return {.pipe_name = layerc::platform::live_edit_pipe_name,
           .expected_server_process_id = 0,

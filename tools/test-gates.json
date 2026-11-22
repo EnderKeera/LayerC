@@ -33,18 +33,23 @@
         "layerc_template_png_tests",
         "layerc_visual_asset_gc_contract_tests",
         "layerc_windows_fltk_accessibility_tests",
+        "layerc_windows_fltk_autosave_tests",
         "layerc_windows_fltk_binding_tests",
         "layerc_windows_fltk_calibration_tests",
         "layerc_windows_fltk_daemon_link_tests",
+        "layerc_windows_fltk_ime_tests",
+        "layerc_windows_fltk_model_tests",
         "layerc_windows_fltk_notification_tests",
         "layerc_windows_fltk_on_window_tests",
         "layerc_windows_fltk_patterns_tests",
         "layerc_windows_fltk_position_tests",
+        "layerc_windows_fltk_session_tests",
         "layerc_windows_fltk_settings_tests",
         "layerc_windows_fltk_smoke",
         "layerc_windows_fltk_startup_tests",
         "layerc_windows_fltk_text_tests",
-        "layerc_windows_fltk_trace_relay_tests"
+        "layerc_windows_fltk_trace_relay_tests",
+        "layerc_windows_fltk_widget_tests"
       ],
       "allowSkip": {
         "layerc_overlay_tests": "the runner cannot create an isolated desktop; unavailable interactive coverage, not a pass"

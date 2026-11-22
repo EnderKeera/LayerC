@@ -152,18 +152,18 @@ Kept like the Linux matrix in [LinuxEditorPlan.md](LinuxEditorPlan.md): each Win
 
 | Area | Feature | Win32 source | Needs | Windows tests | Status |
 | --- | --- | --- | --- | --- | --- |
-| Profiles | List, new, duplicate, rename, turn on / off, delete, save, save as, open folder, game match, legacy upgrade | `editor_profiles`, `editor_shell` | Store service, `ShellExecuteW` | `layerc_windows_fltk_startup_tests` (startup, single instance, recovery) | — |
-| Profiles | Detected tasks | `editor_tasks`, `window_discovery` | Tasks service | — | — |
-| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | FLTK frontend has the Windows focused capture adapter for physical scans, mouse input, and XInput edges; trial launcher integration remains pending | `layerc_windows_fltk_binding_tests` | — |
+| Profiles | List, new, duplicate, rename, turn on / off, delete, save, save as, open folder, game match, legacy upgrade | `editor_profiles`, `editor_shell` | Store service, `ShellExecuteW` | `layerc_windows_fltk_startup_tests` (startup, single instance, recovery), `layerc_windows_fltk_session_tests`, `layerc_windows_fltk_widget_tests`, `layerc_windows_fltk_autosave_tests` | — |
+| Profiles | Detected tasks | `editor_tasks`, `window_discovery` | Tasks service | `layerc_windows_fltk_model_tests` | — |
+| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | FLTK frontend has the Windows focused capture adapter for physical scans, mouse input, and XInput edges; trial launcher integration remains pending | `layerc_windows_fltk_binding_tests`, `layerc_windows_fltk_widget_tests` | — |
 | Bindings | Generic HID capture | `editor_hid`, `hid_device` | FLTK frontend has a foreground Raw Input dialog with advanced system-device opt-in and a validated local slot assignment; trial launcher integration and physical device checks remain pending | `layerc_windows_fltk_binding_tests` | — |
-| Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter | `layerc_editor_overlay_preview_tests`, `layerc_windows_fltk_position_tests`, `layerc_windows_fltk_on_window_tests` | — |
-| Exchange | Import and export packs | `editor_packs` | File dialogs | — | — |
-| Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service | `layerc_windows_fltk_daemon_link_tests` | — |
-| Advanced | Automation, simulator, trace | `editor_automation*` | Shared editor tools; live trace uses the authenticated LayerD pipe on Windows | `layerc_windows_fltk_trace_relay_tests`, `layerc_windows_fltk_daemon_link_tests` | — |
-| Advanced | Visual triggers and calibration | `editor_visual`, `calibration_session` | Visual service | `layerc_windows_fltk_calibration_tests` | — |
+| Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter | `layerc_editor_overlay_preview_tests`, `layerc_windows_fltk_position_tests`, `layerc_windows_fltk_on_window_tests`, `layerc_windows_fltk_widget_tests` | — |
+| Exchange | Import and export packs | `editor_packs` | File dialogs | `layerc_windows_fltk_session_tests`, `layerc_windows_fltk_widget_tests` | — |
+| Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service | `layerc_windows_fltk_daemon_link_tests`, `layerc_windows_fltk_autosave_tests`, `layerc_windows_fltk_widget_tests` | — |
+| Advanced | Automation, simulator, trace | `editor_automation*` | Shared editor tools; live trace uses the authenticated LayerD pipe on Windows | `layerc_windows_fltk_trace_relay_tests`, `layerc_windows_fltk_daemon_link_tests`, `layerc_windows_fltk_widget_tests` | — |
+| Advanced | Visual triggers and calibration | `editor_visual`, `calibration_session` | Visual service | `layerc_windows_fltk_calibration_tests`, `layerc_windows_fltk_session_tests`, `layerc_windows_fltk_widget_tests` | — |
 | Options | Visual recognition, overlay and editor capture exclusion, launcher updates, text size | `editor_dialog` (Options) | Capture exclusion, settings | `layerc_windows_fltk_settings_tests` | — |
-| Appearance | Presets, roles, contrast checks | `editor_appearance`, `appearance_contrast` | Shared contrast code | `layerc_windows_fltk_settings_tests` | — |
-| Interface | DPI changes, dark chrome, contrast themes, tooltips, shortcuts, screen readers | `native_theme`, `editor_shortcuts`, `accessible_text` | Kit (§6), UIA (§5.3) | `layerc_windows_fltk_settings_tests`, `layerc_windows_fltk_accessibility_tests`, `layerc_windows_fltk_text_tests`, `layerc_windows_fltk_patterns_tests` | — |
+| Appearance | Presets, roles, contrast checks | `editor_appearance`, `appearance_contrast` | Shared contrast code | `layerc_windows_fltk_settings_tests`, `layerc_windows_fltk_model_tests` | — |
+| Interface | DPI changes, dark chrome, contrast themes, tooltips, shortcuts, screen readers | `native_theme`, `editor_shortcuts`, `accessible_text` | Kit (§6), UIA (§5.3) | `layerc_windows_fltk_settings_tests`, `layerc_windows_fltk_accessibility_tests`, `layerc_windows_fltk_text_tests`, `layerc_windows_fltk_patterns_tests`, `layerc_windows_fltk_ime_tests` (automated IMM checks; no installed CJK IME observed locally), `layerc_windows_fltk_widget_tests` | — |
 
 ## 9. Evidence (D10)
 

@@ -1,6 +1,8 @@
 // The Linux editor command table: completeness, order, the menu/context truth
 // tables and the derived help text.
 #include "editor_commands.hpp"
+#include "platform/hid_binding_capture.hpp"
+#include "platform/services.hpp"
 #include "test_support.hpp"
 
 #include <FL/Fl.H>
@@ -86,8 +88,34 @@ constexpr std::array<std::pair<unsigned, unsigned>, 40> context_baseline{{
 
 } // namespace
 
+// Every shortcut row is "key<TAB>description" from the command table, F1
+// included, so the dialog can measure two columns (DesignSystem.md, Keyboard).
+void linux_editor_shortcuts_columns() {
+  const std::string rows = layerc::editor::shortcut_help();
+  expect(rows.find("F1\t") != std::string::npos, "F1 appears in the shortcut table");
+  bool tabbed = true;
+  std::size_t start = 0;
+  while (start < rows.size()) {
+    const auto end = rows.find('\n', start);
+    const auto line =
+        rows.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (!line.empty())
+      tabbed = tabbed && line.find('\t') != std::string::npos &&
+               line.find('\t') == line.rfind('\t');
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  expect(tabbed, "every shortcut row has exactly one tab and no space-aligned columns");
+  expect(rows.find("\tSave") != std::string::npos &&
+             rows.find("\tUndo") != std::string::npos &&
+             rows.find("\tRedo") != std::string::npos,
+         "command-table shortcut rows appear with their keys");
+}
+
 void linux_editor_command_registry_contracts() {
+#ifndef _WIN32
   setenv("FLTK_BACKEND", "x11", 1);
+#endif
   const auto specs = layerc::editor::editor_command_specs();
   expect(specs.size() == static_cast<std::size_t>(EditorCommand::count),
          "the table holds exactly one row per command");
@@ -98,6 +126,11 @@ void linux_editor_command_registry_contracts() {
   bool paths_match = true;
   std::size_t row{};
   for (const auto &spec : specs) {
+    if (spec.command == EditorCommand::capture_hid_binding && layerc::editor::hid_binding_capture_available()) {
+      expect(spec.menu_path && std::string_view(spec.menu_path) == "&Bindings/&HID binding..." && row == 21,
+             "Windows offers HID capture after focused chord capture");
+      continue;
+    }
     if (spec.menu_path == nullptr) continue;
     if (row >= menu_path_baseline.size() ||
         std::string_view(spec.menu_path) != menu_path_baseline[row])
@@ -110,8 +143,13 @@ void linux_editor_command_registry_contracts() {
   row = 0;
   for (const auto &spec : specs) {
     if (spec.command == EditorCommand::capture_hid_binding) {
-      expect(spec.menu_path == nullptr && spec.contexts == 0 && spec.target_contexts == 0,
-             "the Windows-only HID capture command is not offered on Linux");
+      if (layerc::editor::hid_binding_capture_available()) {
+        expect(spec.menu_path && spec.contexts == bindings && spec.target_contexts == 0,
+               "Windows offers HID capture in the binding context");
+      } else {
+        expect(spec.menu_path == nullptr && spec.contexts == 0 && spec.target_contexts == 0,
+               "the Windows-only HID capture command is not offered on Linux");
+      }
       continue;
     }
     if (row >= context_baseline.size() ||
@@ -125,6 +163,17 @@ void linux_editor_command_registry_contracts() {
   expect(layerc::editor::command_spec(EditorCommand::redo).alternate_shortcut ==
              (FL_CTRL | 'y'),
          "Ctrl+Y stays the alternate redo shortcut");
-  expect(layerc::editor::shortcut_help() == shortcut_help_baseline,
-         "the shortcut help uses the v2 labels and unchanged bindings");
+  if constexpr (layerc::editor::windows_editor_keys) {
+    std::string expected(shortcut_help_baseline);
+    expected.insert(expected.find("Tab / Shift+Tab"),
+                    "Delete\tDelete the selected profile\n"
+                    "Delete\tRemove the selected cooldown\n"
+                    "Shift+F10\tOpen the focused list's context menu\n"
+                    "Menu\tOpen the focused list's context menu\n");
+    expect(layerc::editor::shortcut_help() == expected,
+           "Windows shortcut help also includes its focused-list bindings");
+  } else {
+    expect(layerc::editor::shortcut_help() == shortcut_help_baseline,
+           "the shortcut help uses the v2 labels and unchanged bindings");
+  }
 }
