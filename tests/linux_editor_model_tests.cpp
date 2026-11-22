@@ -421,6 +421,91 @@ void editor_token_contracts() {
          "the body size keeps 11..14 px and a larger desktop scales the screens");
 }
 
+// Appearance's floors (DesignSystem.md, Roles): the shared refusal wording
+// and the FLTK check of every role, presets and System alike.
+void appearance_floor_contracts() {
+  using namespace layerc::editor;
+  expect(contrast_ratio_label(1.0) == "1.0:1" && contrast_ratio_label(0.5) == "1.0:1" &&
+             contrast_ratio_label(4.46) == "4.4:1" && contrast_ratio_label(12.98) == "12.9:1",
+         "ratios round down to one decimal and never print below 1:1");
+  expect(contrast_floor(ContrastPairKind::text_fill) == 4.5 &&
+             contrast_floor(ContrastPairKind::text_hover) == 4.5 &&
+             contrast_floor(ContrastPairKind::text_selection) == 4.5 &&
+             contrast_floor(ContrastPairKind::disabled_fill) == 3.0,
+         "text pairs need 4.5:1, disabled text 3:1");
+  expect(contrast_pair_label(ContrastPairKind::text_fill) == "Text / Fill" &&
+             contrast_pair_label(ContrastPairKind::disabled_fill) == "Disabled / Fill" &&
+             contrast_pair_label(ContrastPairKind::text_hover) == "Text / Hover" &&
+             contrast_pair_label(ContrastPairKind::text_selection) == "Text / Selection",
+         "each pair has the Windows label");
+  expect(contrast_refusal_text("Buttons", ContrastPairKind::text_hover, 3.29) ==
+                 "Buttons: Text / Hover contrast is 3.2:1; at least 4.5:1 is required." &&
+             contrast_refusal_text("Lists", ContrastPairKind::disabled_fill, 2.95) ==
+                 "Lists: Disabled / Fill contrast is 2.9:1; at least 3:1 is required.",
+         "the refusal names the role, the pair, the ratio and the floor");
+
+  const std::array<RoleColors, editor_role_count> unused_system{};
+  for (const auto theme : {EditorTheme::copper, EditorTheme::teal, EditorTheme::plum,
+                           EditorTheme::dark}) {
+    for (const auto accent : {std::optional<std::uint32_t>{}, std::optional<std::uint32_t>{0x000000},
+                              std::optional<std::uint32_t>{0xFFFFFF}}) {
+      EditorAppearance appearance;
+      appearance.theme = theme;
+      appearance.accent = accent;
+      expect(!first_role_contrast_failure(appearance, unused_system),
+             "every preset clears the floors with its own, a black or a white accent");
+    }
+  }
+
+  EditorAppearance list_text;
+  list_text.overrides[static_cast<std::size_t>(EditorRole::list)].text = 0x000000;
+  const auto list_failure = first_role_contrast_failure(list_text, unused_system);
+  expect(list_failure && list_failure->role == EditorRole::list &&
+             list_failure->pair == ContrastPairKind::text_fill &&
+             role_contrast_failure_text(*list_failure) ==
+                 "Lists: Text / Fill contrast is 1.1:1; at least 4.5:1 is required.",
+         "black list text on the input fill refuses in the refusal's words");
+
+  EditorAppearance sidebar_selection;
+  sidebar_selection.overrides[static_cast<std::size_t>(EditorRole::sidebar)].selection = 0xFFFFFF;
+  const auto sidebar_failure = first_role_contrast_failure(sidebar_selection, unused_system);
+  expect(sidebar_failure && sidebar_failure->role == EditorRole::sidebar &&
+             sidebar_failure->pair == ContrastPairKind::text_selection &&
+             role_contrast_failure_text(*sidebar_failure) ==
+                 "Profile list: Text / Selection contrast is 1.1:1; at least 4.5:1 is required.",
+         "a white profile-list selection under white text refuses");
+
+  // FLTK draws a check box's selection colour as the check mark, not behind
+  // its text: the copper accent under the label never refuses.
+  EditorAppearance copper;
+  const auto checkbox = theme_role_colors(copper, EditorRole::checkbox);
+  expect(checkbox && rgb_contrast_ratio(checkbox->text, checkbox->selection) < 4.5 &&
+             !first_role_contrast_failure(copper, unused_system),
+         "check box Text / Selection is not measured on the copper preset");
+  EditorAppearance checkbox_text;
+  checkbox_text.overrides[static_cast<std::size_t>(EditorRole::checkbox)].text = 0xFFFFFF;
+  expect(rgb_contrast_ratio(0xFFFFFF, preset_accent(EditorTheme::copper)) < 4.5 &&
+             !first_role_contrast_failure(checkbox_text, unused_system),
+         "check box text that only fails against the accent mark passes");
+
+  std::array<RoleColors, editor_role_count> navy{};
+  navy.fill(RoleColors{0xFFFFFF, 0x000000, 0x000080});
+  EditorAppearance system;
+  system.theme = EditorTheme::system;
+  expect(!first_role_contrast_failure(system, navy),
+         "untouched System roles never refuse, even black text on a navy selection");
+  system.overrides[static_cast<std::size_t>(EditorRole::window)].fill = 0xF0F0F0;
+  expect(!first_role_contrast_failure(system, navy),
+         "a readable System fill override passes and leaves the selection pair alone");
+  system.overrides[static_cast<std::size_t>(EditorRole::list)].text = 0xFFFFFF;
+  const auto system_failure = first_role_contrast_failure(system, navy);
+  expect(system_failure && system_failure->role == EditorRole::list &&
+             system_failure->pair == ContrastPairKind::text_fill &&
+             role_contrast_failure_text(*system_failure) ==
+                 "Lists: Text / Fill contrast is 1.0:1; at least 4.5:1 is required.",
+         "an overridden System list text below the floor is reported");
+}
+
 // Outcome kinds belong to producers, not to display wording or file paths.
 void typed_status_outcome_contracts() {
   using namespace layerc::editor;
@@ -573,5 +658,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(native_style_helpers),
     LAYERC_TEST_CASE(accessible_status_voice_contracts),
     LAYERC_TEST_CASE(editor_token_contracts),
+    LAYERC_TEST_CASE(appearance_floor_contracts),
     LAYERC_TEST_CASE(typed_status_outcome_contracts),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

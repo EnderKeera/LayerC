@@ -163,6 +163,48 @@ std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
   return colors;
 }
 
+std::optional<RoleContrastFailure>
+first_role_contrast_failure(const EditorAppearance &appearance,
+                            const std::array<RoleColors, editor_role_count> &system_roles) {
+  const bool system = appearance.theme == EditorTheme::system;
+  for (std::size_t index = 0; index < editor_role_count; ++index) {
+    const auto role = static_cast<EditorRole>(index);
+    const auto &item = appearance.overrides[index];
+    RoleColors colors = system_roles[index];
+    if (const auto preset = theme_role_colors(appearance, role)) {
+      colors = *preset;
+    } else {
+      if (item.fill) colors.fill = *item.fill;
+      if (item.text) colors.text = *item.text;
+      if (item.selection) colors.selection = *item.selection;
+    }
+    // Check boxes draw their selection colour as the mark, not behind text.
+    // Disabled / Fill and Text / Hover need role parts FLTK overrides do not
+    // have yet; both arrive with the Phase 3 painters.
+    const bool selection_behind_text = role == EditorRole::button ||
+                                       role == EditorRole::list || role == EditorRole::sidebar;
+    const auto measure = [&](const ContrastPairKind pair, const std::uint32_t background,
+                             const bool overridden) -> std::optional<RoleContrastFailure> {
+      if (system && !overridden) return std::nullopt;
+      const double ratio = rgb_contrast_ratio(colors.text, background);
+      if (ratio < contrast_floor(pair)) return RoleContrastFailure{role, pair, ratio};
+      return std::nullopt;
+    };
+    if (auto failure = measure(ContrastPairKind::text_fill, colors.fill,
+                               item.text.has_value() || item.fill.has_value()))
+      return failure;
+    if (!selection_behind_text) continue;
+    if (auto failure = measure(ContrastPairKind::text_selection, colors.selection,
+                               item.text.has_value() || item.selection.has_value()))
+      return failure;
+  }
+  return std::nullopt;
+}
+
+std::string role_contrast_failure_text(const RoleContrastFailure &failure) {
+  return contrast_refusal_text(role_label(failure.role), failure.pair, failure.ratio);
+}
+
 std::uint32_t control_border(const std::uint32_t fill) noexcept {
   const auto luma = (((fill >> 16U) & 0xFFU) * 299U + ((fill >> 8U) & 0xFFU) * 587U +
                      (fill & 0xFFU) * 114U) / 1000U;

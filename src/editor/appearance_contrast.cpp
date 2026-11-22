@@ -1,5 +1,7 @@
 #include "appearance_contrast.hpp"
 
+#include "appearance_floor.hpp"
+
 #include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/text.hpp"
 #include "overlay_contrast.hpp"
@@ -60,6 +62,18 @@ pair_colors(const layerc::platform::NativeThemeColors &colors,
   return {colors.text, colors.fill};
 }
 
+// The shared floors and wording (src/editor/common/appearance_floor) under
+// the Win32 pair names, one to one.
+ContrastPairKind pair_kind(const ContrastPair pair) noexcept {
+  switch (pair) {
+  case ContrastPair::disabled_fill: return ContrastPairKind::disabled_fill;
+  case ContrastPair::text_hover: return ContrastPairKind::text_hover;
+  case ContrastPair::text_selection: return ContrastPairKind::text_selection;
+  case ContrastPair::text_fill: break;
+  }
+  return ContrastPairKind::text_fill;
+}
+
 std::wstring minimum_text(const double minimum) {
   std::array<wchar_t, 16> buffer{};
   if (minimum == std::floor(minimum))
@@ -77,7 +91,7 @@ std::wstring target_name(const EditorControlRole role,
 } // namespace
 
 double contrast_minimum(const ContrastPair pair) noexcept {
-  return pair == ContrastPair::disabled_fill ? 3.0 : 4.5;
+  return contrast_floor(pair_kind(pair));
 }
 
 std::wstring_view contrast_pair_name(const ContrastPair pair) noexcept {
@@ -138,17 +152,13 @@ std::wstring_view appearance_role_noun(const EditorControlRole role) noexcept {
 }
 
 std::wstring contrast_ratio_text(const double ratio) {
-  std::array<wchar_t, 24> buffer{};
-  std::swprintf(buffer.data(), buffer.size(), L"%.1f:1",
-                std::floor(std::max(ratio, 1.0) * 10.0) / 10.0);
-  return buffer.data();
+  return layerc::platform::utf8_to_wide(contrast_ratio_label(ratio));
 }
 
 std::wstring contrast_failure_text(const ContrastFailure &failure) {
-  return std::wstring(appearance_role_label(failure.role)) + L": " +
-         std::wstring(contrast_pair_name(failure.pair)) + L" contrast is " +
-         contrast_ratio_text(failure.ratio) + L"; at least " +
-         minimum_text(contrast_minimum(failure.pair)) + L":1 is required.";
+  return layerc::platform::utf8_to_wide(contrast_refusal_text(
+      layerc::platform::wide_to_utf8(appearance_role_label(failure.role)),
+      pair_kind(failure.pair), failure.ratio));
 }
 
 std::vector<ContrastTarget>

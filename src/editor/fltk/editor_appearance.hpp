@@ -1,5 +1,7 @@
 #pragma once
 
+#include "appearance_floor.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +78,26 @@ struct DesktopTextMetrics {
 // for the system theme, whose base colours are FLTK's own.
 [[nodiscard]] std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
                                                           EditorRole role);
+
+// The first role, in EditorRole order, whose colours fall below an
+// Appearance floor (DesignSystem.md, Roles); Apply refuses while one does.
+// FLTK measures Text / Fill on every role and Text / Selection where the
+// selection sits behind text (pressed button, selected list and profile-list
+// row). Presets are measured with their overrides. The System theme measures
+// `system_roles` (FLTK's own colours) with the overrides applied, and only
+// pairs with at least one overridden colour: untouched desktop colours never
+// refuse.
+struct RoleContrastFailure {
+  EditorRole role{};
+  ContrastPairKind pair{};
+  double ratio{};
+  bool operator==(const RoleContrastFailure &) const = default;
+};
+[[nodiscard]] std::optional<RoleContrastFailure>
+first_role_contrast_failure(const EditorAppearance &appearance,
+                            const std::array<RoleColors, editor_role_count> &system_roles);
+// "Lists: Text / Fill contrast is 1.0:1; at least 4.5:1 is required."
+[[nodiscard]] std::string role_contrast_failure_text(const RoleContrastFailure &failure);
 
 // The 1 px outline of a flat control filled with `fill`: a third of the way
 // toward white on dark fills and toward black on light ones.

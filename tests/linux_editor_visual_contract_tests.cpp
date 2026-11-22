@@ -7,6 +7,7 @@
 #include "diagnostics_window.hpp"
 #include "editor_app.hpp"
 #include "editor_menus.hpp"
+#include "editor_style.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "linux_editor_test_access.hpp"
@@ -377,6 +378,111 @@ void linux_editor_black_accent_dialog_contracts() {
          "Reset all returns the preset accent as an absent choice");
   expect(selection_rgb(*list) == Fl::get_color(fl_rgb_color(0x2C, 0x42, 0x3F)),
          "the reset appearance previews the preset palette");
+  editor::apply_editor_appearance({}, root);
+}
+
+// DesignSystem.md, Roles: Appearance names the first role below a floor with
+// the warning glyph and Apply refuses until the colours are readable again.
+void linux_editor_appearance_contrast_floor_dialog() {
+  layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
+  layerc::test::require_editor_window();
+  Fl_Window root(400, 300);
+  root.end();
+  const editor::EditorAppearance initial;
+  if (editor::platform_contrast_palette()) {
+    std::cout << "Not applicable: a desktop contrast theme sets the overrides aside\n";
+    return;
+  }
+  constexpr auto list_role = static_cast<int>(editor::EditorRole::list);
+  const std::string refusal = "Lists: Text / Fill contrast is 1.1:1; at least 4.5:1 is required.";
+  struct Dialog {
+    Fl_Choice *role{};
+    Fl_Input *text{};
+    Fl_Button *apply{}, *reset_role{};
+    editor::EditorStatusMark *mark{};
+  };
+  const auto find = [](Fl_Window &modal) {
+    Dialog dialog{dynamic_cast<Fl_Choice *>(control(modal, "Role")),
+                  dynamic_cast<Fl_Input *>(control(modal, "Role text")),
+                  dynamic_cast<Fl_Button *>(control(modal, "Apply")),
+                  dynamic_cast<Fl_Button *>(control(modal, "Reset role colors")), nullptr};
+    visit(modal, [&](Fl_Widget &widget) {
+      if (auto *mark = dynamic_cast<editor::EditorStatusMark *>(&widget)) dialog.mark = mark;
+    });
+    return dialog;
+  };
+  // The status line follows its mark: the box the colour fields are
+  // described with.
+  const auto status_label = [&find](Fl_Window &modal) {
+    const auto dialog = find(modal);
+    if (!dialog.mark) return std::string("<no mark>");
+    const int next = modal.find(dialog.mark) + 1;
+    const auto *line = next < modal.children() ? modal.child(next) : nullptr;
+    return line && line->label() ? std::string(line->label()) : std::string{};
+  };
+
+  bool warned{}, refused{}, cleared{};
+  ModalAction fix([&](Fl_Window &modal) {
+    const auto dialog = find(modal);
+    if (!dialog.role || !dialog.text || !dialog.apply || !dialog.mark) {
+      expect(false, "the appearance dialog owns Role, Role text, Apply and the warning mark");
+      modal.hide();
+      return;
+    }
+    expect(dialog.mark->kind() == editor::StatusKind::none && status_label(modal).empty(),
+           "the preset starts without a contrast line");
+    dialog.role->value(list_role);
+    dialog.role->do_callback();
+    dialog.text->value("#000000");
+    dialog.text->do_callback();
+    warned = status_label(modal) == refusal &&
+             dialog.mark->kind() == editor::StatusKind::warning;
+    dialog.role->value(0);
+    dialog.role->do_callback();
+    dialog.apply->do_callback();
+    refused = modal.shown() && dialog.role->value() == list_role &&
+              Fl::focus() == dialog.text &&
+              std::string(dialog.text->value()) == "#000000" &&
+              status_label(modal) == refusal;
+    dialog.text->value("#FFFFFF");
+    dialog.text->do_callback();
+    cleared = status_label(modal).empty() && dialog.mark->kind() == editor::StatusKind::none;
+    dialog.apply->do_callback();
+    if (modal.shown()) modal.hide();
+  });
+  const auto fixed = editor::edit_editor_appearance(initial, root, nullptr, nullptr);
+  expect(fix.delivered() && warned,
+         "black list text shows the refusal's words with the warning glyph");
+  expect(refused, "Apply refuses, selects the failing role and focuses its text");
+  expect(cleared, "readable list text clears the line and the glyph");
+  expect(fixed && fixed->overrides[static_cast<std::size_t>(list_role)].text == 0xFFFFFFU,
+         "Apply succeeds once the role clears its floors");
+
+  bool reset_refused{}, reset_cleared{};
+  ModalAction reset([&](Fl_Window &modal) {
+    const auto dialog = find(modal);
+    if (!dialog.role || !dialog.text || !dialog.apply || !dialog.reset_role || !dialog.mark) {
+      expect(false, "the appearance dialog owns Reset role colors");
+      modal.hide();
+      return;
+    }
+    dialog.role->value(list_role);
+    dialog.role->do_callback();
+    dialog.text->value("#000000");
+    dialog.text->do_callback();
+    dialog.apply->do_callback();
+    reset_refused = modal.shown() && status_label(modal) == refusal;
+    dialog.reset_role->do_callback();
+    reset_cleared = status_label(modal).empty() &&
+                    dialog.mark->kind() == editor::StatusKind::none &&
+                    std::string(dialog.text->value()).empty();
+    dialog.apply->do_callback();
+    if (modal.shown()) modal.hide();
+  });
+  const auto restored = editor::edit_editor_appearance(initial, root, nullptr, nullptr);
+  expect(reset.delivered() && reset_refused, "a second unreadable draft refuses again");
+  expect(reset_cleared, "Reset role colors clears the line and the glyph");
+  expect(restored && *restored == initial, "Apply after Reset role colors returns the preset");
   editor::apply_editor_appearance({}, root);
 }
 

@@ -15,6 +15,7 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Double_Window.H>
+#include <FL/Fl_Input.H>
 #include <FL/Fl_Tooltip.H>
 #include <FL/platform.H>
 #include <dwmapi.h>
@@ -418,6 +419,62 @@ void contrast_mapping_and_desktop_listener() {
          "disabling contrast restores the preset and retained override");
 }
 
+// DesignSystem.md, Roles: a contrast theme sets the overrides aside, so an
+// unreadable override neither warns nor refuses while it is on.
+void appearance_contrast_theme_sets_floors_aside() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(true);
+  Fl_Double_Window root(220, 100, "Appearance contrast fixture");
+  root.end();
+  root.show();
+  struct Drive {
+    bool delivered{}, quiet{};
+    int attempts{};
+  } drive;
+  struct Step {
+    static void tick(void *data) {
+      auto &state = *static_cast<Drive *>(data);
+      auto *modal = Fl::modal();
+      if (!modal) {
+        if (++state.attempts < 200) Fl::repeat_timeout(0.01, &Step::tick, data);
+        return;
+      }
+      state.delivered = true;
+      auto *role = dynamic_cast<Fl_Choice *>(child(*modal, "Role"));
+      auto *text = dynamic_cast<Fl_Input *>(child(*modal, "Role text"));
+      auto *apply = child(*modal, "Apply");
+      if (!role || !text || !apply) { modal->hide(); return; }
+      role->value(static_cast<int>(editor::EditorRole::list));
+      role->do_callback();
+      text->value("#000000");
+      text->do_callback();
+      bool warning_mark{};
+      std::string line;
+      for (int i = 0; i < modal->children(); ++i) {
+        if (auto *mark = dynamic_cast<editor::EditorStatusMark *>(modal->child(i))) {
+          warning_mark = mark->kind() != editor::StatusKind::none;
+          if (i + 1 < modal->children() && modal->child(i + 1)->label())
+            line = modal->child(i + 1)->label();
+        }
+      }
+      state.quiet = !warning_mark && line == "A contrast theme is on, so Windows colors are in use.";
+      apply->do_callback();
+      if (modal->shown()) modal->hide();
+    }
+  };
+  Fl::add_timeout(0.01, &Step::tick, &drive);
+  const auto result = editor::edit_editor_appearance({}, root, nullptr, nullptr);
+  Fl::remove_timeout(&Step::tick, &drive);
+  expect(drive.delivered && drive.quiet,
+         "the contrast notice replaces the warning line and shows no warning glyph");
+  expect(result && result->overrides[static_cast<std::size_t>(editor::EditorRole::list)].text == 0U,
+         "Apply keeps the set-aside override while a contrast theme is on");
+  platform::set_native_high_contrast_override(false);
+  editor::apply_editor_appearance({}, root);
+}
+
 void caption_decoration_and_pruning() {
   const SettingsFixture fixture;
   if (!expect(fixture.ready(), "isolate registry and profile store")) return;
@@ -542,6 +599,7 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(capture_exclusion_on_existing_and_new_windows),
       LAYERC_TEST_CASE(text_scale_startup_and_keys),
       LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
+      LAYERC_TEST_CASE(appearance_contrast_theme_sets_floors_aside),
       LAYERC_TEST_CASE(caption_decoration_and_pruning),
       LAYERC_TEST_CASE(dpi_changes_keep_text_scale),
       LAYERC_TEST_CASE(editor_tooltips_keys_and_menu),

@@ -1,10 +1,55 @@
+#include "appearance_contrast.hpp"
 #include "appearance_draft.hpp"
+#include "appearance_floor.hpp"
 #include "dialog_layout.hpp"
 #include "editor_dialog_tests.hpp"
 #include "editor_resource.h"
 #include "test_support.hpp"
+#include "layerc/platform/text.hpp"
+
+#include <array>
+#include <utility>
 
 namespace layerc::test::editor_dialog {
+
+namespace {
+
+// One wording for both editors (src/editor/common/appearance_floor): the
+// Win32 refusal and pair names are the shared UTF-8 strings, widened.
+void appearance_floor_parity_contracts(bool &passed) {
+  using layerc::editor::ContrastPair;
+  using layerc::editor::ContrastPairKind;
+  using layerc::platform::utf8_to_wide;
+  constexpr std::array<std::pair<ContrastPair, ContrastPairKind>, 4> pairs{{
+      {ContrastPair::text_fill, ContrastPairKind::text_fill},
+      {ContrastPair::disabled_fill, ContrastPairKind::disabled_fill},
+      {ContrastPair::text_hover, ContrastPairKind::text_hover},
+      {ContrastPair::text_selection, ContrastPairKind::text_selection},
+  }};
+  bool same = true;
+  for (const auto &[pair, kind] : pairs) {
+    for (const double ratio : {1.0, 2.95, 4.46}) {
+      const layerc::editor::ContrastFailure failure{
+          layerc::platform::EditorControlRole::button, pair, ratio};
+      same = same &&
+             layerc::editor::contrast_pair_name(pair) ==
+                 utf8_to_wide(layerc::editor::contrast_pair_label(kind)) &&
+             layerc::editor::contrast_minimum(pair) == layerc::editor::contrast_floor(kind) &&
+             layerc::editor::contrast_ratio_text(ratio) ==
+                 utf8_to_wide(layerc::editor::contrast_ratio_label(ratio)) &&
+             layerc::editor::contrast_failure_text(failure) ==
+                 utf8_to_wide(layerc::editor::contrast_refusal_text("Buttons", kind, ratio));
+    }
+  }
+  passed &= expect(same, "Win32 Appearance refusals use the shared floor wording");
+  passed &= expect(
+      layerc::editor::contrast_failure_text(
+          {layerc::platform::EditorControlRole::list, ContrastPair::text_fill, 4.46}) ==
+          L"Lists: Text / Fill contrast is 4.4:1; at least 4.5:1 is required.",
+      "the Win32 refusal keeps its exact words");
+}
+
+} // namespace
 
 void appearance_draft_contracts(bool &passed) {
   layerc::platform::EditorAppearanceSettings initial_appearance;
@@ -44,6 +89,7 @@ void appearance_draft_contracts(bool &passed) {
   passed &= expect(
       appearance_draft.staged().theme == layerc::platform::EditorTheme::plum,
       "a failed appearance save should preserve the last persisted settings");
+  appearance_floor_parity_contracts(passed);
 }
 
 void appearance_dialog_contracts(const HINSTANCE instance, bool &passed) {

@@ -398,7 +398,8 @@ endif()
 # contrast line. layerc_windows always links it for the native theme.
 if(WIN32 OR LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
     add_library(layerc_editor_color STATIC src/editor/common/editor_color.cpp
-        src/editor/common/overlay_contrast.cpp)
+        src/editor/common/overlay_contrast.cpp
+        src/editor/common/appearance_floor.cpp)
     target_include_directories(layerc_editor_color PUBLIC src/editor/common)
     layerc_enable_warnings(layerc_editor_color)
 endif()

@@ -1,5 +1,6 @@
 #include "appearance_window.hpp"
 #include "accessible_widgets.hpp"
+#include "editor_color.hpp"
 #include "editor_style.hpp"
 #include "profile_mutations.hpp"
 #include "platform/window_chrome.hpp"
@@ -77,10 +78,18 @@ std::optional<EditorRole> role_of(Fl_Widget *widget, const Fl_Widget *sidebar,
   return std::nullopt;
 }
 
-// FLTK's class colours, which the Linux editor otherwise never changes.
-RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
+std::uint32_t rgb_of(const Fl_Color color) {
+  uchar r{}, g{}, b{};
+  Fl::get_color(color, r, g, b);
+  return (static_cast<std::uint32_t>(r) << 16U) | (static_cast<std::uint32_t>(g) << 8U) | b;
+}
+
+// FLTK's class colours, which the Linux editor otherwise never changes. An
+// edit-role widget is an input field or a choice; only fields take the
+// FL_BACKGROUND2_COLOR fill.
+RoleColors system_role_colors(const EditorRole role, const bool input_field) {
   const bool field = role == EditorRole::status || role == EditorRole::list ||
-      role == EditorRole::sidebar || (role == EditorRole::edit && dynamic_cast<Fl_Input_ *>(widget));
+      role == EditorRole::sidebar || (role == EditorRole::edit && input_field);
   Fl_Color fill = field ? FL_BACKGROUND2_COLOR : FL_BACKGROUND_COLOR;
   if (role == EditorRole::preview) {
     const auto input = current_editor_tokens().input;
@@ -93,12 +102,20 @@ RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
                                  ? FL_BACKGROUND_COLOR
                                  : role == EditorRole::checkbox ? FL_FOREGROUND_COLOR
                                                                 : FL_SELECTION_COLOR;
-  const auto rgb = [](Fl_Color color) {
-    uchar r{}, g{}, b{};
-    Fl::get_color(color, r, g, b);
-    return (static_cast<std::uint32_t>(r) << 16U) | (static_cast<std::uint32_t>(g) << 8U) | b;
-  };
-  return {rgb(fill), rgb(FL_FOREGROUND_COLOR), rgb(selection)};
+  return {rgb_of(fill), rgb_of(FL_FOREGROUND_COLOR), rgb_of(selection)};
+}
+
+RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
+  return system_role_colors(role, dynamic_cast<Fl_Input_ *>(widget) != nullptr);
+}
+
+// What the System theme measures each role against: the edit role as an
+// input field, the role Appearance's floors care about.
+std::array<RoleColors, editor_role_count> system_roles() {
+  std::array<RoleColors, editor_role_count> roles{};
+  for (std::size_t index = 0; index < roles.size(); ++index)
+    roles[index] = system_role_colors(static_cast<EditorRole>(index), true);
+  return roles;
 }
 
 void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label,
@@ -202,7 +219,10 @@ public:
       dialog.staged.overrides = {}; dialog.staged.accent.reset();
       dialog.load(); dialog.preview_changes();
     }, this);
-    status = new Fl_Box(15, 325, 490, 50);
+    // DesignSystem.md, Roles: the first role below a floor shows here with
+    // the warning glyph, in the refusal's words; the row stays while empty.
+    status_mark = new EditorStatusMark(15, 325, 18, 50);
+    status = new Fl_Box(33, 325, 472, 50);
     status->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
     // The line under the fields explains every colour control the way the
     // role list's contrast line does (DesignSystem.md, Screen readers).
@@ -216,8 +236,7 @@ public:
     // Cancel stays left, the primary Apply right (DesignSystem.md, Dialogs).
     primary_button(*apply);
     apply->callback([](Fl_Widget *, void *self) {
-      auto &dialog = *static_cast<AppearanceDialog *>(self);
-      if (dialog.read_fields()) { dialog.applied = true; dialog.hide(); }
+      static_cast<AppearanceDialog *>(self)->apply_changes();
     }, this);
     theme->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
@@ -229,10 +248,30 @@ public:
     load();
   }
 
+  // Precedence: an invalid field's message, then the contrast-theme notice
+  // (the overrides are set aside, so nothing refuses), then the first role
+  // below a floor, else an empty line.
   void refresh_contrast_notice() {
-    if (invalid_fields_) return;
-    status->label(editor_style_contrast_palette()
-        ? "A contrast theme is on, so Windows colors are in use." : "");
+    if (!invalid_fields_) {
+      failure_ = editor_style_contrast_palette()
+                     ? std::nullopt
+                     : first_role_contrast_failure(staged, system_roles());
+      if (editor_style_contrast_palette())
+        status->label("A contrast theme is on, so Windows colors are in use.");
+      else if (failure_)
+        status->copy_label(role_contrast_failure_text(*failure_).c_str());
+      else
+        status->label("");
+      status_mark->kind(failure_ ? StatusKind::warning : StatusKind::none);
+    }
+    // A draft that leaves the line's own text below 4.5:1 cannot hide it:
+    // the better of text and on_status on the window fill as painted.
+    const auto tokens = current_editor_tokens();
+    const auto window_fill = rgb_of(color());
+    status->labelcolor(fl(rgb_contrast_ratio(tokens.text, window_fill) >=
+                                  rgb_contrast_ratio(tokens.on_status, window_fill)
+                              ? tokens.text
+                              : tokens.on_status));
     status->redraw();
   }
 
@@ -241,6 +280,20 @@ public:
 
 private:
   using Choose = void (AppearanceDialog::*)();
+  // Apply refuses below a floor unless a contrast theme sets the overrides
+  // aside: it selects the failing role and puts focus on its text, the
+  // colour every measured pair involves.
+  void apply_changes() {
+    if (!read_fields()) return;
+    if (failure_ && !editor_style_contrast_palette()) {
+      role->value(static_cast<int>(failure_->role));
+      load_role();
+      text->take_focus();
+      return;
+    }
+    applied = true;
+    hide();
+  }
   Fl_Input *input(int x, int y, int width, const char *label) {
     auto *field = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
     field->when(FL_WHEN_CHANGED);
@@ -309,6 +362,9 @@ private:
     fill->value(hex_or_empty(item.fill).c_str());
     text->value(hex_or_empty(item.text).c_str());
     selection->value(hex_or_empty(item.selection).c_str());
+    // The fields now hold valid staged colours: re-read them so a stale
+    // invalid-field message gives way to the live contrast line.
+    (void)read_fields();
     name_choosers();
   }
   // Empty means "not overridden"; anything else must be #RRGGBB.
@@ -326,6 +382,7 @@ private:
     RoleOverride next{read(fill, "Role fill"), read(text, "Role text"), read(selection, "Role selection")};
     if (!invalid.empty()) {
       invalid_fields_ = true;
+      status_mark->kind(StatusKind::none);
       status->copy_label((invalid + " must be #RRGGBB or empty; the last valid colors stay previewed.").c_str());
       status->redraw();
       return false;
@@ -343,6 +400,7 @@ private:
   }
 
   bool invalid_fields_{};
+  std::optional<RoleContrastFailure> failure_;
 
   struct Target {
     AppearanceDialog *dialog{};
@@ -355,6 +413,7 @@ private:
   Fl_Choice *theme{}, *role{};
   Fl_Input *accent{}, *fill{}, *text{}, *selection{};
   Fl_Box *status{};
+  EditorStatusMark *status_mark{};
   Fl_Window &root_;
   const Fl_Widget *sidebar_;
   const Fl_Widget *preview_;
