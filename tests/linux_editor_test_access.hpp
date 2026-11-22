@@ -191,6 +191,9 @@ struct EditorAppTestAccess {
   static Fl_Check_Button *direct_drag(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->direct_drag_ : nullptr;
   }
+  static Fl_Box *contrast_line(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->contrast_line_ : nullptr;
+  }
 
   static EditorWindow &window(EditorApp &app) { return app.window; }
   static Fl_Scroll *content(EditorApp &app) { return app.content; }

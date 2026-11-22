@@ -197,8 +197,11 @@ public:
   void show_position(bool active);
   // Direct Drag is offered only inside a started on-window edit session.
   void show_direct_drag(bool available, bool enabled);
+  // Recomputes the overlay contrast line from the colour fields' text.
+  void update_contrast();
 private:
   friend struct EditorAppTestAccess;
+  void set_contrast(const std::string &line);
   EditorApp &app_;
   Fl_Group *panel_tab_{}, *panel_fields_{};
   ContextBrowser *panels_{};
@@ -209,6 +212,9 @@ private:
   PanelItemsControls items_;
   Fl_Button *position_button_{};
   Fl_Check_Button *direct_drag_{}; // on_window_edit_sessions() only
+  EditorStatusMark *contrast_mark_{};
+  Fl_Box *contrast_line_{};
+  std::string contrast_text_;
 };
 
 } // namespace layerc::editor

@@ -7,9 +7,11 @@
 #include "layerc/platform/window_query.hpp"
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace layerc::editor {
 namespace {
@@ -40,6 +42,55 @@ TaskCandidate candidate(const platform::WindowCandidate &window, const HWND acti
   return task;
 }
 
+class WindowsPickCaptureWatch final : public PickCaptureWatch {
+public:
+  WindowsPickCaptureWatch(PickCaptureTimer timer, std::function<void()> lost)
+      : timer_(timer), lost_(std::move(lost)) {}
+
+  ~WindowsPickCaptureWatch() override {
+    detach();
+    if (pending_) timer_.cancel(notify, this);
+  }
+
+  [[nodiscard]] bool attach(HWND owner) {
+    if (!owner || !SetWindowSubclass(owner, subclass, id(), reinterpret_cast<DWORD_PTR>(this)))
+      return false;
+    owner_ = owner;
+    return true;
+  }
+
+private:
+  [[nodiscard]] UINT_PTR id() const noexcept { return reinterpret_cast<UINT_PTR>(this); }
+
+  void detach() noexcept {
+    if (owner_) RemoveWindowSubclass(std::exchange(owner_, nullptr), subclass, id());
+  }
+
+  static LRESULT CALLBACK subclass(HWND owner, UINT message, WPARAM wparam, LPARAM lparam,
+                                   UINT_PTR, DWORD_PTR data) {
+    auto &watch = *reinterpret_cast<WindowsPickCaptureWatch *>(data);
+    if (message == WM_NCDESTROY) watch.detach();
+    if (message == WM_CAPTURECHANGED && reinterpret_cast<HWND>(lparam) != owner &&
+        !watch.pending_) {
+      watch.pending_ = true;
+      watch.timer_.schedule(0.0, notify, &watch);
+    }
+    return DefSubclassProc(owner, message, wparam, lparam);
+  }
+
+  static void notify(void *data) {
+    auto &watch = *static_cast<WindowsPickCaptureWatch *>(data);
+    watch.pending_ = false;
+    auto lost = std::move(watch.lost_);
+    if (lost) lost();
+  }
+
+  HWND owner_{};
+  PickCaptureTimer timer_;
+  std::function<void()> lost_;
+  bool pending_{};
+};
+
 } // namespace
 
 std::vector<TaskCandidate> scan_tasks(std::string &error) {
@@ -56,6 +107,29 @@ std::vector<TaskCandidate> scan_tasks(std::string &error) {
     tasks.push_back(candidate(window, active));
   }
   return tasks;
+}
+
+bool window_picking_supported() noexcept { return true; }
+
+std::optional<TaskCandidate> task_at_screen_point(const int x, const int y) {
+  const POINT point{x, y};
+  if (!MonitorFromPoint(point, MONITOR_DEFAULTTONULL)) return std::nullopt;
+  const auto window = platform::window_at_point(point);
+  if (!window) return std::nullopt;
+  return candidate(*window, GetForegroundWindow());
+}
+
+std::optional<TaskCandidate> task_under_cursor() {
+  POINT point{};
+  if (!GetCursorPos(&point)) return std::nullopt;
+  return task_at_screen_point(static_cast<int>(point.x), static_cast<int>(point.y));
+}
+
+std::unique_ptr<PickCaptureWatch>
+watch_pick_capture(std::uintptr_t owner, PickCaptureTimer timer, std::function<void()> lost) {
+  auto watch = std::make_unique<WindowsPickCaptureWatch>(timer, std::move(lost));
+  if (!watch->attach(reinterpret_cast<HWND>(owner))) return nullptr;
+  return watch;
 }
 
 std::optional<TaskCandidate> matching_task(const std::vector<TaskCandidate> &tasks,

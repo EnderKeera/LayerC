@@ -134,7 +134,7 @@ public:
   // The game window the preview stands for while positioning on it.
   [[nodiscard]] bool placement_active() const;
   [[nodiscard]] const std::optional<TaskCandidate> &placement() const noexcept { return placement_; }
-  [[nodiscard]] std::optional<TaskCandidate> window_target(std::string_view action);
+  [[nodiscard]] std::optional<TaskCandidate> window_target(TaskRequest request);
 
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_;
@@ -166,7 +166,7 @@ private:
   FolderOpener opener_;
   std::string opener_path_;
   // Detected Tasks and live placement (editor_placement.cpp).
-  void show_tasks(const std::string &reason = {});
+  void show_tasks(const std::string &reason = {}, TaskRequest request = TaskRequest::none);
   void use_task(const TaskCandidate &task, bool exact_path);
   void position_command();
   void position_on(const TaskCandidate &task);

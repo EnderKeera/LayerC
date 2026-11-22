@@ -70,6 +70,22 @@ make_standalone_live_drafts(std::function<void()> ready);
 [[nodiscard]] std::optional<TaskCandidate>
 matching_task(const std::vector<TaskCandidate> &tasks, const core::GameMatch &match);
 [[nodiscard]] bool task_matches(const TaskCandidate &task, const core::GameMatch &match);
+[[nodiscard]] bool window_picking_supported() noexcept;
+// Physical screen pixels, not FLTK's scaled event coordinates.
+[[nodiscard]] std::optional<TaskCandidate> task_at_screen_point(int x, int y);
+[[nodiscard]] std::optional<TaskCandidate> task_under_cursor();
+
+class PickCaptureWatch {
+public:
+  virtual ~PickCaptureWatch() = default;
+};
+struct PickCaptureTimer {
+  using Callback = void (*)(void *);
+  void (*schedule)(double, Callback, void *);
+  void (*cancel)(Callback, void *);
+};
+[[nodiscard]] std::unique_ptr<PickCaptureWatch>
+watch_pick_capture(std::uintptr_t owner, PickCaptureTimer timer, std::function<void()> lost);
 
 struct FocusedBindingCallbacks {
   std::function<void(const core::InputToken &)> record;

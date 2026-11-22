@@ -43,6 +43,17 @@ std::vector<TaskCandidate> scan_tasks(std::string &error) {
   return tasks;
 }
 
+bool window_picking_supported() noexcept { return false; }
+
+std::optional<TaskCandidate> task_at_screen_point(int, int) { return std::nullopt; }
+
+std::optional<TaskCandidate> task_under_cursor() { return std::nullopt; }
+
+std::unique_ptr<PickCaptureWatch>
+watch_pick_capture(std::uintptr_t, PickCaptureTimer, std::function<void()>) {
+  return nullptr;
+}
+
 std::optional<TaskCandidate> matching_task(const std::vector<TaskCandidate> &tasks,
                                            const core::GameMatch &match) {
   platform::X11WindowScan scan;

@@ -160,8 +160,27 @@ struct LinuxVisualEditor::Impl {
         return std::nullopt;
       })); return;
     }
-    if (widget != calibrate || !app.apply_fields()) return;
+    if (widget == calibrate) start_calibration();
+  }
+
+  void start_calibration(const TaskCandidate *task = nullptr) {
+    auto &session = app.session;
+    if (!session.has_document() || !app.apply_fields()) return;
     session.end_text_edit();
+    const auto &document = session.document();
+    if (document.path().empty()) {
+      app.report(StatusKind::failure, "Save the profile once before calibration.");
+      return;
+    }
+    if (document.profile().game.global) {
+      app.report(StatusKind::failure, "Unavailable: visual capture is not supported for global profiles.");
+      return;
+    }
+    if (task && !task_matches(*task, document.profile().game)) {
+      app.report(StatusKind::failure,
+                 "That window does not match this profile. Use selected task first to change the profile's Application.");
+      return;
+    }
     const auto cooldown = selected_id;
     const auto unchanged = unchanged_guard();
     auto seed = CalibrationModel::open(session.document().profile(), cooldown,
@@ -187,10 +206,11 @@ struct LinuxVisualEditor::Impl {
     const CalibrationHost host{
         .report = [&](const StatusKind kind, const std::string &text) { app.report(kind, text); },
         .resolve_target = [&]() -> std::optional<TaskCandidate> {
+          if (task) return *task;
           if (app.placement_active() &&
               task_matches(*app.placement(), session.document().profile().game))
             return app.placement();
-          return app.window_target("Calibrate visual");
+          return app.window_target(TaskRequest::calibrate);
         },
         .owner = app.main_window(),
     };
@@ -218,20 +238,28 @@ LinuxVisualEditor::LinuxVisualEditor(EditorApp &app)
 }
 LinuxVisualEditor::~LinuxVisualEditor() = default;
 Fl_Group *LinuxVisualEditor::group() const { return page_; }
+void LinuxVisualEditor::ensure_impl() {
+  if (impl_) return;
+  auto *previous = Fl_Group::current();
+  const int x = page_->x(), y = page_->y();
+  // Lazy controls use the authored page origin; the page may already have
+  // moved with the main scroll host (including its menu-bar offset).
+  page_->position(270, 45);
+  impl_ = std::make_unique<Impl>(app_, *page_);
+  page_->position(x, y);
+  Fl_Group::current(previous);
+}
 void LinuxVisualEditor::refresh() {
   if (!app_.session.has_document()) { page_->deactivate(); return; }
   page_->activate();
-  if (!impl_) {
-    if (!page_->visible()) return;
-    auto *previous = Fl_Group::current();
-    const int x = page_->x(), y = page_->y();
-    // Lazy controls use the authored page origin; the page may already have
-    // moved with the main scroll host (including its menu-bar offset).
-    page_->position(270, 45);
-    impl_ = std::make_unique<Impl>(app_, *page_);
-    page_->position(x, y);
-    Fl_Group::current(previous);
-  }
+  if (!impl_ && !page_->visible()) return;
+  ensure_impl();
   impl_->refresh();
+}
+void LinuxVisualEditor::calibrate_task(const TaskCandidate &task) {
+  if (!app_.session.has_document()) return;
+  ensure_impl();
+  impl_->refresh();
+  impl_->start_calibration(&task);
 }
 } // namespace layerc::editor

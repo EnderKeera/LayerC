@@ -13,13 +13,22 @@
 
 namespace layerc::editor {
 
-void EditorApp::show_tasks(const std::string &reason) {
+void EditorApp::show_tasks(const std::string &reason, const TaskRequest request) {
   if (!tasks_window) {
     tasks_window = std::make_unique<TasksWindow>(TasksWindow::Actions{
-        [this](const TaskCandidate &task, bool exact_path) { use_task(task, exact_path); },
-        [this](const TaskCandidate &task) { position_on(task); }});
+        .use = [this](const TaskCandidate &task, bool exact_path) { use_task(task, exact_path); },
+        .position = [this](const TaskCandidate &task) { position_on(task); },
+        .calibrate = [this](const TaskCandidate &task) { visual->calibrate_task(task); },
+        .pick_owner = main_window(),
+        .report = [this](StatusKind kind, const std::string &text) { report(kind, text); },
+        .game_match = [this]() -> std::optional<core::GameMatch> {
+          if (!session.has_document()) return std::nullopt;
+          return session.document().profile().game;
+        },
+        .scan = {},
+    });
   }
-  tasks_window->show(reason);
+  tasks_window->show(reason, request);
 }
 
 void EditorApp::use_task(const TaskCandidate &task, const bool exact_path) {
@@ -48,10 +57,10 @@ void EditorApp::position_command() {
     return;
   }
   if (!apply_fields()) return;
-  if (const auto target = window_target("Position on window")) position_on(*target);
+  if (const auto target = window_target(TaskRequest::position)) position_on(*target);
 }
 
-std::optional<TaskCandidate> EditorApp::window_target(const std::string_view action) {
+std::optional<TaskCandidate> EditorApp::window_target(const TaskRequest request) {
   std::string error;
   const auto tasks = scan_tasks(error);
   if (!error.empty() && tasks.empty()) {
@@ -67,13 +76,14 @@ std::optional<TaskCandidate> EditorApp::window_target(const std::string_view act
   if (matches == 1) {
     if (const auto target = matching_task(tasks, game)) return target;
   }
+  const char *action = request == TaskRequest::calibrate ? "Calibrate visual" : "Position on window";
   const std::string reason = matches == 0
       ? "No running window matches this profile. Start the game, or check the profile's "
         "Application, then press Refresh."
       : "Several windows match — select one, then " + std::string(action) + ".";
   report(StatusKind::information, matches == 0 ? "No automatic match — select an eligible window in Detected Tasks."
                       : "Multiple windows match — select one in Detected Tasks.");
-  show_tasks(reason);
+  show_tasks(reason, request);
   return std::nullopt;
 }
 

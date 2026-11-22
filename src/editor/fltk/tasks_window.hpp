@@ -11,8 +11,8 @@
 class Fl_Box;
 class Fl_Check_Button;
 class Fl_Double_Window;
-class Fl_Hold_Browser;
 class Fl_Widget;
+class Fl_Window;
 
 namespace layerc::editor {
 
@@ -25,6 +25,14 @@ namespace layerc::editor {
 matching_task(const std::vector<TaskCandidate> &tasks, const layerc::core::GameMatch &match);
 [[nodiscard]] bool task_matches(const TaskCandidate &task, const layerc::core::GameMatch &match);
 
+class PickCaptureWatch;
+
+enum class TaskRequest { none, position, calibrate };
+enum class PickOutcome { ineligible, mismatch, use, position, calibrate };
+[[nodiscard]] PickOutcome decide_pick(const std::optional<TaskCandidate> &task,
+                                      std::uint32_t own_pid, TaskRequest request,
+                                      bool global, bool matches) noexcept;
+
 // Modeless Detected Tasks: scanned on open and on Refresh only (no timers or
 // threads), and its X11 connection closes as soon as each scan ends.
 class TasksWindow final {
@@ -32,6 +40,11 @@ public:
   struct Actions {
     std::function<void(const TaskCandidate &, bool exact_path)> use;
     std::function<void(const TaskCandidate &)> position;
+    std::function<void(const TaskCandidate &)> calibrate;
+    Fl_Window *pick_owner{};
+    std::function<void(StatusKind, const std::string &)> report;
+    std::function<std::optional<core::GameMatch>()> game_match;
+    std::function<std::vector<TaskCandidate>(std::string &)> scan;
   };
   explicit TasksWindow(Actions actions);
   ~TasksWindow();
@@ -39,7 +52,7 @@ public:
   TasksWindow &operator=(const TasksWindow &) = delete;
   // `reason` explains a request (e.g. several matching windows); empty
   // for a plain open.
-  void show(const std::string &reason = {});
+  void show(const std::string &reason = {}, TaskRequest request = TaskRequest::none);
   void refresh();
   void hide();
   [[nodiscard]] bool shown() const;
@@ -51,11 +64,28 @@ private:
   static void on_select(Fl_Widget *, void *);
   static void on_use(Fl_Widget *, void *);
   static void on_position(Fl_Widget *, void *);
+  static void on_calibrate(Fl_Widget *, void *);
+  static void on_pick(Fl_Widget *, void *);
   static void on_close(Fl_Widget *, void *);
+  void activate_selected(TaskRequest action);
+  void run_action(TaskRequest action, const TaskCandidate &task);
   void update_detail();
+  void begin_pick();
+  void finish_pick();
+  void cancel_pick();
+  void end_pick(bool reshow);
+  static int dispatch_pick(int event, Fl_Window *window);
+  static TasksWindow *picker_;
+  class Browser;
   Actions actions_;
   std::unique_ptr<Fl_Double_Window> window_;
-  Fl_Hold_Browser *list_{};
+  Browser *list_{};
+  TaskRequest request_{TaskRequest::none};
+  TaskRequest pick_request_{TaskRequest::none};
+  int (*previous_dispatch_)(int, Fl_Window *){};
+  Fl_Window *previous_grab_{};
+  std::unique_ptr<PickCaptureWatch> capture_watch_;
+  bool pick_was_shown_{};
   Fl_Check_Button *show_all_{}, *exact_path_{};
   Fl_Box *detail_{}, *message_{};
   std::vector<TaskCandidate> tasks_;

@@ -1,4 +1,5 @@
 #include "editor_color.hpp"
+#include "overlay_contrast.hpp"
 #include "test_support.hpp"
 
 #include <cmath>
@@ -10,6 +11,7 @@ namespace {
 
 using layerc::editor::accent_2_blue;
 using layerc::editor::accent_2_violet;
+using layerc::editor::overlay_contrast_line;
 using layerc::editor::rgb_accent_2;
 using layerc::editor::rgb_contrast_ratio;
 using layerc::editor::rgb_hue_degrees;
@@ -88,4 +90,24 @@ void editor_color_contracts() {
          "ink on an accent follows the light/dark threshold");
 }
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_color_contracts))
+// The OverlayBar contrast line both editors show under a bar's colours.
+void overlay_contrast_line_contracts() {
+  expect(overlay_contrast_line(0x141414, 0x141414, 0xFFFFFF, 0xFFFFFF, true).empty(),
+         "a bar whose every pair passes has no contrast line");
+  expect(overlay_contrast_line(0x50BAC8, 0x202A31, 0x80D8E8, 0xF1F5F7, true) ==
+             "Low contrast. Text is 2.0:1 on Fill; aim for 4.5:1.",
+         "the README palette names only its failing text-on-fill pair");
+  expect(overlay_contrast_line(0x606060, 0x5A5A5A, 0x646464, 0x707070, true) ==
+             "Low contrast. Text is 1.2:1 on Fill and 1.3:1 on Background; aim for 4.5:1. "
+             "Border is 1.1:1 on Background; aim for 3:1.",
+         "faint colours list both text pairs, then the border, rounded down");
+  expect(overlay_contrast_line(0x606060, 0x5A5A5A, 0x646464, 0x707070, false) ==
+             "Low contrast. Border is 1.1:1 on Background; aim for 3:1.",
+         "a bar without text checks only its border");
+  expect(overlay_contrast_line(0x141414, 0x141414, 0x141414, 0xFFFFFF, true) ==
+             "Low contrast. Border is 1.0:1 on Background; aim for 3:1.",
+         "a border matching its background fails alone");
+}
+
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_color_contracts),
+                 LAYERC_TEST_CASE(overlay_contrast_line_contracts))

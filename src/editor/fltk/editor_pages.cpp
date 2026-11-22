@@ -2,6 +2,7 @@
 #include "platform/product_text.hpp"
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
+#include "overlay_contrast.hpp"
 #include "platform/hid_binding_capture.hpp"
 #include "platform/services.hpp"
 #include "profile_edit.hpp"
@@ -11,6 +12,7 @@
 #include <charconv>
 #include <cmath>
 
+#include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
@@ -500,9 +502,16 @@ void PanelPage::build(FormBuilder &builder) {
   background_ = builder.input(635, 205, 125, "Background");
   border_ = builder.input(780, 205, 120, "Border");
   text_color_ = builder.input(915, 205, 115, "Text color");
-  show_text_ = builder.check(500, 255, 180, "Show bar text");
-  (void)builder.button(685, 250, 90, "Colours...", EditorCommand::panel_colors);
-  hide_ready_ = builder.check(780, 255, 250, "Hide bars when ready");
+  // DesignSystem.md, OverlayBar: one warning line under the colour fields
+  // while a pair is below its Overlay minimum; hidden once every pair passes.
+  contrast_mark_ = new EditorStatusMark(500, 237, 18, 36);
+  contrast_line_ = new Fl_Box(518, 237, 512, 36);
+  contrast_line_->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
+  contrast_mark_->hide();
+  contrast_line_->hide();
+  show_text_ = builder.check(500, 280, 180, "Show bar text");
+  (void)builder.button(685, 275, 90, "Colours...", EditorCommand::panel_colors);
+  hide_ready_ = builder.check(780, 280, 250, "Hide bars when ready");
   items_.build();
   panel_fields_->end();
   panel_tab_->end();
@@ -521,6 +530,7 @@ void PanelPage::show(const layerc::core::GameProfile &profile,
                      const std::optional<std::size_t> selected) {
   items_.show(profile, selected);
   if (!selected) {
+    set_contrast({});
     panel_fields_->deactivate();
     return;
   }
@@ -539,7 +549,38 @@ void PanelPage::show(const layerc::core::GameProfile &profile,
   text_color_->value(format_rgb(item.bar.text_color).c_str());
   show_text_->value(item.bar.show_text ? 1 : 0);
   hide_ready_->value(item.bar.hide_when_ready ? 1 : 0);
+  update_contrast();
+}
 
+// Read from the fields' own text so the line follows typing before the edit is
+// accepted; while any colour field is unparsable the last line stays.
+void PanelPage::update_contrast() {
+  if (!panel_fields_->active()) return;
+  const auto fill = parse_rgb(fill_->value());
+  const auto background = parse_rgb(background_->value());
+  const auto border = parse_rgb(border_->value());
+  const auto text = parse_rgb(text_color_->value());
+  if (!fill || !background || !border || !text) return;
+  set_contrast(overlay_contrast_line(*fill, *background, *border, *text,
+                                     show_text_->value() != 0));
+}
+
+void PanelPage::set_contrast(const std::string &line) {
+  if (line == contrast_text_) return;
+  contrast_text_ = line;
+  contrast_line_->copy_label(line.c_str());
+  contrast_mark_->kind(line.empty() ? StatusKind::none : StatusKind::warning);
+  if (line.empty()) {
+    contrast_mark_->hide();
+    contrast_line_->hide();
+  } else {
+    contrast_mark_->show();
+    contrast_line_->show();
+  }
+  // The four fields carry the line for screen readers, cleared with it.
+  for (Fl_Input *field : {fill_, background_, border_, text_color_})
+    accessibility::set_accessible_description(*field, line);
+  panel_fields_->redraw();
 }
 
 std::optional<std::string> PanelPage::read(layerc::core::Panel &item) const {
@@ -593,6 +634,7 @@ bool PanelPage::owns(const Fl_Widget *widget) const {
           widget == background_ || widget == border_ || widget == text_color_ ||
           widget == layout_ || widget == style_ || items_.owns(widget) ||
           widget == show_text_ || widget == hide_ready_ || widget == position_button_ ||
+          widget == contrast_mark_ || widget == contrast_line_ ||
           (direct_drag_ != nullptr && widget == direct_drag_));
 }
 

@@ -134,6 +134,8 @@ void EditorApp::field_changed(Fl_Widget *widget) {
     report(StatusKind::information, edit_status(), StatusVoice::silent);
     preview->redraw();
   }
+  // Follows the typed colours even while another field is still invalid.
+  if (active_tab_ == panel_tab) panel_page_->update_contrast();
 }
 void EditorApp::selection_changed(Fl_Widget *widget) {
   const auto target = static_cast<Fl_Hold_Browser *>(widget)->value();

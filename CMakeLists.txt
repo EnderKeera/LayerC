@@ -394,10 +394,11 @@ if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
 endif()
 
 # Platform-neutral color math shared by both editors: packed 0xRRGGBB only,
-# so the renderers agree on contrast, hue and the accent mark. layerc_windows
-# always links it for the native theme.
+# so the renderers agree on contrast, hue, the accent mark and the overlay
+# contrast line. layerc_windows always links it for the native theme.
 if(WIN32 OR LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
-    add_library(layerc_editor_color STATIC src/editor/common/editor_color.cpp)
+    add_library(layerc_editor_color STATIC src/editor/common/editor_color.cpp
+        src/editor/common/overlay_contrast.cpp)
     target_include_directories(layerc_editor_color PUBLIC src/editor/common)
     layerc_enable_warnings(layerc_editor_color)
 endif()

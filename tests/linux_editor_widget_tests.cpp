@@ -39,6 +39,7 @@
 #include <unistd.h>
 #endif
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -63,6 +64,14 @@ void linux_editor_review_regressions();
 void linux_editor_cooldown_group_dialog_transactions();
 void linux_editor_export_profile_checklist();
 void linux_editor_system_theme_restores_tab_class_colors();
+void tasks_double_click_runs_requested_action();
+void tasks_calibrate_button_uses_selected_task();
+void decide_pick_rules();
+void panel_contrast_line_follows_colors();
+#ifdef _WIN32
+void task_at_screen_point_maps_fixture_window();
+void tasks_picker_restores_capture();
+#endif
 void linux_editor_field_error_contracts();
 void linux_editor_pending_automation_status_contracts();
 void linux_editor_calibration_layout_contracts();
@@ -598,7 +607,11 @@ void automation_json_and_simulator_lifetime() {
   view.value(1); view.do_callback();
   automation_control<Fl_Choice>(app, "Speed").value(2);
   play.do_callback();
-  for (int i = 0; i < 30 && std::string(play.label()) == "Pause"; ++i) Fl::wait(.02);
+  // A monotonic deadline, not an iteration count: Fl::wait returns early on
+  // any message, and a loaded runner can delay the 25 ms tick.
+  for (const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+       std::string(play.label()) == "Pause" && std::chrono::steady_clock::now() < end;)
+    Fl::wait(.02);
   expect(std::string(play.label()) == "Play" && std::string(state.value()).find("Events: 2/2") == 0,
          "playback consumes the remaining event and becomes idle without polling");
   automation_control<Fl_Button>(app, "Reset").do_callback();
@@ -1021,6 +1034,9 @@ void windows_editor_platform_exclusions();
 #define LAYERC_PLATFORM_WIDGET_CASES LAYERC_TEST_CASE(windows_editor_platform_exclusions),
 #define LAYERC_CALIBRATION_LAYOUT_CASE
 #define LAYERC_NATIVE_CAPTURE_CASE
+#define LAYERC_TASK_PICK_CASES \
+  LAYERC_TEST_CASE(task_at_screen_point_maps_fixture_window), \
+  LAYERC_TEST_CASE(tasks_picker_restores_capture),
 #else
 #define LAYERC_PLATFORM_WIDGET_CASES \
   LAYERC_TEST_CASE(linux_editor_accessibility_tree_rows), \
@@ -1032,6 +1048,7 @@ void windows_editor_platform_exclusions();
   LAYERC_TEST_CASE(linux_editor_accessibility_keeps_fltk_file_chooser),
 #define LAYERC_CALIBRATION_LAYOUT_CASE LAYERC_TEST_CASE(linux_editor_calibration_layout_contracts),
 #define LAYERC_NATIVE_CAPTURE_CASE , LAYERC_TEST_CASE(calibration_unavailable_and_owned_capture)
+#define LAYERC_TASK_PICK_CASES
 #endif
 
 LAYERC_TEST_MAIN(
@@ -1059,6 +1076,11 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_system_theme_restores_tab_class_colors),
   LAYERC_TEST_CASE(linux_editor_cooldown_group_dialog_transactions),
   LAYERC_TEST_CASE(linux_editor_export_profile_checklist),
+  LAYERC_TEST_CASE(tasks_double_click_runs_requested_action),
+  LAYERC_TEST_CASE(tasks_calibrate_button_uses_selected_task),
+  LAYERC_TEST_CASE(decide_pick_rules),
+  LAYERC_TEST_CASE(panel_contrast_line_follows_colors),
+  LAYERC_TASK_PICK_CASES
   LAYERC_TEST_CASE(empty_draft_save_and_reopen),
   LAYERC_TEST_CASE(text_history_and_invalid_navigation),
   LAYERC_TEST_CASE(cooldowns_bindings_and_panels),

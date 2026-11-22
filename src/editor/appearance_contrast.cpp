@@ -1,6 +1,8 @@
 #include "appearance_contrast.hpp"
 
 #include "layerc/platform/native_theme.hpp"
+#include "layerc/platform/text.hpp"
+#include "overlay_contrast.hpp"
 
 #include <algorithm>
 #include <array>
@@ -229,37 +231,13 @@ palette_swatch_descriptions(const std::vector<ContrastTarget> &targets) {
   return descriptions;
 }
 
-namespace {
-
-constexpr double overlay_text_minimum = 4.5;
-constexpr double overlay_mark_minimum = 3.0;
-
-} // namespace
-
+// One wording source for both editors (src/editor/common/overlay_contrast).
 std::wstring overlay_contrast_text(const OverlayColors &colors) {
-  using layerc::platform::contrast_ratio;
-  std::wstring text;
-  if (colors.show_text) {
-    std::wstring pairs;
-    for (const auto &[name, color] :
-         {std::pair{L"Fill", colors.fill},
-          std::pair{L"Background", colors.background}}) {
-      const double ratio = contrast_ratio(colors.text, color);
-      if (ratio >= overlay_text_minimum)
-        continue;
-      pairs += (pairs.empty() ? L"Text is " : L" and ") +
-               contrast_ratio_text(ratio) + L" on " + name;
-    }
-    if (!pairs.empty())
-      text += L" " + pairs + L"; aim for " +
-              minimum_text(overlay_text_minimum) + L":1.";
-  }
-  if (const double ratio = contrast_ratio(colors.border, colors.background);
-      ratio < overlay_mark_minimum)
-    text += L" Border is " + contrast_ratio_text(ratio) +
-            L" on Background; aim for " + minimum_text(overlay_mark_minimum) +
-            L":1.";
-  return text.empty() ? text : L"Low contrast." + text;
+  using layerc::platform::native_rgb_value;
+  return layerc::platform::utf8_to_wide(overlay_contrast_line(
+      native_rgb_value(colors.fill), native_rgb_value(colors.background),
+      native_rgb_value(colors.border), native_rgb_value(colors.text),
+      colors.show_text));
 }
 
 std::vector<ContrastTarget>
