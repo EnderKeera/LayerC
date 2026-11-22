@@ -96,11 +96,16 @@ if(WIN32 AND TARGET layerc_editor_fltk)
     layerc_add_test(layerc_windows_fltk_calibration_tests WIN32
         SOURCES tests/windows_fltk_calibration_tests.cpp
         LINK layerc_editor_fltk TIMEOUT 60 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_startup_tests WIN32
+        SOURCES tests/windows_fltk_startup_tests.cpp
+        LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
 endif()
 if(TARGET layere_fltk)
     add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)
+    string(SHA256 smoke_settings_id "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties(layerc_windows_fltk_smoke PROPERTIES
-        TIMEOUT 15 LABELS "required;editor")
+        TIMEOUT 15 LABELS "required;editor"
+        ENVIRONMENT "LAYERC_PROFILE_DIR=${CMAKE_CURRENT_BINARY_DIR}/fltk-smoke-profiles;LAYERC_SETTINGS_KEY=Software\\LayerC.FltkSmoke.${smoke_settings_id}")
     if(MINGW)
         get_filename_component(fltk_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
         set_tests_properties(layerc_windows_fltk_smoke PROPERTIES

@@ -299,6 +299,7 @@ if(WIN32)
         src/platform/win32/settings_store.cpp
         src/platform/win32/editor_appearance.cpp
         src/platform/win32/window_query.cpp
+        src/platform/win32/editor_instance.cpp
         src/platform/win32/win32_error.cpp
         src/platform/win32/platform_events.cpp
         src/platform/win32/native_theme.cpp

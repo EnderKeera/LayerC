@@ -23,6 +23,9 @@ public:
   EditorAccessibility(const EditorAccessibility &) = delete;
   EditorAccessibility &operator=(const EditorAccessibility &) = delete;
   [[nodiscard]] AccessibilityStatus status() const;
+#ifdef _WIN32
+  [[nodiscard]] bool sync();
+#endif
   // Reports status on the FLTK thread and delivers the current state once.
   using StatusHandler = std::function<void(const AccessibilityStatus &)>;
   void set_status_handler(StatusHandler handler);

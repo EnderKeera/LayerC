@@ -5,6 +5,7 @@
 // overlay, which X11 overlays never are.
 #include "daemon_link.hpp"
 #include "editor_app.hpp"
+#include "platform/product_text.hpp"
 #include "tasks_window.hpp"
 
 #include <FL/Fl_Button.H>
@@ -99,8 +100,7 @@ void EditorApp::position_on(const TaskCandidate &task) {
   std::string text =
       "Positioning on " + (task.title.empty() ? std::string("the window") : "\"" + task.title + "\"") +
       " (" + std::to_string(task.width) + "x" + std::to_string(task.height) +
-      "): drag bars in the preview; LayerD moves the overlay through the live draft. Direct "
-      "Drag is unavailable on X11 because overlays stay click-through.";
+      "): " + placement_drag_note();
   // On Wayland the geometry is the XWayland window's; the note names the
   // degraded path and LayerD's own window provider.
   if (const auto note = wayland_scope_note(query_daemon_status(), wayland_environment());

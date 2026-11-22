@@ -1,6 +1,7 @@
 #include "diagnostics_window.hpp"
 #include "editor_style.hpp"
 #include "daemon_link.hpp"
+#include "platform/product_text.hpp"
 #include "runtime_diagnostics_view.hpp"
 #include "layerc/core/version.hpp"
 
@@ -229,7 +230,7 @@ void show_about_dialog(const std::string &daemon_summary, const std::string &acc
 #endif
   const std::string version(layerc::core::product_version);
   const std::string text =
-      "LayerE " + version + " — Linux X11 editor\n\n"
+      "LayerE " + version + " — " + std::string(editor_product_line()) + "\n\n"
       "Creates and edits cooldown overlay profiles. LayerC reads input passively: "
       "it never blocks, changes or sends input, and the editor never accesses the network.\n\n"
       "Source and releases: github.com/EnderKeera/LayerC";

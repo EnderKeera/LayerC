@@ -1,4 +1,5 @@
 #include "editor_app.hpp"
+#include "platform/product_text.hpp"
 #include "layerc/core/profile.hpp"
 
 #include <FL/Fl.H>
@@ -9,6 +10,7 @@ namespace layerc::editor {
 namespace core = layerc::core;
 
 EditorApp::EditorApp() {
+  window.copy_label(editor_window_title().c_str());
   // An accepted edit is the only autosave signal; presentation never is.
   session.set_change_listener([this] { sync_edit_services(); });
 }

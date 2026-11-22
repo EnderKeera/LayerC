@@ -3,6 +3,7 @@
 #include "editor_tools.hpp"
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
+#include "platform/product_text.hpp"
 #include "appearance_window.hpp"
 #include "cooldown_groups_window.hpp"
 #include "diagnostics_window.hpp"
@@ -108,18 +109,6 @@ std::optional<PanelColorSet> edit_panel_colors_internal(const PanelColorSet &cur
   return result;
 }
 
-constexpr const char *options_dialog_text =
-    "Exclude editor windows from screen capture\n"
-    "  Unavailable on Linux X11: the X server offers no per-window capture\n"
-    "  exclusion, so any X client with access to the display can read them.\n\n"
-    "Isolated visual recognition\n"
-    "  Unavailable on Linux: LayerD runs visual recognition in its own process\n"
-    "  through the bounded X11 capture; there is no separate worker to isolate.\n"
-    "  A profile's Windows isolated-runtime setting is preserved unchanged.\n\n"
-    "Advanced settings\n"
-    "  LayerE on Linux always shows every field that the Windows editor keeps\n"
-    "  behind Show Advanced Settings (IDs, charges, retrigger, recovery).";
-
 } // namespace
 
 std::optional<PanelColorValues> edit_panel_colors(const PanelColorValues &current) {
@@ -130,7 +119,7 @@ std::optional<PanelColorValues> edit_panel_colors(const PanelColorValues &curren
   return PanelColorValues{chosen->values};
 }
 
-const char *options_text() { return options_dialog_text; }
+const char *options_text() { return editor_options_text(); }
 
 PanelColorsLayout panel_colors_layout() {
   fl_font(FL_HELVETICA, FL_NORMAL_SIZE);

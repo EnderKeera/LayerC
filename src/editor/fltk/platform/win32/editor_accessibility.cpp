@@ -1,5 +1,6 @@
 // Accessibility publication through the editor's UI Automation adaptor.
 #include "editor_accessibility.hpp"
+#include "editor_app.hpp"
 
 #include "a11y/fltk_tree.hpp"
 #include "a11y/uia/adaptor.hpp"
@@ -48,6 +49,14 @@ EditorAccessibility::~EditorAccessibility() = default;
 AccessibilityStatus EditorAccessibility::status() const {
   return impl_->status();
 }
+
+bool EditorAccessibility::sync() {
+  const auto error = impl_->adaptor.sync();
+  if (impl_->handler) impl_->handler(impl_->status());
+  return !error;
+}
+
+bool EditorApp::sync_accessibility() { return accessibility->sync(); }
 
 void EditorAccessibility::set_status_handler(StatusHandler handler) {
   impl_->set_handler(std::move(handler));

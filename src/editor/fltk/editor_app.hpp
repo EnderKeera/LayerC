@@ -67,7 +67,7 @@ public:
   // The root owns its shell widgets; each page/dialog owns its private controls.
   // Test-only access is confined to EditorAppTestAccess.
 private:
-  EditorWindow window{*this, 1080, 790, "LayerE — Linux X11 editor"};
+  EditorWindow window{*this, 1080, 790, nullptr};
   Fl_Scroll *content{};
   Fl_Hold_Browser *profiles{};
   Fl_Tabs *tabs{};
@@ -92,6 +92,9 @@ public:
   void show();
   [[nodiscard]] bool shown() const;
   [[nodiscard]] Fl_Window *main_window() noexcept { return &window; }
+#ifdef _WIN32
+  [[nodiscard]] bool sync_accessibility();
+#endif
   [[nodiscard]] bool handle_shortcut(int key, int modifiers);
   void show_context_menu(EditorMenuContext context, bool has_target);
   void refresh();
@@ -127,7 +130,7 @@ public:
   [[nodiscard]] std::optional<TaskCandidate> window_target(std::string_view action);
 
 private:
-  std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;
+  std::string cooldown_id_, panel_id_, status_text_, daemon_text_;
   StatusKind daemon_kind_{StatusKind::none};
   // The last message spoken, so a repeating failure is said once.
   std::string last_announced_;

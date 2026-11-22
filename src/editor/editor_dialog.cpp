@@ -10,6 +10,7 @@
 #include "editor_resource.h"
 #include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/editor_appearance.hpp"
+#include "layerc/platform/editor_instance.hpp"
 #include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_error.hpp"
@@ -27,59 +28,6 @@
 #include <windows.h>
 #include <windowsx.h>
 namespace layerc::editor {
-namespace {
-
-std::wstring editor_single_instance_name() {
-  HANDLE raw_token{};
-  TOKEN_STATISTICS statistics{};
-  DWORD required{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token) != FALSE) {
-    const layerc::platform::OwnedHandle token(raw_token);
-    if (GetTokenInformation(token.get(), TokenStatistics, &statistics,
-                            sizeof(statistics), &required) != FALSE) {
-      wchar_t name[96]{};
-      swprintf_s(
-          name, L"Local\\LayerC.LayerE.%08lX%08lX.v1",
-          static_cast<unsigned long>(statistics.AuthenticationId.HighPart),
-          static_cast<unsigned long>(statistics.AuthenticationId.LowPart));
-      return name;
-    }
-  }
-  return L"Local\\LayerC.LayerE.SingleInstance.v1";
-}
-
-// "#32770" is the shared system dialog class: FindWindowW alone would match
-// any application's dialog titled LayerC Editor. Only raise a window owned by
-// a process from this install.
-void raise_existing_editor() {
-  struct Context {
-    HWND found{};
-  } context;
-  EnumWindows(
-      [](const HWND window, const LPARAM raw) -> BOOL {
-        auto &context = *reinterpret_cast<Context *>(raw);
-        if (GetWindow(window, GW_OWNER) != nullptr ||
-            layerc::platform::window_class(window) != L"#32770" ||
-            !layerc::platform::window_text(window).ends_with(L"LayerC Editor"))
-          return TRUE;
-        DWORD process_id{};
-        GetWindowThreadProcessId(window, &process_id);
-        if (process_id == 0 || !layerc::platform::is_sibling_process_image(
-                                   process_id, L"layere.exe"))
-          return TRUE;
-        context.found = window;
-        return FALSE;
-      },
-      reinterpret_cast<LPARAM>(&context));
-  if (context.found == nullptr)
-    return;
-  if (IsIconic(context.found))
-    ShowWindow(context.found, SW_RESTORE);
-  ShowWindow(context.found, SW_SHOW);
-  SetForegroundWindow(context.found);
-}
-
-} // namespace
 
 int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   shell_.instance = instance;
@@ -830,7 +778,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
 
 int run_editor(const HINSTANCE instance, const int show_command) {
   using layerc::platform::SingleInstanceGuard;
-  const SingleInstanceGuard guard(editor_single_instance_name().c_str());
+  const SingleInstanceGuard guard(
+      layerc::platform::editor_single_instance_name().c_str());
   if (guard.state() == SingleInstanceGuard::State::failed) {
     themed_message_box(nullptr,
                 L"LayerC Editor could not create its single-instance guard.",
@@ -838,7 +787,7 @@ int run_editor(const HINSTANCE instance, const int show_command) {
     return 1;
   }
   if (guard.state() == SingleInstanceGuard::State::already_running) {
-    raise_existing_editor();
+    layerc::platform::raise_existing_editor();
     return 0;
   }
   return std::make_unique<EditorWindow>()->run(instance, show_command);

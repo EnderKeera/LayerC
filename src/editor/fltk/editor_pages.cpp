@@ -1,4 +1,5 @@
 #include "editor_pages.hpp"
+#include "platform/product_text.hpp"
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
 #include "platform/hid_binding_capture.hpp"
@@ -176,10 +177,12 @@ void ProfilePage::build(FormBuilder &builder) {
   profile_id_ = new EditorField<Fl_Multiline_Output>(285, 320, 745, 30, "Profile ID (read-only)");
   profile_id_->wrap(1);
   profile_id_->align(FL_ALIGN_TOP_LEFT);
-  auto *note = new Fl_Box(285, 370, 745, 65,
+  auto *note = new Fl_Box(285, 370, 745, 65);
+  const auto note_text = std::string(
       "Explicit Save publishes edits and requests an authenticated LayerD reload.\n"
-      "Offline editing is supported. The Automation tab edits rules and replays events.\n"
-      "The Visual tab calibrates X11 recognition; Game Bar companion data are preserved.");
+      "Offline editing is supported. The Automation tab edits rules and replays events.\n") +
+      visual_tab_note();
+  note->copy_label(note_text.c_str());
   note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   profile_tab_->end();
 }

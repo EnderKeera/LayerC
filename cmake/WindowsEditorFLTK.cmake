@@ -47,7 +47,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/platform/win32/live_draft_watch.cpp
     src/editor/fltk/platform/win32/calibration_service.cpp
     src/editor/fltk/platform/win32/binding_events.cpp
-    src/editor/fltk/platform/win32/hid_binding_capture.cpp)
+    src/editor/fltk/platform/win32/hid_binding_capture.cpp
+    src/editor/fltk/platform/win32/startup.cpp)
 target_include_directories(layerc_editor_fltk PUBLIC src/editor/fltk)
 # Calibration types only; the Windows capture backend arrives with its service.
 target_link_libraries(layerc_editor_fltk PUBLIC
@@ -56,8 +57,9 @@ target_link_libraries(layerc_editor_fltk PUBLIC
 layerc_win32(layerc_editor_fltk)
 
 if(LAYERC_BUILD_EDITOR)
-    add_executable(layere_fltk WIN32 src/editor/fltk/platform/win32/main.cpp)
-    target_include_directories(layere_fltk PRIVATE src/editor)
-    target_link_libraries(layere_fltk PRIVATE layerc_editor_fltk_uia layerc_windows)
+    add_executable(layere_fltk WIN32
+        src/editor/fltk/platform/win32/main.cpp
+        resources/windows/layere_fltk.rc)
+    target_link_libraries(layere_fltk PRIVATE layerc_editor_fltk)
     layerc_win32_exe(layere_fltk)
 endif()

@@ -2,6 +2,7 @@
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "binding_capture.hpp"
+#include "platform/product_text.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -36,15 +37,26 @@ std::optional<std::size_t> EditorApp::panel_index() const {
     if (items[i].id == panel_id_) return i;
   return std::nullopt;
 }
+std::string editor_window_title(const std::optional<std::string_view> profile_name,
+                                const bool dirty) {
+  std::string title = "LayerE — ";
+  title += editor_product_line();
+  if (profile_name) {
+    title += " — ";
+    title += *profile_name;
+    if (dirty) title += " *";
+  }
+  return title;
+}
+
 void EditorApp::report(const StatusKind kind, std::string text, const StatusVoice voice) {
   status_text_ = std::move(text);
   status_pane_->set_status(kind, status_text_);
-  title_text_ = "LayerE — Linux X11 editor";
-  if (session.has_document()) {
-    title_text_ += " — " + session.document().profile().name;
-    if (pending_fields_ || session.has_unsaved_changes()) title_text_ += " *";
-  }
-  window.copy_label(title_text_.c_str());
+  const auto title = session.has_document()
+      ? editor_window_title(session.document().profile().name,
+                            pending_fields_ || session.has_unsaved_changes())
+      : editor_window_title();
+  window.copy_label(title.c_str());
   status_pane_->set_history(session.can_undo() || pending_fields_,
                             session.can_redo() && !pending_fields_);
   if (menus) menus->update();

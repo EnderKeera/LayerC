@@ -562,6 +562,10 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
       {EditorCommand::appearance, "&Tools/A&ppearance...", "A&ppearance...", 0, 0,
        FL_MENU_DIVIDER, 0, 0, +[](const EditorApp &) { return true; },
        +[](EditorApp &app) {
+         if (!editor_appearance_file_supported()) {
+           app.report(StatusKind::warning, editor_appearance_file_unavailable_reason());
+           return;
+         }
          if (!app.appearance_error_.empty()) {
            fl_message_title("Editor appearance");
            if (fl_choice("%s\nApplying a new choice replaces the file.", "Cancel",
