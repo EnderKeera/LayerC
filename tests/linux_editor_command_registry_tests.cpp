@@ -165,6 +165,8 @@ void linux_editor_command_registry_contracts() {
          "Ctrl+Y stays the alternate redo shortcut");
   if constexpr (layerc::editor::windows_editor_keys) {
     std::string expected(shortcut_help_baseline);
+    constexpr std::string_view old_row = "Ctrl+D\tDuplicate\n";
+    expected.replace(expected.find(old_row), old_row.size(), "Ctrl+D\tDuplicate cooldown\n");
     expected.insert(expected.find("Tab / Shift+Tab"),
                     "Delete\tDelete the selected profile\n"
                     "Delete\tRemove the selected cooldown\n"

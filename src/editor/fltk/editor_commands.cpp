@@ -205,7 +205,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
            app.profile_page_->focus_name();
        }},
       {EditorCommand::duplicate, "&Profile/&Duplicate", "&Duplicate",
-       FL_CTRL | 'd', 0, 0, profiles, profiles,
+       windows_editor_keys ? 0 : (FL_CTRL | 'd'), 0, 0, profiles, profiles,
        +[](const EditorApp &app) {
          return app.session.has_document() && app.session.current_row().has_value();
        },
@@ -270,7 +270,8 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          app.changed(error);
        }},
       {EditorCommand::duplicate_cooldown, "&Cooldowns/D&uplicate cooldown",
-       "D&uplicate cooldown", 0, 0, 0, cooldowns, cooldowns,
+       "D&uplicate cooldown", windows_editor_keys ? (FL_CTRL | 'd') : 0, 0, 0,
+       cooldowns, cooldowns,
        +[](const EditorApp &app) { return app.cooldown_index().has_value(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {

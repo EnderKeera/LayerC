@@ -1023,6 +1023,16 @@ void calibration_unavailable_and_owned_capture() {
 
 } // namespace
 
+void save_as_shortcut_saves_separate_named_profile();
+void open_profiles_folder_passes_private_store_to_launcher();
+void choose_running_opens_detected_tasks();
+void detected_tasks_refreshes_and_closes();
+void duplicate_cooldown_menu_context_and_shortcut();
+void hide_when_ready_updates_panel_and_keeps_edit_preview_visible();
+void split_grouped_bars_creates_independent_panels_in_one_edit();
+void runtime_diagnostics_copies_unformatted_json_and_closes();
+void about_shows_product_and_copies_build_details();
+
 #ifdef LAYERC_TEST_XTEST
 void linux_editor_focused_keyboard_capture_contracts();
 #define LAYERC_FOCUSED_CAPTURE_CASE \
@@ -1065,6 +1075,15 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_field_error_contracts),
   LAYERC_TEST_CASE(linux_editor_pending_automation_status_contracts),
   LAYERC_TEST_CASE(diagnostics_summary_raw_and_retry),
+  LAYERC_TEST_CASE(save_as_shortcut_saves_separate_named_profile),
+  LAYERC_TEST_CASE(open_profiles_folder_passes_private_store_to_launcher),
+  LAYERC_TEST_CASE(choose_running_opens_detected_tasks),
+  LAYERC_TEST_CASE(detected_tasks_refreshes_and_closes),
+  LAYERC_TEST_CASE(duplicate_cooldown_menu_context_and_shortcut),
+  LAYERC_TEST_CASE(hide_when_ready_updates_panel_and_keeps_edit_preview_visible),
+  LAYERC_TEST_CASE(split_grouped_bars_creates_independent_panels_in_one_edit),
+  LAYERC_TEST_CASE(runtime_diagnostics_copies_unformatted_json_and_closes),
+  LAYERC_TEST_CASE(about_shows_product_and_copies_build_details),
   LAYERC_TEST_CASE(automation_validate_json_is_a_dry_run),
   LAYERC_CALIBRATION_LAYOUT_CASE
   LAYERC_TEST_CASE(linux_editor_black_accent_dialog_contracts),

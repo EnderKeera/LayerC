@@ -156,7 +156,7 @@ void EditorApp::open_profiles_folder() {
   if (directory.empty()) { report(StatusKind::failure, profile_directory_unavailable_reason()); return; }
   if (opener_.running()) { report(StatusKind::information, "The file manager is still starting."); return; }
   const std::string path = directory.string();
-  if (!opener_.start(directory)) {
+  if (!(start_folder_for_test_ ? start_folder_for_test_(directory) : opener_.start(directory))) {
     report(StatusKind::failure, "Could not start " + std::string(folder_opener_name()) +
            "; the profiles folder is " + path);
     return;

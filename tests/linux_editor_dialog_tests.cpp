@@ -21,6 +21,7 @@
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
@@ -31,12 +32,23 @@
 #include <algorithm>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <chrono>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace layerc::editor {
+
+struct EditorFolderTestAccess {
+  static void set_start(EditorApp &app, std::function<bool(const std::filesystem::path &)> start) {
+    app.start_folder_for_test_ = std::move(start);
+  }
+};
+
+} // namespace layerc::editor
 
 namespace {
 namespace editor = layerc::editor;
@@ -245,6 +257,74 @@ void double_click_task(Fl_Hold_Browser &rows) {
 }
 
 } // namespace
+
+void open_profiles_folder_passes_private_store_to_launcher() {
+  Fixture fixture;
+  std::vector<std::filesystem::path> requests;
+  editor::EditorApp app;
+  app.build();
+  editor::EditorFolderTestAccess::set_start(app, [&](const auto &path) {
+    requests.push_back(path);
+    return requests.size() == 1;
+  });
+  app.command(editor::EditorCommand::open_folder);
+  const auto expected = app.session.directory();
+  const auto *status = editor::EditorAppTestAccess::status(app);
+  expect(expected == fixture.path.parent_path() && requests == std::vector{expected} &&
+             std::string_view(status->value()) == "Opening the profiles folder: " + expected.string(),
+         "Open profiles folder starts the file manager at the private store");
+  app.command(editor::EditorCommand::open_folder);
+  expect(requests == std::vector{expected, expected} &&
+             std::string_view(status->value()) == "Could not start " +
+                 std::string(editor::folder_opener_name()) + "; the profiles folder is " + expected.string(),
+         "a refused file manager launch leaves the folder path in the error status");
+}
+
+void choose_running_opens_detected_tasks() {
+  Fixture fixture;
+  editor::EditorApp app;
+  app.build();
+  editor::EditorAppTestAccess::window(app).show();
+  auto &bar = editor::EditorAppTestAccess::menus(app)->bar();
+  const auto *item = bar.find_item("&Tools/Detected &tasks...");
+  if (!expect(item && item->active(), "the FLTK Detected tasks command is available")) return;
+  item->do_callback(&bar);
+  auto *tasks = editor::EditorAppTestAccess::tasks_window(app);
+  expect(tasks && tasks->shown() && detected_tasks_window(),
+         "invoking the real menu command shows the app-owned task chooser");
+}
+
+void detected_tasks_refreshes_and_closes() {
+  Fixture fixture;
+  auto task = task_fixture();
+  int scans = 0;
+  editor::TasksWindow::Actions actions;
+  actions.scan = [&](std::string &) {
+    if (++scans == 1) return std::vector{task};
+    auto next = task;
+    next.window += 1;
+    next.title = "Refreshed fixture";
+    return std::vector{next};
+  };
+  editor::TasksWindow tasks(std::move(actions));
+  tasks.show();
+  auto *window = detected_tasks_window();
+  if (!expect(window != nullptr, "the injected chooser is shown")) return;
+  auto *rows = task_rows(*window);
+  auto *refresh = find_button(*window, "&Refresh");
+  auto *close = find_button(*window, "Close");
+  if (!expect(rows && refresh && close, "the chooser exposes rows, Refresh and Close")) return;
+  if (!expect(scans == 1 && rows->size() == 1, "opening scans for the initial row")) return;
+  expect(std::string_view(rows->text(1)).find(task.title) != std::string_view::npos,
+         "the original task appears");
+  rows->value(1);
+  refresh->do_callback();
+  expect(scans == 2 && rows->size() == 1 && rows->value() == 0 &&
+             std::string_view(rows->text(1)).find("Refreshed fixture") != std::string_view::npos,
+         "Refresh repopulates rows and drops a vanished selection");
+  close->do_callback();
+  expect(!tasks.shown() && !detected_tasks_window(), "the Close button hides Detected Tasks");
+}
 
 void tasks_double_click_runs_requested_action() {
   using enum editor::TaskRequest;

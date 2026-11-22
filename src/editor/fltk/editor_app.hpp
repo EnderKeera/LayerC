@@ -15,6 +15,8 @@
 #include "platform/services.hpp"
 #include "status_voice.hpp"
 
+#include <filesystem>
+#include <functional>
 #include <memory>
 
 #include <FL/Fl_Double_Window.H>
@@ -164,6 +166,8 @@ private:
   EditorAppearance appearance_;
   std::string appearance_error_;
   FolderOpener opener_;
+  friend struct EditorFolderTestAccess;
+  std::function<bool(const std::filesystem::path &)> start_folder_for_test_;
   std::string opener_path_;
   // Detected Tasks and live placement (editor_placement.cpp).
   void show_tasks(const std::string &reason = {}, TaskRequest request = TaskRequest::none);

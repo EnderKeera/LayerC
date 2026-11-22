@@ -142,7 +142,9 @@ void EditorMenus::configure_context(Fl_Menu_Button &menu, EditorMenuContext cont
     if ((spec.contexts & bit) == 0) continue;
     const bool available = command_enabled(app_, spec.command) &&
                            (has_target || (spec.target_contexts & bit) == 0);
-    menu.add(spec.label, 0, invoke, &actions_[static_cast<std::size_t>(spec.command)],
+    const int shortcut = windows_editor_keys && spec.command == EditorCommand::duplicate_cooldown
+        ? spec.shortcut : 0;
+    menu.add(spec.label, shortcut, invoke, &actions_[static_cast<std::size_t>(spec.command)],
              available ? 0 : FL_MENU_INACTIVE);
   }
 }

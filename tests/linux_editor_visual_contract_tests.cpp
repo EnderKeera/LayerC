@@ -6,6 +6,7 @@
 #include "calibration_window.hpp"
 #include "diagnostics_window.hpp"
 #include "editor_app.hpp"
+#include "editor_menus.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "linux_editor_test_access.hpp"
@@ -16,10 +17,13 @@
 
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Menu_Button.H>
 #include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Output.H>
@@ -29,6 +33,7 @@
 #include <FL/fl_draw.H>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -110,6 +115,32 @@ private:
   bool delivered_{};
   int attempts_{};
 };
+
+class ClipboardText final : public Fl_Widget {
+public:
+  ClipboardText() : Fl_Widget(0, 0, 0, 0) {}
+  void draw() override {}
+  int handle(int event) override {
+    if (event != FL_PASTE) return Fl_Widget::handle(event);
+    text.assign(Fl::event_text(), static_cast<std::size_t>(Fl::event_length()));
+    received = true;
+    return 1;
+  }
+  std::string text;
+  bool received{};
+};
+
+std::string read_clipboard() {
+  auto *group = Fl_Group::current();
+  Fl_Group::current(nullptr);
+  ClipboardText target;
+  Fl_Group::current(group);
+  Fl::paste(target, 1);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (!target.received && std::chrono::steady_clock::now() < deadline) Fl::wait(.01);
+  expect(target.received, "FLTK delivered the clipboard paste");
+  return target.text;
+}
 
 [[nodiscard]] unsigned selection_rgb(const Fl_Widget &widget) {
   return Fl::get_color(widget.selection_color());
@@ -458,6 +489,201 @@ void linux_editor_empty_automation_simulator_ready() {
          "opening the page does not invent an automation module");
   expect(!app.session.document().dirty(), "opening the automation page leaves the document clean");
   editor::EditorAppTestAccess::window(app).hide();
+}
+
+void save_as_shortcut_saves_separate_named_profile() {
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  app.main_window()->show();
+  if (!expect(app.session.has_document(), "the starting profile is open")) return;
+  const auto original = app.session.document().profile();
+  const auto path = app.session.document().path();
+  const auto bytes = layerc::test::read_file(path);
+  ModalAction answer([](Fl_Window &modal) {
+    Fl_Input *input = nullptr;
+    visit(modal, [&](Fl_Widget &widget) {
+      if (!input && widget.visible_r()) input = dynamic_cast<Fl_Input *>(&widget);
+    });
+    auto *ok = control(modal, "OK");
+    if (!expect(input && ok && modal.label() && std::string_view(modal.label()) == "Save profile as",
+                "Save As opens its name prompt")) {
+      modal.hide();
+      return;
+    }
+    input->value("Saved copy");
+    ok->do_callback();
+  });
+  expect(editor::EditorAppTestAccess::menus(app)->shortcut('s', FL_CTRL | FL_SHIFT) &&
+             answer.delivered(),
+         "Ctrl+Shift+S invokes the actual Save As prompt");
+  const auto &copy = app.session.document();
+  expect(!app.session.is_draft() && !copy.dirty() && copy.path() != path &&
+             copy.profile().id != original.id && copy.profile().name == "Saved copy" &&
+             copy.profile().cooldowns == original.cooldowns &&
+             layerc::test::read_file(copy.path()).value_or("").find("Saved copy") != std::string::npos,
+         "the copy has a separate identity and saved file with the chosen name");
+  expect(bytes.has_value() && layerc::test::read_file(path) == bytes,
+         "Save As does not overwrite the original");
+}
+
+void duplicate_cooldown_menu_context_and_shortcut() {
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  app.main_window()->show();
+  if (!expect(app.session.has_document(), "the starting profile is open")) return;
+  app.command(editor::EditorCommand::cooldown_page);
+  const auto original = app.session.document().profile();
+  const auto path = app.session.document().path();
+  auto *menus = editor::EditorAppTestAccess::menus(app);
+  auto &bar = menus->bar();
+  Fl_Menu_Button context(0, 0, 0, 0);
+  menus->configure_context(context, editor::EditorMenuContext::cooldowns, true);
+  const auto *item = bar.find_item("&Cooldowns/D&uplicate cooldown");
+  const auto *profile_item = bar.find_item("&Profile/&Duplicate");
+  const auto *context_item = context.find_item("D&uplicate cooldown");
+  if (!expect(item && item->active() && profile_item && context_item && context_item->active(),
+              "the menu bar and cooldown context offer their correct commands")) return;
+  const int key = FL_CTRL | 'd';
+  const int cooldown_key = editor::windows_editor_keys ? key : 0;
+  expect(item->shortcut() == cooldown_key && context_item->shortcut() == cooldown_key &&
+             profile_item->shortcut() == (editor::windows_editor_keys ? 0 : key),
+         "menus advertise the same platform-specific Ctrl+D assignment");
+  const auto verify_duplicate = [&] {
+    const auto &profile = app.session.document().profile();
+    if (expect(profile.id == original.id && app.session.document().path() == path &&
+                   !app.session.is_draft() && profile.cooldowns.size() == original.cooldowns.size() + 1 &&
+                   profile.bindings == original.bindings && app.session.can_undo(),
+               "duplication adds a cooldown without new bindings, in the same document"))
+      expect(profile.cooldowns.back().id != original.cooldowns.front().id &&
+                 profile.cooldowns.back().name == original.cooldowns.front().name + " copy",
+             "the selected cooldown is copied under its own identity");
+    app.command(editor::EditorCommand::undo);
+    expect(app.session.document().profile() == original && !app.session.can_undo(),
+           "one Undo removes the copy with no extra edit");
+  };
+  const auto bar_action = *item;
+  const auto context_action = *context_item;
+  bar_action.do_callback(&bar);
+  verify_duplicate();
+  context_action.do_callback(&context);
+  verify_duplicate();
+  expect(menus->shortcut('d', FL_CTRL), "Ctrl+D is handled by the command registry");
+  if constexpr (editor::windows_editor_keys) {
+    verify_duplicate();
+  } else {
+    expect(app.session.is_draft() && app.session.document().profile().id != original.id &&
+               app.session.document().profile().cooldowns == original.cooldowns,
+           "Linux keeps Ctrl+D as duplicate profile, not duplicate cooldown");
+  }
+}
+
+void hide_when_ready_updates_panel_and_keeps_edit_preview_visible() {
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  app.main_window()->show();
+  app.command(editor::EditorCommand::panel_page);
+  if (!expect(app.session.has_document(), "the starting profile is open")) return;
+  const auto original = app.session.document().profile().panels.front();
+  auto *check = dynamic_cast<Fl_Check_Button *>(control(*app.main_window(), "Hide bars when ready"));
+  if (!expect(check && check->active_r(), "the selected panel offers the Hide bars when ready control"))
+    return;
+  check->value(1);
+  check->do_callback();
+  const auto &panel = app.session.document().profile().panels.front();
+  const auto preview = editor::EditorAppTestAccess::preview_panel(app, panel);
+  expect(panel.bar.hide_when_ready && preview.panel.bar.hide_when_ready &&
+             preview.presentation.visible && !preview.presentation.items.empty(),
+         "the option reaches the preview, which still shows ready bars in edit mode");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().profile().panels.front() == original && !app.session.can_undo(),
+         "one Undo restores the original panel");
+}
+
+void split_grouped_bars_creates_independent_panels_in_one_edit() {
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  app.main_window()->show();
+  if (!expect(app.session.has_document(), "the starting profile is open")) return;
+  const auto original = app.session.document().profile();
+  if (!expect(!app.session.edit([](auto &profile) {
+        auto second = profile.cooldowns.front();
+        second.id = "other";
+        second.name = "Other ability";
+        profile.cooldowns.push_back(std::move(second));
+        profile.panels.front().cooldown_ids.emplace_back("other");
+      }), "seed one bar with two cooldowns")) return;
+  app.refresh();
+  const auto grouped = app.session.document().profile();
+  app.command(editor::EditorCommand::split_bars);
+  const auto &panels = app.session.document().profile().panels;
+  const std::string_view status = editor::EditorAppTestAccess::status(app)->value();
+  expect(panels.size() == 2 &&
+             panels[0].cooldown_ids == std::vector{grouped.cooldowns[0].id} &&
+             panels[1].cooldown_ids == std::vector{grouped.cooldowns[1].id} &&
+             panels[0].id != panels[1].id && panels[0].anchor_y < panels[1].anchor_y &&
+             status.starts_with("Split grouped bars into independently positioned cooldown bars."),
+         "Split grouped bars separates cooldowns, positions their panels and reports success");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().profile() == grouped,
+         "one Undo restores the complete grouped panel");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().profile() == original && !app.session.can_undo(),
+         "only the earlier seed edit precedes the split");
+}
+
+void runtime_diagnostics_copies_unformatted_json_and_closes() {
+  PrivateStore store;
+  editor::DaemonStatus status;
+  status.payload_json = R"({"fixture":"clipboard"})";
+  editor::DiagnosticsWindow diagnostics([&] { return status; }, [] {
+    return editor::DaemonCommandResult{};
+  });
+  diagnostics.show();
+  auto *window = Fl::first_window();
+  if (!expect(window && window->label() &&
+                  std::string_view(window->label()) == "Runtime diagnostics — LayerE",
+              "the diagnostics window is shown")) return;
+  auto *copy = control(*window, "&Copy raw JSON");
+  auto *close = control(*window, "Close");
+  if (!expect(copy && copy->active_r() && close, "the snapshot enables Copy and Close")) return;
+  copy->do_callback();
+  expect(read_clipboard() == status.payload_json, "Copy raw JSON pastes the original snapshot bytes");
+  close->do_callback();
+  expect(!diagnostics.shown(), "the Close button hides runtime diagnostics");
+}
+
+void about_shows_product_and_copies_build_details() {
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  app.main_window()->show();
+  ModalAction verify([](Fl_Window &modal) {
+    auto *body = dynamic_cast<Fl_Multiline_Output *>(control(modal, "About LayerE"));
+    auto *copy = control(modal, "&Copy details");
+    auto *close = control(modal, "Close");
+    if (expect(body && copy && close && modal.label() &&
+                   std::string_view(modal.label()) == "About LayerE",
+               "Help > About displays its text and copy action")) {
+      const std::string_view text = body->value();
+      expect(text.starts_with("LayerE ") && text.find("Creates and edits cooldown overlay profiles.") !=
+                 std::string_view::npos, "About describes LayerE and its purpose");
+      copy->do_callback();
+      auto details = read_clipboard();
+      expect(details.starts_with("LayerE ") &&
+                 details.find(" build), FLTK " + std::to_string(Fl::api_version())) != std::string::npos &&
+                 details.find(", display scale ") != std::string::npos &&
+                 details != text,
+             "Copy details pastes version, build, toolkit and scale rather than the About body");
+    }
+    if (close) close->do_callback();
+    else modal.hide();
+  });
+  app.command(editor::EditorCommand::about);
+  expect(verify.delivered(), "the About modal was shown and dismissed");
 }
 
 void linux_editor_empty_template_apply_is_not_an_edit() {
