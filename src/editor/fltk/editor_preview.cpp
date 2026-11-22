@@ -87,6 +87,12 @@ SimulatorPanelPreview PanelPreview::present(const core::Panel &panel,
   }
   const auto &document = app_.session.document();
   const auto &profile = document.profile();
+  // LayerD's unreleased Direct Drag moves only the preview.
+  core::Panel shown = panel;
+  if (const auto *remote = app_.remote_anchor(panel.id)) {
+    shown.anchor_x = remote->x;
+    shown.anchor_y = remote->y;
+  }
   const auto now = core::MonotonicClock::now();
   core::CooldownEngine engine(profile.cooldowns, profile.cooldown_groups);
   const auto states = engine.snapshot(now);
@@ -96,7 +102,7 @@ SimulatorPanelPreview PanelPreview::present(const core::Panel &panel,
   core::PanelPresentationOverrides overrides;
   overrides.edit_mode = true;
   overrides.presentation_epoch = epoch_;
-  return {panel, core::present_panel(panel, profile.cooldowns, states,
+  return {shown, core::present_panel(shown, profile.cooldowns, states,
       automation ? &*automation : nullptr, overrides, now)};
 }
 
@@ -186,14 +192,20 @@ void PanelPreview::move_anchor(const std::string_view panel_id,
   if (error) app_.report(StatusKind::failure, *error);
   else {
     app_.refresh_forms();
-    app_.report(StatusKind::information, app_.placement_active()
-        ? "Positioning on the window: the live draft moves LayerD's overlay."
-        : "Unsaved preview placement.", StatusVoice::silent);
+    app_.send_on_window_anchor(panel_id, false);
+    app_.report(StatusKind::information, !app_.placement_active()
+        ? "Unsaved preview placement."
+        : on_window_edit_sessions()
+        ? "Positioning on the window: LayerD mirrors the preview on the game."
+        : "Positioning on the window: the live draft moves LayerD's overlay.",
+        StatusVoice::silent);
     redraw();
   }
 }
 
-void PanelPreview::finish_move() {
+void PanelPreview::finish_move(const std::string_view panel_id) {
+  // The release sends LayerD the drag's final position.
+  app_.send_on_window_anchor(panel_id, true);
   dragging_.clear();
   app_.session.end_text_edit();
 }
@@ -221,7 +233,7 @@ bool PanelPreview::nudge(const int key) {
       item.anchor_y = std::clamp(item.anchor_y +
           (key == FL_Up ? -step : step) / std::max(height, 1), 0.0, 1.0);
   });
-  finish_move();
+  finish_move(panel_id);
   return true;
 }
 
@@ -271,7 +283,7 @@ int PanelPreview::handle(int event) {
     });
     return 1;
   } else if (event == FL_RELEASE && !dragging_.empty()) {
-    finish_move();
+    finish_move(dragging_);
     return 1;
   }
   return Fl_Widget::handle(event);

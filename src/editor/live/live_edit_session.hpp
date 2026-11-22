@@ -158,6 +158,9 @@ public:
   [[nodiscard]] bool live_profile_pending() const noexcept {
     return pending_live_profile_;
   }
+  // Milliseconds until poll has timed work: the awaited target's deadline,
+  // the session heartbeat, or the coalesced live profile. Empty when none.
+  [[nodiscard]] std::optional<ULONGLONG> next_due() const;
 
   // The starting revision is the window's launch identity; set once.
   void seed_revision(layerc::core::ProfileRevision revision) noexcept {

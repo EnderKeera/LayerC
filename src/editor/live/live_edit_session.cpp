@@ -219,6 +219,20 @@ LiveEditBegin LiveEditSession::request_begin(const HWND target,
   return LiveEditBegin::awaiting_daemon;
 }
 
+std::optional<ULONGLONG> LiveEditSession::next_due() const {
+  const ULONGLONG now = clock_();
+  std::optional<ULONGLONG> due;
+  const auto consider = [&](const ULONGLONG at) {
+    const ULONGLONG wait = at > now ? at - now : 0;
+    if (!due || wait < *due) due = wait;
+  };
+  if (pending_target_ != nullptr) consider(pending_deadline_);
+  if (authenticated_ && session_id_ != 0)
+    consider(last_heartbeat_send_ + heartbeat_interval_ms);
+  if (pending_live_profile_) consider(live_profile_due_);
+  return due;
+}
+
 bool LiveEditSession::end(const bool notify_daemon) {
   const bool was_active = session_id_ != 0;
   if (notify_daemon && was_active)

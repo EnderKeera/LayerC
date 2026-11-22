@@ -166,6 +166,27 @@ public:
     return work_event_ != nullptr && SetEvent(work_event_) != FALSE;
   }
 
+  struct EditPacket {
+    core::LiveMessage message;
+    std::chrono::steady_clock::time_point received;
+  };
+
+  [[nodiscard]] std::vector<EditPacket> edit_packets() {
+    std::lock_guard lock(mutex_);
+    return edit_packets_;
+  }
+
+  [[nodiscard]] bool wait_for_edit_packets(core::LiveMessageType type, std::size_t count,
+                                           std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return request_cv_.wait_for(lock, timeout, [&] {
+      std::size_t seen{};
+      for (const auto &packet : edit_packets_)
+        if (packet.message.type == type && ++seen == count) return true;
+      return false;
+    });
+  }
+
 private:
   void reply(platform::NamedPipeEditorDaemonChannel &channel,
              const core::LiveMessage &request, const core::LiveMessageType type,
@@ -173,6 +194,7 @@ private:
     core::LiveMessage message;
     message.type = type;
     message.revision = request.revision;
+    message.edit_session = request.edit_session;
     message.text = std::move(text);
     (void)channel.send(message);
   }
@@ -223,6 +245,21 @@ private:
       if (mode_ != ReplyMode::silent_trace_unsubscribe)
         reply(channel, message, core::LiveMessageType::acknowledgement,
               "trace unsubscribed");
+      return;
+    }
+    if (message.edit_session != 0) {
+      {
+        std::lock_guard lock(mutex_);
+        edit_packets_.push_back({message, std::chrono::steady_clock::now()});
+      }
+      request_cv_.notify_all();
+      if (message.type == core::LiveMessageType::begin_edit) {
+        reply(channel, message, core::LiveMessageType::acknowledgement);
+        (void)channel.send({.type = core::LiveMessageType::anchor_changed,
+                            .revision = message.revision + 1,
+                            .edit_session = message.edit_session, .panel_id = message.panel_id,
+                            .anchor_x = .2, .anchor_y = .3, .final = true});
+      }
       return;
     }
     if (message.type != core::LiveMessageType::committed_profile) return;
@@ -307,6 +344,7 @@ private:
   bool disconnect_requested_{};
   bool disconnected_{};
   std::deque<std::string> pending_trace_packets_;
+  std::vector<EditPacket> edit_packets_;
   std::string diagnostics_json_;
 };
 
@@ -831,6 +869,114 @@ void status_reload_and_trace_continue_on_one_held_connection() {
   hub.unsubscribe_trace(id);
 }
 
+std::vector<editor::OnWindowEditEvent> wait_for_edit_event(
+    editor::DaemonHub &hub, const std::uint64_t id, const editor::OnWindowEditEvent::Kind kind,
+    const std::chrono::milliseconds timeout = 2s) {
+  std::vector<editor::OnWindowEditEvent> events;
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  do {
+    bool found{};
+    for (auto &event : hub.take_edit_events(id)) {
+      found = found || event.kind == kind;
+      events.push_back(std::move(event));
+    }
+    if (found) break;
+    std::this_thread::sleep_for(5ms);
+  } while (std::chrono::steady_clock::now() < deadline);
+  return events;
+}
+
+std::uint64_t begin_on_desktop(editor::DaemonHub &hub) {
+  return hub.begin_edit(reinterpret_cast<std::uintptr_t>(GetDesktopWindow()),
+                        {"position-profile", "bar", "{}"});
+}
+
+void hub_edit_heartbeats_and_multiplexes() {
+  using Type = core::LiveMessageType;
+  using Kind = editor::OnWindowEditEvent::Kind;
+  using layerc::test::expect;
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!expect(server.start(), "private fake LayerD listens")) return;
+  std::atomic<unsigned> starts{}, signals{}, notifications{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  hub.set_edit_listener([&] { ++notifications; });
+  const auto id = begin_on_desktop(hub);
+  const auto events = wait_for_edit_event(hub, id, Kind::anchor);
+  if (!expect(events.size() == 4 && events[0].kind == Kind::awaiting &&
+                  events[1].kind == Kind::started && events[2].kind == Kind::acknowledged &&
+                  events[3].kind == Kind::anchor && events[3].final && events[3].x == .2,
+              "begin, acknowledgement and pushed anchor arrive in order")) return;
+  const auto received = server.edit_packets();
+  expect(!received.empty() && received.front().message.type == Type::begin_edit &&
+             received.front().message.target_window == reinterpret_cast<std::uintptr_t>(GetDesktopWindow()) &&
+             received.front().message.profile_key == "position-profile" &&
+             received.front().message.panel_id == "bar" && received.front().message.profile_json == "{}",
+         "private LayerD receives the begin payload");
+  expect(hub.status().running, "status answers while editing");
+  layerc::test::TempDirectory temporary("layerc-p2h-edit-reload");
+  const auto profile = make_committed_profile(temporary);
+  expect(profile && hub.reload(profile).state == editor::ReloadState::acknowledged,
+         "committed reload answers while editing");
+  const auto trace = hub.subscribe_trace();
+  const auto reset = wait_for_trace_update(hub, trace);
+  expect(reset && reset->reply && reset->reply->reset, "trace subscribes while editing");
+  expect(server.handshakes() == 1 && starts == 0 && signals == 0,
+         "the active edit and requests share one authenticated pipe");
+  expect(server.wait_for_edit_packets(Type::heartbeat, 3, 1500ms), "three edit heartbeats arrive");
+  std::optional<std::chrono::steady_clock::time_point> previous;
+  for (const auto &packet : server.edit_packets()) {
+    if (packet.message.type != Type::heartbeat) continue;
+    if (previous) expect(packet.received - *previous <= 300ms, "heartbeat intervals are at most 300 ms");
+    previous = packet.received;
+  }
+  hub.end_edit(id, true);
+  if (!expect(server.wait_for_edit_packets(Type::end_edit, 1, 1s), "manual end reaches LayerD")) return;
+  const auto idle_packets = server.edit_packets().size();
+  const auto idle_notifications = notifications.load();
+  std::this_thread::sleep_for(350ms);
+  expect(server.edit_packets().size() == idle_packets && notifications == idle_notifications,
+         "idle link sends no heartbeats or edit notifications after end");
+}
+
+void hub_edit_expires_without_server() {
+  using Kind = editor::OnWindowEditEvent::Kind;
+  using layerc::test::expect;
+  std::atomic<unsigned> starts{}, signals{};
+  editor::DaemonHub hub(make_environment(private_pipe_name(), starts, signals));
+  const auto id = begin_on_desktop(hub);
+  const auto events = wait_for_edit_event(hub, id, Kind::expired, 7s);
+  expect(events.size() == 2 && events.front().kind == Kind::awaiting &&
+             events.back().kind == Kind::expired && starts == 1 && signals == 0,
+         "an absent private pipe requests one launch and expires without authenticating");
+}
+
+void hub_edit_disconnect_and_shutdown() {
+  using Event = editor::OnWindowEditEvent;
+  using layerc::test::expect;
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!expect(server.start(), "private fake LayerD listens")) return;
+  const auto threads = process_thread_count();
+  std::atomic<unsigned> starts{}, signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto first = begin_on_desktop(hub);
+  auto events = wait_for_edit_event(hub, first, Event::Kind::anchor);
+  if (!expect(!events.empty() && events.back().kind == Event::Kind::anchor,
+              "the first connection acknowledges and pushes an anchor") ||
+      !expect(server.disconnect_client(), "force disconnect only on the private pipe")) return;
+  events = wait_for_edit_event(hub, first, Event::Kind::ended);
+  expect(!events.empty() && events.back().kind == Event::Kind::ended &&
+             events.back().reason == Event::EndReason::connection_lost,
+         "server disconnect produces connection_lost");
+  const auto next = begin_on_desktop(hub);
+  events = wait_for_edit_event(hub, next, Event::Kind::anchor);
+  if (!expect(!events.empty() && events.back().kind == Event::Kind::anchor,
+              "a new edit begins on a fresh connection")) return;
+  hub.shutdown();
+  expect(server.wait_for_edit_packets(core::LiveMessageType::end_edit, 1, 1s) &&
+             process_thread_count() == threads,
+         "shutdown tells the private daemon to end and joins the worker");
+}
+
 void editor_image_allowlist_is_exact() {
   const auto &names = platform::layerc_editor_image_names;
   const bool accepts_windows = names.size() == 2 &&
@@ -870,4 +1016,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(disconnected_trace_resubscribes_with_a_gap),
     LAYERC_TEST_CASE(shutdown_while_trace_is_held_reports_an_error),
     LAYERC_TEST_CASE(status_reload_and_trace_continue_on_one_held_connection),
+    LAYERC_TEST_CASE(hub_edit_heartbeats_and_multiplexes),
+    LAYERC_TEST_CASE(hub_edit_expires_without_server),
+    LAYERC_TEST_CASE(hub_edit_disconnect_and_shutdown),
     LAYERC_TEST_CASE(editor_image_allowlist_is_exact))

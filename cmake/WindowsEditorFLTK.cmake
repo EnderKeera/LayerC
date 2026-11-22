@@ -34,6 +34,8 @@ add_library(layerc_editor_fltk_support STATIC
     src/editor/fltk/platform/win32/overlay_preview.cpp
     src/editor/fltk/platform/win32/trace_relay.cpp
     src/editor/fltk/platform/win32/daemon_hub.cpp
+    src/editor/fltk/platform/win32/daemon_hub_edit.cpp
+    src/editor/fltk/platform/win32/daemon_hub_edit_requests.cpp
     src/editor/fltk/platform/win32/daemon_link.cpp
     src/editor/fltk/platform/win32/automation_trace_client.cpp)
 target_include_directories(layerc_editor_fltk_support PUBLIC src/editor/fltk)
@@ -53,7 +55,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/platform/win32/startup.cpp
     src/editor/fltk/platform/win32/window_settings.cpp
     src/editor/fltk/platform/win32/window_chrome.cpp
-    src/editor/fltk/platform/win32/desktop_listener.cpp)
+    src/editor/fltk/platform/win32/desktop_listener.cpp
+    src/editor/fltk/platform/win32/on_window_edit.cpp)
 target_include_directories(layerc_editor_fltk PUBLIC src/editor/fltk)
 # Calibration types only; the Windows capture backend arrives with its service.
 target_link_libraries(layerc_editor_fltk PUBLIC

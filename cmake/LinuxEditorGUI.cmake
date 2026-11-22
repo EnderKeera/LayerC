@@ -128,6 +128,7 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/platform/linux/calibration_service.cpp
     src/editor/fltk/platform/linux/desktop_font.cpp
     src/editor/fltk/platform/linux/live_draft_watch.cpp
+    src/editor/fltk/platform/linux/on_window_edit.cpp
     src/editor/fltk/platform/linux/overlay_preview.cpp)
 target_include_directories(layerc_editor_fltk PRIVATE src/platform/linux)
 if(LAYERC_EDITOR_SYSROOT)

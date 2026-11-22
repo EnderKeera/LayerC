@@ -11,6 +11,7 @@
 #include "tasks_window.hpp"
 #include "diagnostics_window.hpp"
 #include "editor_appearance.hpp"
+#include "platform/on_window_edit.hpp"
 #include "platform/services.hpp"
 #include "status_voice.hpp"
 
@@ -54,7 +55,7 @@ private:
   static void wake(void *data);
   EditorApp &app_;
   void move_anchor(std::string_view panel_id, const std::function<void(core::Panel &)> &move);
-  void finish_move();
+  void finish_move(std::string_view panel_id);
   bool nudge(int key);
 
   std::string dragging_;
@@ -173,9 +174,30 @@ private:
   void update_position_button();
   std::optional<TaskCandidate> placement_;
   std::string placement_profile_;
+  // The on-window edit session where LayerD draws the bars on the game
+  // window (on_window_edit_sessions()); demand-created, one at a time.
+  struct RemoteAnchor {
+    std::string panel_id;
+    double x{}, y{};
+  };
+  std::unique_ptr<OnWindowEdit> on_window_;
+  bool on_window_live_{};    // begun, not yet ended
+  bool on_window_started_{}; // LayerD has the session: Direct Drag is offered
+  bool direct_drag_notice_shown_{};
+  // A Direct Drag LayerD reports before its release, shown in the preview only.
+  std::optional<RemoteAnchor> remote_anchor_;
+  [[nodiscard]] bool begin_on_window(const TaskCandidate &task);
+  void on_window_ready();
+  void on_window_event(const OnWindowEditEvent &event);
+  void end_on_window(bool notify);
+  void publish_on_window();
+  void send_on_window_anchor(std::string_view panel_id, bool final);
+  void direct_drag_changed(bool enabled);
+  [[nodiscard]] const RemoteAnchor *remote_anchor(std::string_view panel_id) const;
   [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);
   friend class PanelPreview;
+  friend class PanelPage;
   friend struct EditorCommandRegistry;
   friend struct EditorAppTestAccess;
 };

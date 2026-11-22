@@ -84,6 +84,9 @@ if(TARGET layerc_editor_fltk_uia)
         LINK layerc_editor_fltk_a11y TIMEOUT 60 LABELS required editor)
 endif()
 if(TARGET layerc_editor_fltk_support)
+    layerc_add_test(layerc_windows_fltk_on_window_tests WIN32
+        SOURCES tests/windows_fltk_on_window_tests.cpp
+        LINK layerc_editor_fltk_support TIMEOUT 30 LABELS required editor)
     # The preview's paint model mirrors the GDI overlay; no window is opened.
     layerc_add_test(layerc_editor_overlay_preview_tests WIN32
         SOURCES tests/editor_overlay_preview_tests.cpp
@@ -96,6 +99,9 @@ if(WIN32 AND TARGET layerc_editor_fltk)
     layerc_add_test(layerc_windows_fltk_calibration_tests WIN32
         SOURCES tests/windows_fltk_calibration_tests.cpp
         LINK layerc_editor_fltk TIMEOUT 60 LABELS required editor)
+    layerc_add_test(layerc_windows_fltk_position_tests WIN32
+        SOURCES tests/windows_fltk_position_tests.cpp
+        LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_settings_tests WIN32
         SOURCES tests/windows_fltk_settings_tests.cpp tests/windows_fltk_interface_controls.cpp
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)

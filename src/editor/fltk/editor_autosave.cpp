@@ -53,6 +53,8 @@ void EditorApp::schedule_autosave(const bool text_change) {
 void EditorApp::sync_edit_services() {
   if (saving_ || observed_generation_ == session.edit_generation()) return;
   observed_generation_ = session.edit_generation();
+  // Undo back to the saved profile is a change LayerD must mirror too.
+  publish_on_window();
   if (!session.has_document() || session.is_draft() || !session.has_unsaved_changes()) {
     stop_edit_services();
     update_daemon_status();

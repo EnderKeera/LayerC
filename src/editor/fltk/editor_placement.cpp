@@ -1,8 +1,9 @@
-// Detected Tasks and live placement against a game window. LayerD has no
-// on-window edit channel on Linux: the preview takes the target window's
-// shape and every drag is published through the live draft, which moves
-// the click-through overlay. Direct Drag would need an input-accepting
-// overlay, which X11 overlays never are.
+// Detected Tasks and live placement against a game window. The preview takes
+// the target window's shape. On Windows LayerD's on-window edit session
+// mirrors it on the game (editor_on_window.cpp). LayerD has no such channel
+// on Linux: every drag is published through the live draft, which moves the
+// click-through overlay. Direct Drag would need an input-accepting overlay,
+// which X11 overlays never are.
 #include "daemon_link.hpp"
 #include "editor_app.hpp"
 #include "platform/product_text.hpp"
@@ -92,6 +93,7 @@ void EditorApp::position_on(const TaskCandidate &task) {
     report(StatusKind::failure, "That window has no visible size to position against.");
     return;
   }
+  if (on_window_edit_sessions() && !begin_on_window(task)) return;
   placement_ = task;
   placement_profile_ = session.document().profile().id;
   if (tasks_window) tasks_window->hide();
@@ -110,6 +112,7 @@ void EditorApp::position_on(const TaskCandidate &task) {
 }
 
 void EditorApp::end_placement(const StatusKind kind, const std::string &status) {
+  end_on_window(true);
   placement_.reset();
   placement_profile_.clear();
   update_position_button();
@@ -118,6 +121,12 @@ void EditorApp::end_placement(const StatusKind kind, const std::string &status) 
 }
 
 void EditorApp::update_position_button() {
+  // Another or no profile: the edit session ends with the placement.
+  if (on_window_live_ && !placement_active()) {
+    end_on_window(true);
+    placement_.reset();
+    placement_profile_.clear();
+  }
   if (panel_page_) panel_page_->show_position(placement_active());
 }
 

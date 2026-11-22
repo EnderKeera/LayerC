@@ -475,6 +475,18 @@ void PanelPage::build(FormBuilder &builder) {
       builder.button(285, 365, 190, "Position on window...", EditorCommand::position);
   accessibility::describe_with_tooltip(*position_button_,
       "Place the bars directly on the running game window");
+  if (on_window_edit_sessions()) {
+    // Its own callback: the choice is session state, not a profile field.
+    direct_drag_ = new Fl_Check_Button(285, 400, 190, editor_input_height,
+                                       "Direct drag in game");
+    direct_drag_->callback([](Fl_Widget *w, void *data) {
+      static_cast<EditorApp *>(data)->direct_drag_changed(
+          static_cast<Fl_Check_Button *>(w)->value() != 0);
+    }, &app_);
+    accessibility::describe_with_tooltip(*direct_drag_,
+        "While positioning, drag the bars on the game window itself");
+    direct_drag_->deactivate();
+  }
   panel_fields_ = new Fl_Group(490, 60, 550, 380);
   panel_fields_->begin();
   panel_name_ = builder.input(500, 85, 260, "Panel name");
@@ -580,13 +592,22 @@ bool PanelPage::owns(const Fl_Widget *widget) const {
           widget == bar_width_ || widget == bar_height_ || widget == fill_ ||
           widget == background_ || widget == border_ || widget == text_color_ ||
           widget == layout_ || widget == style_ || items_.owns(widget) ||
-          widget == show_text_ || widget == hide_ready_ || widget == position_button_);
+          widget == show_text_ || widget == hide_ready_ || widget == position_button_ ||
+          (direct_drag_ != nullptr && widget == direct_drag_));
 }
 
 void PanelPage::show_position(const bool active) {
   if (!position_button_) return;
   position_button_->copy_label(active ? "End positioning" : "Position on window...");
   position_button_->redraw();
+}
+
+void PanelPage::show_direct_drag(const bool available, const bool enabled) {
+  if (!direct_drag_) return;
+  direct_drag_->value(available && enabled ? 1 : 0);
+  if (available) direct_drag_->activate();
+  else direct_drag_->deactivate();
+  direct_drag_->redraw();
 }
 
 } // namespace layerc::editor

@@ -195,6 +195,8 @@ public:
   [[nodiscard]] bool owns_list(const Fl_Widget *widget) const;
   [[nodiscard]] bool owns(const Fl_Widget *widget) const;
   void show_position(bool active);
+  // Direct Drag is offered only inside a started on-window edit session.
+  void show_direct_drag(bool available, bool enabled);
 private:
   friend struct EditorAppTestAccess;
   EditorApp &app_;
@@ -206,6 +208,7 @@ private:
   Fl_Check_Button *show_text_{}, *hide_ready_{};
   PanelItemsControls items_;
   Fl_Button *position_button_{};
+  Fl_Check_Button *direct_drag_{}; // on_window_edit_sessions() only
 };
 
 } // namespace layerc::editor

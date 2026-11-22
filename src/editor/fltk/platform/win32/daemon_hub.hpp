@@ -2,6 +2,7 @@
 
 #include "automation_trace_client.hpp"
 #include "daemon_link.hpp"
+#include "platform/on_window_edit.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 
@@ -62,6 +64,22 @@ public:
   [[nodiscard]] std::optional<AutomationTraceUpdate>
   take_trace(std::uint64_t subscription);
   void unsubscribe_trace(std::uint64_t subscription) noexcept;
+
+  // The one on-window edit session over the same pipe. begin_edit replaces
+  // an older session and returns the new nonzero id; the others act only
+  // while that id is current. None waits: the worker connects, launching
+  // LayerD when its pipe is absent, and queues events for take_edit_events.
+  // The listener runs on the worker whenever an event is queued; it must
+  // only post to the UI loop and never call back into the hub.
+  [[nodiscard]] std::uint64_t begin_edit(std::uint64_t window,
+                                         OnWindowEditBegin payload);
+  void edit_live_profile(std::uint64_t session, std::string profile_json);
+  void edit_anchor(std::uint64_t session, std::string panel_id, double x, double y,
+                   bool final);
+  void edit_direct_drag(std::uint64_t session, bool enabled);
+  void end_edit(std::uint64_t session, bool notify) noexcept;
+  [[nodiscard]] std::vector<OnWindowEditEvent> take_edit_events(std::uint64_t session);
+  void set_edit_listener(std::function<void()> listener);
 
   void shutdown() noexcept;
 

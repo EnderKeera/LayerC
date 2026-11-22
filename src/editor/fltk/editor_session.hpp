@@ -139,6 +139,9 @@ public:
   // references, refusing when a group or rule still depends on it.
   [[nodiscard]] std::optional<std::string> remove_cooldown(std::string_view id);
   void end_text_edit();
+  // The user approved the one-way format upgrade before it is saved, so the
+  // migrated document may be shown to LayerD.
+  void acknowledge_upgrade() noexcept { document_.acknowledge_upgrade(); }
   [[nodiscard]] bool can_undo() const { return document_.can_undo(); }
   [[nodiscard]] bool can_redo() const { return document_.can_redo(); }
   bool undo();

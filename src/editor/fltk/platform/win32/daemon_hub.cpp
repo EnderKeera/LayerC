@@ -1,24 +1,18 @@
-#include "platform/win32/daemon_hub.hpp"
+#include "platform/win32/daemon_hub_internal.hpp"
 
-#include "platform/win32/trace_relay.hpp"
 #include "daemon_process.hpp"
-#include "live_edit_session.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <condition_variable>
-#include <deque>
-#include <mutex>
 #include <span>
-#include <thread>
-#include <utility>
 
 namespace layerc::editor {
 namespace {
-using Clock = std::chrono::steady_clock;
+using daemon_hub_detail::Clock;
+using daemon_hub_detail::Request;
+using daemon_hub_detail::start_worker_locked;
 using layerc::core::LiveMessage;
 using layerc::core::LiveMessageType;
 using layerc::core::ProfileRevision;
@@ -30,28 +24,6 @@ constexpr auto minimum_connect_wait = std::chrono::milliseconds(25);
 constexpr auto caller_backstop_grace = std::chrono::milliseconds(500);
 
 std::string win32_reason(DWORD error);
-
-struct Request final {
-  // Trace requests have no waiting caller: their outcome is the relay's
-  // subscription state.
-  enum class Kind { status, reload, trace_subscribe, trace_unsubscribe };
-
-  Request(Kind request_kind, std::optional<CommittedProfile> profile,
-          const Clock::time_point request_deadline)
-      : kind(request_kind), committed(std::move(profile)),
-        deadline(request_deadline) {}
-
-  Kind kind;
-  std::optional<CommittedProfile> committed;
-  Clock::time_point deadline;
-  std::condition_variable ready;
-  bool completed{};
-  DaemonStatus status_result;
-  ReloadResult reload_result;
-  std::uint64_t trace_id{};
-  std::atomic<bool> request_sent{};
-};
-
 bool is_trace(const Request &request) noexcept {
   return request.kind == Request::Kind::trace_subscribe ||
          request.kind == Request::Kind::trace_unsubscribe;
@@ -59,31 +31,17 @@ bool is_trace(const Request &request) noexcept {
 
 } // namespace
 
-struct DaemonHub::State {
-  State() {
-    wake_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (wake_event == nullptr) {
-      const DWORD error = GetLastError();
-      initialization_error = "The LayerD link wake event could not be created (" +
-                             win32_reason(error) + ").";
-    }
+DaemonHub::State::State() {
+  wake_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  if (wake_event == nullptr) {
+    const DWORD error = GetLastError();
+    initialization_error = "The LayerD link wake event could not be created (" +
+                           win32_reason(error) + ").";
   }
-  ~State() {
-    if (wake_event != nullptr) CloseHandle(wake_event);
-  }
-
-  std::mutex mutex;
-  std::mutex lifecycle_mutex;
-  std::deque<std::shared_ptr<Request>> queue;
-  std::shared_ptr<Request> active;
-  std::thread worker;
-  TraceRelay trace;
-  HANDLE wake_event{};
-  bool stopping{};
-  bool worker_failed{};
-  std::string initialization_error;
-  std::string worker_error;
-};
+}
+DaemonHub::State::~State() {
+  if (wake_event != nullptr) CloseHandle(wake_event);
+}
 
 namespace {
 
@@ -440,16 +398,72 @@ bool skip_unsent_trace(const std::shared_ptr<DaemonHub::State> &state,
   return !state->trace.current(request.trace_id);
 }
 
+void open_connection(const DaemonHubEnvironment &environment,
+                     std::unique_ptr<LiveEditSession> &session,
+                     PipeLiveEditTransport *&transport) {
+  auto owned_transport = std::make_unique<PipeLiveEditTransport>(
+      environment.pipe_name, environment.expected_server_process_id);
+  transport = owned_transport.get();
+  session = std::make_unique<LiveEditSession>(std::move(owned_transport));
+  const auto seed = (GetTickCount64() << 16U) | GetCurrentProcessId();
+  session->seed_revision(static_cast<ProfileRevision>(seed));
+}
+
+HubEditDriver make_edit_driver(const std::shared_ptr<DaemonHub::State> &state) {
+  return HubEditDriver([state](const std::uint64_t id, OnWindowEditEvent event) {
+    std::function<void()> listener;
+    {
+      std::lock_guard lock(state->mutex);
+      if (id != state->edit_current) return;
+      state->edit_events.push_back(std::move(event));
+      listener = state->edit_listener;
+    }
+    if (listener) listener();
+  });
+}
+
 void process_worker(const std::shared_ptr<DaemonHub::State> &state,
                     const DaemonHubEnvironment &environment) {
   std::unique_ptr<LiveEditSession> session;
   PipeLiveEditTransport *transport{};
   std::optional<ActiveDemand> active;
+  auto edit = make_edit_driver(state);
+  // A closed connection ends the edit session with it.
+  const auto discard = [&](std::string reason = "LayerD's live pipe closed.") {
+    edit.connection_discarded(std::move(reason));
+    discard_session(state, session, transport);
+  };
+  // The edit session's connection; LayerD is launched when its pipe is absent.
+  const HubEditDriver::OpenSession open =
+      [&](bool &started, std::string &reason) -> LiveEditSession * {
+    if (session && session->connected()) return session.get();
+    if (environment.pipe_name.empty()) {
+      reason = "LayerD live pipe name is empty.";
+      return nullptr;
+    }
+    if (WaitNamedPipeW(environment.pipe_name.c_str(), 1) == FALSE) {
+      const DWORD error = GetLastError();
+      if (error != ERROR_FILE_NOT_FOUND) {
+        reason = pipe_unreachable_reason(error);
+        return nullptr;
+      }
+      if (!call_service(environment.start_daemon)) {
+        reason = "LayerD is not running and could not be started.";
+        return nullptr;
+      }
+      started = true;
+    }
+    if (!session) open_connection(environment, session, transport);
+    return session.get();
+  };
+  bool poll_now{};
 
   for (;;) {
+    std::deque<HubEditCommand> commands;
     {
       std::lock_guard lock(state->mutex);
       if (state->stopping) break;
+      commands.swap(state->edit_commands);
       if (!active && !state->queue.empty()) {
         auto request = std::move(state->queue.front());
         state->queue.pop_front();
@@ -462,26 +476,37 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         active.emplace(ActiveDemand{std::move(request)});
       }
     }
+    for (auto &command : commands) edit.apply(std::move(command), session.get(), open);
+    // A new or changed session is polled at once rather than after a wait.
+    if (!commands.empty()) poll_now = true;
 
     if (!active) {
-      if (session && transport != nullptr && session->connected()) {
-        const auto waited = wait_for_work(state, transport, INFINITE);
-        if (waited.kind == WaitResult::Kind::wake) continue;
-        if (waited.kind == WaitResult::Kind::pipe) {
-          const auto step = session->poll({});
-          if (!session->connected() || step.authentication_rejected ||
-              !step.protocol_errors.empty()) {
-            discard_session(state, session, transport);
-          } else if (session->authenticated()) {
-            (void)route_forwarded(state, step, nullptr);
+      if (session && transport != nullptr && (session->connected() || edit.live())) {
+        if (!poll_now) {
+          const auto waited = wait_for_work(
+              state, transport, edit.live() ? edit.wait_timeout(*session) : INFINITE);
+          if (waited.kind == WaitResult::Kind::wake) continue;
+          if (waited.kind == WaitResult::Kind::failed) {
+            discard("LayerD live-pipe wait failed (" + win32_reason(waited.error) + ").");
+            continue;
           }
-          continue;
         }
-        if (waited.kind == WaitResult::Kind::failed)
-          discard_session(state, session, transport);
+        poll_now = false;
+        const auto step = session->poll({});
+        edit.apply_step(step, *session);
+        if (step.authentication_rejected) {
+          discard("LayerD refused live-pipe package authentication.");
+        } else if (!step.protocol_errors.empty()) {
+          discard("LayerD sent an invalid live-edit protocol message.");
+        } else if (!session->connected() && !edit.live()) {
+          discard();
+        } else if (session->authenticated()) {
+          (void)route_forwarded(state, step, nullptr);
+        }
         continue;
       }
-      if (session) discard_session(state, session, transport);
+      poll_now = false;
+      if (session) discard();
       if (wait_for_work(state, nullptr, INFINITE).kind ==
           WaitResult::Kind::failed) {
         std::lock_guard lock(state->mutex);
@@ -501,7 +526,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     if (Clock::now() >= request->deadline) {
       // The remote subscription state is unknown without a reply. Closing
       // the pipe guarantees an abandoned recording stops.
-      if (is_trace(*request)) discard_session(state, session, transport);
+      if (is_trace(*request)) discard();
       if (request->request_sent.load()) {
         fail_timeout(state, request);
       } else if (request->kind == Request::Kind::status) {
@@ -528,7 +553,8 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     }
 
     if (!active->presence_probed) {
-      if (session && !session->connected()) discard_session(state, session, transport);
+      // A session waiting for LayerD keeps reconnecting on its own.
+      if (session && !session->connected() && !edit.live()) discard();
       if (!session) {
         if (environment.pipe_name.empty()) {
           fail_unreachable(state, request, environment,
@@ -549,21 +575,18 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           active.reset();
           continue;
         }
-        auto owned_transport = std::make_unique<PipeLiveEditTransport>(
-            environment.pipe_name, environment.expected_server_process_id);
-        transport = owned_transport.get();
-        session = std::make_unique<LiveEditSession>(std::move(owned_transport));
-        const auto seed = (GetTickCount64() << 16U) | GetCurrentProcessId();
-        session->seed_revision(static_cast<ProfileRevision>(seed));
+        open_connection(environment, session, transport);
       }
       active->presence_probed = true;
     }
 
+    poll_now = false;
     const auto step = session->poll({});
+    edit.apply_step(step, *session);
     if (step.authentication_rejected) {
       fail_unreachable(state, request, environment,
                        "LayerD refused live-pipe package authentication.");
-      discard_session(state, session, transport);
+      discard();
       clear_active(state, request);
       active.reset();
       continue;
@@ -574,7 +597,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         fail_closed(state, request, reason);
       else
         fail_unreachable(state, request, environment, reason);
-      discard_session(state, session, transport);
+      discard();
       clear_active(state, request);
       active.reset();
       continue;
@@ -584,7 +607,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           !transport->last_error().empty()) {
         fail_unreachable(state, request, environment,
                          "LayerD live-pipe authentication failed.");
-        discard_session(state, session, transport);
+        discard();
         clear_active(state, request);
         active.reset();
         continue;
@@ -598,7 +621,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         fail_unreachable(state, request, environment,
                          "LayerD live-pipe connection wait failed (" +
                              win32_reason(waited.error) + ").");
-        discard_session(state, session, transport);
+        discard();
         clear_active(state, request);
         active.reset();
       }
@@ -636,7 +659,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           fail_unreachable(state, request, environment,
                            "LayerD did not accept the live-pipe request.");
         }
-        discard_session(state, session, transport);
+        discard();
         clear_active(state, request);
         active.reset();
         continue;
@@ -649,7 +672,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     if (reply || request_completed(state, request)) {
       if (request->kind == Request::Kind::trace_unsubscribe &&
           reply == LiveMessageType::error)
-        discard_session(state, session, transport);
+        discard();
       clear_active(state, request);
       active.reset();
       continue;
@@ -657,24 +680,28 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     if (!session->connected()) {
       fail_closed(state, request,
                   "LayerD closed the live pipe before replying.");
-      discard_session(state, session, transport);
+      discard();
       clear_active(state, request);
       active.reset();
       continue;
     }
     if (poll_yielded(step)) continue;
 
+    // An edit session's heartbeat keeps its cadence beneath a request.
     const auto waited = wait_for_work(
-        state, transport, remaining_timeout(request->deadline));
+        state, transport,
+        std::min(remaining_timeout(request->deadline),
+                 edit.live() ? edit.wait_timeout(*session) : INFINITE));
     if (waited.kind == WaitResult::Kind::failed) {
       fail_closed(state, request,
                   "LayerD live-pipe wait failed (" +
                       win32_reason(waited.error) + ").");
-      discard_session(state, session, transport);
+      discard();
       clear_active(state, request);
       active.reset();
     }
   }
+  edit.shutdown(session.get());
 }
 
 void run_worker(const std::shared_ptr<DaemonHub::State> &state,
@@ -776,13 +803,13 @@ std::shared_ptr<Request> submit_request(
   return request;
 }
 
-// Queues a trace request without waiting for it, starting the worker on
-// first demand. The caller holds lifecycle_mutex and mutex. Returns the
-// reason the link cannot take it, if any.
-std::optional<std::string> enqueue_trace_locked(
+} // namespace
+
+namespace daemon_hub_detail {
+
+std::optional<std::string> start_worker_locked(
     const std::shared_ptr<DaemonHub::State> &state,
-    const DaemonHubEnvironment &environment, const Request::Kind kind,
-    const std::uint64_t id) {
+    const DaemonHubEnvironment &environment) {
   if (state->stopping) return "The LayerD link was shut down.";
   if (!state->initialization_error.empty()) return state->initialization_error;
   if (state->worker_failed) return state->worker_error;
@@ -799,6 +826,18 @@ std::optional<std::string> enqueue_trace_locked(
       return "The LayerD link worker could not start.";
     }
   }
+  return std::nullopt;
+}
+
+} // namespace daemon_hub_detail
+
+namespace {
+
+std::optional<std::string> enqueue_trace_locked(
+    const std::shared_ptr<DaemonHub::State> &state,
+    const DaemonHubEnvironment &environment, const Request::Kind kind,
+    const std::uint64_t id) {
+  if (auto failure = start_worker_locked(state, environment)) return failure;
   auto request = std::make_shared<Request>(kind, std::nullopt, Clock::now());
   request->trace_id = id;
   state->queue.push_back(request);
