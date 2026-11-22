@@ -269,6 +269,46 @@ void end_reasons_and_expiry() {
          "peer-ended and expired sessions are detached once without notifying LayerD");
 }
 
+void ended_during_direct_drag_confirmation() {
+  Fixture fixture;
+  if (!fixture.build()) return;
+  auto &app = fixture.app();
+  fixture.start();
+  fixture.started();
+  auto *drag = Access::direct_drag(app);
+  if (!expect(drag && drag->active(), "Direct drag is available before the prompt")) return;
+  Access::set_direct_drag_confirmation(app, [&] {
+    fixture.edit.deliver(app, {.kind = Event::Kind::ended,
+                               .reason = Event::EndReason::connection_lost,
+                               .panel_id = {}, .text = {}});
+    return 1;
+  });
+  drag->value(1);
+  drag->do_callback();
+  expect(!app.placement_active() && !drag->active() && !drag->value() &&
+             fixture.edit.direct_drag.empty(),
+         "Continue cannot enable direct drag in an ended session");
+}
+
+void closing_main_window_closes_tool_windows_and_edit() {
+  Fixture fixture;
+  if (!fixture.build()) return;
+  auto &app = fixture.app();
+  app.show();
+  fixture.start();
+  fixture.started();
+  app.command(editor::EditorCommand::diagnostics);
+  app.command(editor::EditorCommand::tasks);
+  auto *diagnostics = Access::diagnostics(app);
+  auto *tasks = Access::tasks_window(app);
+  if (!expect(diagnostics && diagnostics->shown() && tasks && tasks->shown(),
+              "both tool windows are open")) return;
+  app.main_window()->do_callback();
+  expect(!diagnostics->shown() && !tasks->shown() && !app.shown() &&
+             !Fl::first_window() && fixture.edit.end == std::vector<bool>{true},
+         "closing the main window closes both tools and notifies LayerD once");
+}
+
 void switching_or_closing_profile_ends_edit() {
   Fixture fixture;
   if (!fixture.build()) return;
@@ -293,4 +333,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(begin_toggle_and_preview_drag),
     LAYERC_TEST_CASE(incoming_anchor_and_accepted_edit),
     LAYERC_TEST_CASE(end_reasons_and_expiry),
+    LAYERC_TEST_CASE(ended_during_direct_drag_confirmation),
+    LAYERC_TEST_CASE(closing_main_window_closes_tool_windows_and_edit),
     LAYERC_TEST_CASE(switching_or_closing_profile_ends_edit))

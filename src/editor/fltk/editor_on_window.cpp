@@ -178,10 +178,16 @@ void EditorApp::direct_drag_changed(const bool enabled) {
   }
   if (enabled && !direct_drag_notice_shown_) {
     fl_message_title("Enable direct drag");
-    if (fl_choice("Direct drag temporarily lets LayerD receive clicks only inside visible "
+    const int choice = confirm_direct_drag_for_test_ ? confirm_direct_drag_for_test_() :
+        fl_choice("Direct drag temporarily lets LayerD receive clicks only inside visible "
                   "bar rectangles. It uses no injection or game hooks, but anti-cheat "
                   "compatibility cannot be guaranteed. Continue?",
-                  "Cancel", "Continue", nullptr) != 1) {
+                  "Cancel", "Continue", nullptr);
+    if (!on_window_started_ || !on_window_ || !placement_active()) {
+      if (panel_page_) panel_page_->show_direct_drag(false, false);
+      return;
+    }
+    if (choice != 1) {
       if (panel_page_) panel_page_->show_direct_drag(true, false);
       return;
     }

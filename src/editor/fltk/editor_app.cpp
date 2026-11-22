@@ -1,4 +1,6 @@
 #include "editor_app.hpp"
+#include "diagnostics_window.hpp"
+#include "tasks_window.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "binding_capture.hpp"
@@ -200,6 +202,15 @@ bool EditorApp::save() {
   query_status();
   return outcome.saved();
 }
+void EditorApp::close_window() {
+  if (!may_leave()) return;
+  end_on_window(true);
+  stop_edit_services();
+  if (diagnostics) diagnostics->hide();
+  if (tasks_window) tasks_window->hide();
+  window.hide();
+}
+
 bool EditorApp::may_leave() {
   if (!pending_fields_ && !session.has_unsaved_changes()) return true;
   if (!session.is_draft() && flush_autosave()) return true;

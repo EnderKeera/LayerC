@@ -28,6 +28,7 @@ public:
   DiagnosticsWindow(const DiagnosticsWindow &) = delete;
   DiagnosticsWindow &operator=(const DiagnosticsWindow &) = delete;
   void show();
+  void hide();
   void refresh();
   [[nodiscard]] bool shown() const;
   [[nodiscard]] const std::string &raw_json() const { return raw_json_; }

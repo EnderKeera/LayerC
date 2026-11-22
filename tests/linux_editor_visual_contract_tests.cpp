@@ -722,6 +722,7 @@ void split_grouped_bars_creates_independent_panels_in_one_edit() {
   app.build();
   app.main_window()->show();
   if (!expect(app.session.has_document(), "the starting profile is open")) return;
+  expect(!app.command_enabled(editor::EditorCommand::split_bars), "an ungrouped bar cannot be split");
   const auto original = app.session.document().profile();
   if (!expect(!app.session.edit([](auto &profile) {
         auto second = profile.cooldowns.front();
@@ -732,6 +733,7 @@ void split_grouped_bars_creates_independent_panels_in_one_edit() {
       }), "seed one bar with two cooldowns")) return;
   app.refresh();
   const auto grouped = app.session.document().profile();
+  expect(app.command_enabled(editor::EditorCommand::split_bars), "a grouped bar enables Split grouped bars");
   app.command(editor::EditorCommand::split_bars);
   const auto &panels = app.session.document().profile().panels;
   const std::string_view status = editor::EditorAppTestAccess::status(app)->value();
@@ -747,6 +749,9 @@ void split_grouped_bars_creates_independent_panels_in_one_edit() {
   app.command(editor::EditorCommand::undo);
   expect(app.session.document().profile() == original && !app.session.can_undo(),
          "only the earlier seed edit precedes the split");
+  app.session.close_document();
+  app.refresh();
+  expect(!app.command_enabled(editor::EditorCommand::split_bars), "no document disables Split grouped bars");
 }
 
 void runtime_diagnostics_copies_unformatted_json_and_closes() {

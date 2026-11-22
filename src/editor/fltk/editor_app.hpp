@@ -123,6 +123,7 @@ public:
   [[nodiscard]] bool save();
   [[nodiscard]] bool flush_autosave();
   [[nodiscard]] bool may_leave();
+  void close_window();
   [[nodiscard]] bool command_enabled(EditorCommand action) const;
   void command(EditorCommand action);
   void import_profiles();
@@ -188,6 +189,7 @@ private:
   bool on_window_live_{};    // begun, not yet ended
   bool on_window_started_{}; // LayerD has the session: Direct Drag is offered
   bool direct_drag_notice_shown_{};
+  std::function<int()> confirm_direct_drag_for_test_;
   // A Direct Drag LayerD reports before its release, shown in the preview only.
   std::optional<RemoteAnchor> remote_anchor_;
   [[nodiscard]] bool begin_on_window(const TaskCandidate &task);

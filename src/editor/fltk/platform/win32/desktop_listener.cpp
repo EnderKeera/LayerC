@@ -19,7 +19,7 @@ WindowsDesktopListener::WindowsDesktopListener(const HINSTANCE instance,
   definition.hInstance = instance_;
   definition.lpszClassName = listener_class;
   window_class_ = RegisterClassW(&definition);
-  if (window_class_)
+  if (window_class_ || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW, listener_class, nullptr, WS_POPUP,
                               0, 0, 0, 0, nullptr, nullptr, instance_, this);
 }

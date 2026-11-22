@@ -57,10 +57,11 @@ CalibrationRunResult run_calibration(
                          ? core::serialize_visual_profile_json(*document.visual())
                          : std::string{},
   };
-  const auto pump = detail::fltk_calibration_pump(*host.owner);
+  auto *const owner = reinterpret_cast<Fl_Window *>(host.owner);
+  const auto pump = detail::fltk_calibration_pump(*owner);
   auto session = image ? detail::run_calibration_session_with_image(
-                             fl_xid(host.owner), request, *image, pump)
-                       : run_calibration_session(fl_xid(host.owner), request, pump);
+                             fl_xid(owner), request, *image, pump)
+                       : run_calibration_session(fl_xid(owner), request, pump);
   if (const auto *failure = std::get_if<CalibrationFailure>(&session)) {
     if (const auto text = calibration_failure_text(*failure))
       host.report(StatusKind::failure, text->title + ": " + text->message);

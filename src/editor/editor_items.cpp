@@ -34,7 +34,7 @@ void EditorWindow::refresh_panel_items(const std::size_t preferred) {
       for (const auto &item : *panel->items) append(item);
     } else {
       for (const auto &id : panel_cooldown_members(*panel))
-        append(core::OverlayItem{.id = {},
+        append(core::OverlayItem{.id = {}, .label = {},
                                  .content = core::CooldownItem{id}});
     }
     const auto count = row_count(*panel);

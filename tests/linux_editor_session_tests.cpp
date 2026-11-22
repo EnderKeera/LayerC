@@ -3,6 +3,8 @@
 #include "profile_edit.hpp"
 #include "automation_presets.hpp"
 #include "automation_graph.hpp"
+#include "automation_simulator.hpp"
+#include "layerc/platform/text.hpp"
 #include "visual_calibration.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
 #include "editor_test_environment.hpp"
@@ -243,10 +245,24 @@ void reviewed_import_export() {
   fixture.store(true);
   editor::EditorSession session(fixture.directory);
   if (!expect(!session.open(0), "select a profile for export")) return;
-  const auto pack = fixture.external / "fixture.layercprofile";
-  const auto json = fixture.external / "fixture.json";
-  expect(session.export_pack(pack, {0}).ok && session.export_json(json, 0).ok,
-         "saved profiles export through the pack writer and durable JSON primitive");
+  const std::string utf8 = "\xE6\x97\xA5\xE6\x9C\xAC-\xC3\xA9";
+  const auto directory = platform::path_from_utf8(utf8);
+  const auto pack_name = platform::path_from_utf8(utf8 + ".layercprofile");
+  const auto trace_name = platform::path_from_utf8(utf8 + ".layerctrace");
+  if (!expect(directory && pack_name && trace_name, "decode the UTF-8 fixture paths")) return;
+  const auto external = fixture.external / *directory;
+  std::filesystem::create_directories(external);
+  const auto pack = external / *pack_name;
+  const auto json = external / "fixture.json";
+  const auto packed = session.export_pack(pack, {0});
+  const auto exported = session.export_json(json, 0);
+  expect(packed.ok && packed.text.find(utf8 + ".layercprofile") != std::string::npos &&
+             exported.ok && exported.text.find("fixture.json") != std::string::npos,
+         "pack and JSON export through a UTF-8 directory and report the filenames");
+  const auto trace = external / *trace_name;
+  expect(editor::write_trace_file(trace, editor::trace_from_events({})) &&
+             std::holds_alternative<editor::LoadedTrace>(editor::read_trace_file(trace)),
+         "automation trace save and load use the converted path");
   const auto original = layerc::test::read_file(fixture.path);
   expect(!session.export_pack(fixture.path, {0}).ok &&
              !session.export_json(fixture.path, 0).ok &&

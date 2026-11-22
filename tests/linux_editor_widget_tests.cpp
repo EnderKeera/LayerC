@@ -203,6 +203,7 @@ void text_history_and_invalid_navigation() {
   editor::EditorApp app; show(app);
   const auto original = app.session.document().profile().name;
   auto *id = editor::EditorAppTestAccess::profile_id(app);
+  if (!expect(id != nullptr, "Profile ID field exists")) return;
   expect((id->readonly() != 0) != editor::windows_editor_keys &&
          std::string_view(id->value()) == app.session.document().profile().id,
          "profile identity identifies even same-name imports and is editable only on Windows");
@@ -706,7 +707,7 @@ void visual_page_history_and_cancel() {
   const editor::CalibrationHost host{
       .report = [&](editor::StatusKind kind, const std::string &text) { app.report(kind, text); },
       .resolve_target = [] { return std::optional<editor::TaskCandidate>{}; },
-      .owner = app.main_window(),
+      .owner = reinterpret_cast<std::uintptr_t>(app.main_window()),
   };
   const auto declined = editor::run_platform_calibration(
       host, app.session.document(), id, std::move(seed_for_cancel),
@@ -1068,7 +1069,11 @@ void windows_editor_platform_exclusions();
 void profile_identity_and_browse();
 void disabled_action_reasons();
 
-LAYERC_TEST_MAIN(
+int main() {
+#ifdef _WIN32
+  layerc::test::disable_ime_off_input_desktop();
+#endif
+  return layerc::test::run({
   LAYERC_PLATFORM_WIDGET_CASES
   LAYERC_TEST_CASE(profile_identity_and_browse),
   LAYERC_TEST_CASE(disabled_action_reasons),
@@ -1128,4 +1133,5 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(visual_remove_refuses_nested_selection_change),
   LAYERC_TEST_CASE(calibration_mask_coalesced_pointer_strokes)
   LAYERC_NATIVE_CAPTURE_CASE
-  LAYERC_FOCUSED_CAPTURE_CASE)
+  LAYERC_FOCUSED_CAPTURE_CASE});
+}

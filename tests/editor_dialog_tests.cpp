@@ -148,6 +148,7 @@ void editor_main_layout_contracts();
 void editor_accessibility_contracts();
 
 int main(const int argc, char **argv) {
+  layerc::test::disable_ime_off_input_desktop();
   if (argc == 5 && std::string_view(argv[1]) == "--request-pipe" &&
       std::string_view(argv[3]) == "--response-pipe") {
     // Disposable helper mode: never reads its inherited pipe, captures input,

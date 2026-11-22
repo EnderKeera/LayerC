@@ -309,7 +309,7 @@ void platform_service_accepts_and_reports() {
   const editor::CalibrationHost host{
       .report = [&](editor::StatusKind status, const std::string &text) { report.emplace(status, text); },
       .resolve_target = [&] { return resolved; },
-      .owner = &owner,
+      .owner = reinterpret_cast<std::uintptr_t>(&owner),
   };
   unsigned accept_calls{};
   const editor::CalibrationAccept accept = [&](const editor::CalibrationDraft &draft) {

@@ -342,6 +342,7 @@ void ProfilePage::browse_application() {
   const auto error = app_.session.edit([&](auto &profile) {
     read(profile);
     profile.game.executable_name = *name;
+    profile.game.global = false;
     if (!profile.game.executable_path.empty()) profile.game.executable_path = *chosen;
   });
   if (error) { app_.changed(error); return; }

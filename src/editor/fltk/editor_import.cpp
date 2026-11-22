@@ -4,6 +4,8 @@
 
 #include <FL/Fl.H>
 
+#include "layerc/platform/text.hpp"
+
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/fl_ask.H>
 #include <variant>
@@ -22,8 +24,9 @@ std::optional<std::filesystem::path> choose_file(bool save, const char *title, c
   chooser.filter(filter);
   if (save) chooser.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
   if (chooser.show() != 0 || !chooser.filename() || !*chooser.filename()) return std::nullopt;
-  std::filesystem::path chosen(chooser.filename());
-  directory = chosen.parent_path().string();
+  auto chosen = platform::path_from_utf8(chooser.filename());
+  if (!chosen) return std::nullopt;
+  directory = platform::path_to_utf8(chosen->parent_path()).value_or("");
   return chosen;
 }
 }

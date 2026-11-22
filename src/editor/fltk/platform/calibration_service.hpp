@@ -4,14 +4,13 @@
 #include "task_list.hpp"
 #include "visual_calibration.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <variant>
-
-class Fl_Window;
 
 namespace layerc::editor {
 
@@ -28,7 +27,7 @@ struct CalibrationHost {
   // Returns the target window, or nullopt after reporting why / opening
   // Detected Tasks. Only platforms that need a target window call it.
   std::function<std::optional<TaskCandidate>()> resolve_target;
-  Fl_Window *owner{};
+  std::uintptr_t owner{};
 };
 
 [[nodiscard]] CalibrationRunResult run_platform_calibration(

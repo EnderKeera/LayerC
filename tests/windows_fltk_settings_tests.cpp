@@ -373,7 +373,10 @@ void contrast_mapping_and_desktop_listener() {
     ++reapplies;
     editor::reapply_editor_desktop_appearance(window);
   });
+  const editor::WindowsDesktopListener second(GetModuleHandleW(nullptr), [] {});
   const HWND target = listener.native_handle();
+  expect(second.native_handle() && second.native_handle() != target,
+         "another listener creates a separate window using the same class");
   if (!expect(target && !IsWindowVisible(target) && !GetWindow(target, GW_OWNER) &&
                   (GetWindowLongPtrW(target, GWL_STYLE) & WS_POPUP) &&
                   (GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOOLWINDOW),

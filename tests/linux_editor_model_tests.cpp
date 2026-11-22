@@ -309,6 +309,12 @@ void detected_tasks_and_placement() {
              profile.name == "game" && profile.id == "game" &&
              applied.status == "Application selected — Save once to create the profile.",
          "an unsaved New Profile takes the executable matcher and its name");
+  auto unicode_profile = layerc::editor::make_new_profile();
+  auto unicode_task = game;
+  unicode_task.executable_name = "\xE6\x97\xA5\xE6\x9C\xAC.exe";
+  expect(layerc::editor::apply_task(unicode_profile, unicode_task, false, true).applied &&
+             unicode_profile.name == "\xE6\x97\xA5\xE6\x9C\xAC",
+         "the new profile name keeps the UTF-8 executable stem");
   applied = layerc::editor::apply_task(profile, game, true, false);
   expect(applied.applied && applied.kind == layerc::editor::StatusKind::success &&
              profile.game.executable_path == "/opt/game/game.bin" &&

@@ -129,6 +129,8 @@ void DiagnosticsWindow::show() {
   refresh();
   window_->show();
 }
+void DiagnosticsWindow::hide() { window_->hide(); }
+
 bool DiagnosticsWindow::shown() const { return window_->shown() != 0; }
 
 void DiagnosticsWindow::refresh() {

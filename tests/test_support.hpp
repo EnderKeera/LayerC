@@ -94,6 +94,8 @@ bool write_file(const std::filesystem::path &path, std::string_view contents);
 [[nodiscard]] std::optional<std::string>
 read_file(const std::filesystem::path &path);
 
+void disable_ime_off_input_desktop();
+
 [[nodiscard]] int run(std::initializer_list<Case> cases);
 
 } // namespace layerc::test

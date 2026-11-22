@@ -336,7 +336,8 @@ void EditorWindow::open_panel_item_dialog(const bool editing) {
   PanelItemDialogState state{.owner = *this,
       .panel = static_cast<std::size_t>(panel - document_.profile().panels.data()),
       .index = index, .item = std::move(item),
-      .profile_id = document_.profile().id, .panel_id = panel->id};
+      .profile_id = document_.profile().id, .panel_id = panel->id,
+      .chrome = {}, .sources = {}};
   DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_PANEL_ITEM), shell_.window,
                    &EditorWindow::panel_item_dialog_proc,
                    reinterpret_cast<LPARAM>(&state));

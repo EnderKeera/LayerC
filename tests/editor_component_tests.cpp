@@ -322,7 +322,8 @@ void editor_visual_component_contracts() {
       {.cooldown_id = cooldown_id, .observation_id = "ready"});
   const std::filesystem::path path = L"C:\\fixture\\profile.json";
   document.accept_commit(path, ProfileBundle{.profile = std::move(profile),
-                                              .visual = std::move(visual)});
+                                              .visual = std::move(visual),
+                                              .automation = {}});
   const auto snapshot = [&] {
     return EditorProfileSnapshot{document.profile(), document.visual(),
                                  document.automation()};

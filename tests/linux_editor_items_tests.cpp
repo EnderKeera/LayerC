@@ -165,6 +165,8 @@ void profile_identity_and_browse() {
   using Access = editor::EditorAppTestAccess;
   auto *id = Access::profile_id(app);
   auto *browse = Access::browse_application(app);
+  auto *status = Access::status(app);
+  if (!expect(id && status && app.session.has_document(), "profile controls and document exist")) return;
   const auto accepted = [&]() -> const core::GameProfile & { return app.session.document().profile(); };
   if constexpr (!editor::windows_editor_keys) {
     expect(id->readonly() && std::string_view(id->label()) == "Profile ID (read-only)" && !browse,
@@ -187,7 +189,7 @@ void profile_identity_and_browse() {
   expect(accepted().id == "new-id" && id->value() == std::string_view("new-id"),
          "Redo restores the ID and field");
   id->value(""); id->do_callback();
-  expect(accepted().id == "new-id" && std::string_view(Access::status(app)->value()).starts_with("Invalid input: $.id:"),
+  expect(accepted().id == "new-id" && std::string_view(status->value()).starts_with("Invalid input: $.id:"),
          "empty ID is refused with the ID validation status");
   id->value("new-id"); id->do_callback();
   expect(app.save() && app.session.document().path() == path && !app.session.open_path(path) &&
@@ -198,7 +200,9 @@ void profile_identity_and_browse() {
   expect(browse && browse->tooltip() && browse->tooltip() == tip &&
              editor::a11y::description({browse, editor::a11y::TargetKind::widget}) == tip,
          "Browse tooltip and accessible description match Win32");
-  if (!browse) return;
+  auto *executable = Access::executable(app);
+  auto *path_field = Access::executable_path(app);
+  if (!expect(browse && executable && path_field, "application controls exist")) return;
   std::optional<std::string> chosen;
   Access::set_application_chooser(app, [&] { return chosen; });
   browse->do_callback();
@@ -213,12 +217,11 @@ void profile_identity_and_browse() {
   expect(std::ofstream(application).good(), "create a disposable application file");
   browse->do_callback();
   expect(accepted().game.executable_name == "another.exe" && accepted().game.executable_path.empty() &&
-             std::string_view(Access::executable(app)->value()) == "another.exe" &&
-             std::string_view(Access::status(app)->value()) == "Application set to another.exe.",
+             std::string_view(executable->value()) == "another.exe" &&
+             std::string_view(status->value()) == "Application set to another.exe.",
          "Browse without exact matching sets only the executable name and reports it");
   app.command(editor::EditorCommand::undo);
   expect(accepted().game == profile.game, "one Undo restores the original executable");
-  auto *path_field = Access::executable_path(app);
   path_field->value("C:\\Games\\fixture.exe"); path_field->do_callback();
   const auto before_browse = accepted().game;
   browse->do_callback();
@@ -235,6 +238,11 @@ void profile_identity_and_browse() {
   browse->do_callback();
   expect(accepted().game.executable_name == "another.exe" && accepted().game.executable_path.empty(),
          "Browse can supply the first application on a new draft");
+  if (!expect(!app.session.edit([](auto &value) { value.game.global = true; }),
+              "set global matching on the draft")) return;
+  app.refresh();
+  browse->do_callback();
+  expect(!accepted().game.global, "Browse changes a global profile to application matching");
 }
 
 void disabled_action_reasons() {
@@ -251,6 +259,7 @@ void disabled_action_reasons() {
   };
   auto *cooldown_remove = Access::remove_cooldown(app);
   auto *cooldown_reason = Access::remove_cooldown_reason(app);
+  if (!expect(cooldown_remove && cooldown_reason, "cooldown action and reason exist")) return;
   constexpr std::string_view cooldown = "A profile needs at least one cooldown.";
   expect(reason(*cooldown_remove, cooldown) && shows(*cooldown_reason, cooldown),
          "last cooldown has the visible, tooltip and accessible reason");
@@ -263,7 +272,11 @@ void disabled_action_reasons() {
   const std::string full = "A panel holds at most " +
       std::to_string(core::max_overlay_items_per_panel) + " items.";
   auto *line = Access::item_reason(app);
-  expect(reason(*Access::remove_item(app), last) && shows(*line, last),
+  auto *remove = Access::remove_item(app);
+  auto *edit = Access::edit_item(app);
+  auto *add = Access::add_item(app);
+  if (!expect(line && remove && edit && add, "panel item actions and reason exist")) return;
+  expect(reason(*remove, last) && shows(*line, last),
          "last panel item cannot be removed");
   const auto populate = [&](const std::size_t count) {
     expect(!app.session.edit_items([&](auto &candidate, auto &) -> std::optional<std::string> {
@@ -278,12 +291,11 @@ void disabled_action_reasons() {
     app.refresh();
   };
   populate(1);
-  expect(reason(*Access::edit_item(app), opaque) && reason(*Access::remove_item(app), last) &&
+  expect(reason(*edit, opaque) && reason(*remove, last) &&
              shows(*line, opaque + " " + std::string(last)),
          "opaque last item shows Edit and Remove reasons side by side in one line");
   populate(core::max_overlay_items_per_panel);
-  expect(reason(*Access::add_item(app), full) && reason(*Access::edit_item(app), opaque) &&
-             Access::remove_item(app)->active() && shows(*line, full + " " + opaque),
+  expect(reason(*add, full) && reason(*edit, opaque) && remove->active() && shows(*line, full + " " + opaque),
          "full panel shows Add and Edit reasons in order and permits Remove");
   Access::window(app).hide();
 }

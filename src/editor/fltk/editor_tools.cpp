@@ -13,6 +13,8 @@
 
 #include "editor_style.hpp"
 
+#include "layerc/platform/text.hpp"
+
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
 #include <FL/Fl_Box.H>
@@ -155,7 +157,7 @@ void EditorApp::open_profiles_folder() {
   const auto directory = session.directory();
   if (directory.empty()) { report(StatusKind::failure, profile_directory_unavailable_reason()); return; }
   if (opener_.running()) { report(StatusKind::information, "The file manager is still starting."); return; }
-  const std::string path = directory.string();
+  const auto path = platform::path_to_utf8(directory).value_or("(path unavailable)");
   if (!(start_folder_for_test_ ? start_folder_for_test_(directory) : opener_.start(directory))) {
     report(StatusKind::failure, "Could not start " + std::string(folder_opener_name()) +
            "; the profiles folder is " + path);

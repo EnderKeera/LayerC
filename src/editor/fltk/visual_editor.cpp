@@ -212,7 +212,7 @@ struct LinuxVisualEditor::Impl {
             return app.placement();
           return app.window_target(TaskRequest::calibrate);
         },
-        .owner = app.main_window(),
+        .owner = reinterpret_cast<std::uintptr_t>(app.main_window()),
     };
     auto result = run_platform_calibration(host, session.document(), cooldown,
                                            std::move(*seed), accept, session.owned_template_assets());

@@ -1,6 +1,5 @@
 // Modal dialog and appearance cases of the Linux editor widget suite, split from
 // linux_editor_widget_tests.cpp to keep translation units focused.
-#include "calibration_window.hpp"
 #include "cooldown_groups_window.hpp"
 #include "appearance_window.hpp"
 #include "accessible_widgets.hpp"
@@ -10,6 +9,7 @@
 #include "export_selection_window.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/text.hpp"
 #include "linux_editor_test_access.hpp"
 #include "profile_edit.hpp"
 #include "editor_test_environment.hpp"
@@ -34,7 +34,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#ifdef _WIN32
 #include <chrono>
+#endif
 #include <string>
 #include <string_view>
 #include <utility>
@@ -260,6 +262,14 @@ void double_click_task(Fl_Hold_Browser &rows) {
 
 void open_profiles_folder_passes_private_store_to_launcher() {
   Fixture fixture;
+  const std::string utf8 = "\xE6\x97\xA5\xE6\x9C\xAC-\xC3\xA9";
+  const auto directory = platform::path_from_utf8(utf8);
+  if (!expect(directory.has_value(), "decode the UTF-8 folder name")) return;
+  const auto config = fixture.path.parent_path() / *directory;
+  std::filesystem::create_directories(config);
+  const layerc::test::ScopedEnvironment store(
+      editor::windows_editor_keys ? "LAYERC_PROFILE_DIR" : "XDG_CONFIG_HOME", config);
+  if (!expect(store.applied(), "override the profile directory in the private fixture")) return;
   std::vector<std::filesystem::path> requests;
   editor::EditorApp app;
   app.build();
@@ -270,13 +280,16 @@ void open_profiles_folder_passes_private_store_to_launcher() {
   app.command(editor::EditorCommand::open_folder);
   const auto expected = app.session.directory();
   const auto *status = editor::EditorAppTestAccess::status(app);
-  expect(expected == fixture.path.parent_path() && requests == std::vector{expected} &&
-             std::string_view(status->value()) == "Opening the profiles folder: " + expected.string(),
+  const auto path_text = platform::path_to_utf8(expected);
+  if (!expect(status && path_text && path_text->find(utf8) != std::string::npos,
+              "the status and UTF-8 profile path exist")) return;
+  expect(expected == platform::profile_directory() && requests == std::vector{expected} &&
+             std::string_view(status->value()) == "Opening the profiles folder: " + *path_text,
          "Open profiles folder starts the file manager at the private store");
   app.command(editor::EditorCommand::open_folder);
   expect(requests == std::vector{expected, expected} &&
              std::string_view(status->value()) == "Could not start " +
-                 std::string(editor::folder_opener_name()) + "; the profiles folder is " + expected.string(),
+                 std::string(editor::folder_opener_name()) + "; the profiles folder is " + *path_text,
          "a refused file manager launch leaves the folder path in the error status");
 }
 
@@ -353,7 +366,7 @@ void tasks_double_click_runs_requested_action() {
       Fl::check();
       auto *window = detected_tasks_window();
       auto *rows = window ? task_rows(*window) : nullptr;
-      if (!expect(rows && rows->size() == 1, "the task chooser shows the injected row")) return;
+      if (!expect(window && rows && rows->size() == 1, "the task chooser shows the injected row")) return;
       rows->value(1);
       activate(*rows);
       activate(*rows);
@@ -381,7 +394,7 @@ void tasks_calibrate_button_uses_selected_task() {
   auto *window = detected_tasks_window();
   auto *button = window ? find_button(*window, "&Calibrate") : nullptr;
   auto *rows = window ? task_rows(*window) : nullptr;
-  if (!expect(button && rows, "the chooser has a Calibrate button and a task list")) return;
+  if (!expect(window && button && rows, "the chooser has a Calibrate button and a task list")) return;
   expect((find_button(*window, "Pick &window") != nullptr) == editor::window_picking_supported(),
          "the Pick window button appears only where point picking is supported");
   button->do_callback();
@@ -426,7 +439,10 @@ void panel_contrast_line_follows_colors() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; app.build();
   Access::window(app).show(); Fl::check();
-  Access::tabs(app)->value(Access::panel_tab(app)); app.tab_changed();
+  auto *tabs = Access::tabs(app);
+  auto *panel = Access::panel_tab(app);
+  if (!expect(tabs && panel, "the Panels tab exists")) return;
+  tabs->value(panel); app.tab_changed();
   auto *line = Access::contrast_line(app);
   auto *panels = Access::panels(app);
   if (!expect(line && panels, "the Panels page owns a contrast line")) return;
@@ -434,6 +450,7 @@ void panel_contrast_line_follows_colors() {
   expect(panels->value() == 1, "the Panels page opens on its first panel");
   Fl_Input *fields[]{Access::fill(app), Access::background(app), Access::border(app),
                      Access::text_color(app)};
+  if (!expect(fields[0] && fields[1] && fields[2] && fields[3], "all four panel colour fields exist")) return;
   const auto type = [&](const char *fill, const char *background, const char *border,
                         const char *text) {
     const char *values[]{fill, background, border, text};
@@ -445,6 +462,7 @@ void panel_contrast_line_follows_colors() {
     });
   };
   auto *show_text = Access::show_text(app);
+  if (!expect(show_text != nullptr, "the Show bar text checkbox exists")) return;
   show_text->value(1); app.field_changed(show_text);
   type("#606060", "#5A5A5A", "#646464", "#707070");
   const std::string faint =

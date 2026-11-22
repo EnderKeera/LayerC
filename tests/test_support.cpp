@@ -1,6 +1,7 @@
 #include "test_support.hpp"
 
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -73,6 +74,28 @@ bool write_environment(const std::string &name, const char *value) {
 #endif
 
 } // namespace
+
+void disable_ime_off_input_desktop() {
+#ifdef _WIN32
+  const auto name = [](HDESK desktop) {
+    wchar_t buffer[256]{};
+    DWORD needed{};
+    if (!GetUserObjectInformationW(desktop, UOI_NAME, buffer, sizeof buffer, &needed))
+      return std::wstring{};
+    return std::wstring(buffer);
+  };
+  const HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+  const bool off_input = !input || name(input) != name(GetThreadDesktop(GetCurrentThreadId()));
+  if (input) CloseDesktop(input);
+  if (!off_input) return;
+  const HMODULE imm = LoadLibraryExW(L"imm32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  if (!imm) return;
+  using DisableIme = BOOL (WINAPI *)(DWORD);
+  const auto disable = std::bit_cast<DisableIme>(GetProcAddress(imm, "ImmDisableIME"));
+  if (disable) disable(static_cast<DWORD>(-1));
+  FreeLibrary(imm);
+#endif
+}
 
 int failures{};
 

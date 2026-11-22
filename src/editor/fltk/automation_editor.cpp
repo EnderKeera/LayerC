@@ -19,6 +19,8 @@
 #include <FL/Fl_Multiline_Output.H>
 #include "editor_scroll.hpp"
 #include <FL/fl_draw.H>
+#include "layerc/platform/text.hpp"
+
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Output.H>
 #include <FL/fl_ask.H>
@@ -53,7 +55,7 @@ std::optional<std::filesystem::path> trace_destination(const bool save) {
   chooser.filter("LayerC trace\t*.layerctrace");
   if (save) chooser.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
   if (chooser.show() || !chooser.filename() || !*chooser.filename()) return std::nullopt;
-  return std::filesystem::path(chooser.filename());
+  return platform::path_from_utf8(chooser.filename());
 }
 class ValidationOutput final : public EditorField<Fl_Output> {
 public:

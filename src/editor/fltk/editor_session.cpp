@@ -499,8 +499,9 @@ OperationOutcome EditorSession::export_json(const std::filesystem::path &destina
     return {StatusKind::failure, false, "JSON export failed; the destination was not changed."};
   if (published == platform::DurablePublishOutcome::published_unconfirmed)
     return {StatusKind::warning, false, "JSON is exported, but its crash durability could not be confirmed."};
-  return {StatusKind::success, true, "Exported the saved base JSON (without module sidecars). Use a profile "
-                "pack to export the complete bundle."};
+  return {StatusKind::success, true, "Exported the saved base JSON to " +
+                platform::path_to_utf8(destination.filename()).value_or("the selected file") +
+                " (without module sidecars). Use a profile pack to export the complete bundle."};
 }
 
 OperationOutcome EditorSession::export_pack(const std::filesystem::path &destination,
@@ -518,7 +519,7 @@ OperationOutcome EditorSession::export_pack(const std::filesystem::path &destina
   if (const auto *error = std::get_if<bundle::PackError>(&result))
     return {StatusKind::failure, false, pack_error_text("Export failed", *error)};
   return {StatusKind::success, true, "Exported " + std::to_string(paths.size()) + " profile(s) to " +
-                    destination.filename().string() + "."};
+                    platform::path_to_utf8(destination.filename()).value_or("the selected file") + "."};
 }
 
 std::variant<ImportPlan, std::string>
@@ -553,7 +554,7 @@ EditorSession::plan_import(const std::filesystem::path &source) {
   ImportPlan plan{source, std::move(*pack), {}, preview.choices};
   for (const auto &entry : preview.entries)
     plan.rows.push_back({plan.pack.profiles[entry.profile_index].profile.name,
-                         entry.target.filename().string(), entry.collides,
+                         platform::path_to_utf8(entry.target.filename()).value_or("Profile file"), entry.collides,
                          bundle::ImportAction::copy});
   return plan;
 }
@@ -571,7 +572,8 @@ std::variant<ImportPlan, std::string> EditorSession::review_import(ImportPlan pl
   if (preview.error) return pack_error_text("Import preview failed", *preview.error);
   plan.reviewed = preview.choices;
   for (std::size_t index = 0; index < preview.entries.size(); ++index) {
-    plan.rows[index].filename = preview.entries[index].target.filename().string();
+    plan.rows[index].filename = platform::path_to_utf8(
+        preview.entries[index].target.filename()).value_or("Profile file");
     plan.rows[index].collides = preview.entries[index].collides;
   }
   return plan;

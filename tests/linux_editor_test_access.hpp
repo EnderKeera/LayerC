@@ -198,6 +198,9 @@ struct EditorAppTestAccess {
   static void position_on(EditorApp &app, const TaskCandidate &task) { app.position_on(task); }
   static void on_window_ready(EditorApp &app) { app.on_window_ready(); }
   static void acknowledge_direct_drag_notice(EditorApp &app) { app.direct_drag_notice_shown_ = true; }
+  static void set_direct_drag_confirmation(EditorApp &app, std::function<int()> confirm) {
+    app.confirm_direct_drag_for_test_ = std::move(confirm);
+  }
   static Fl_Check_Button *direct_drag(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->direct_drag_ : nullptr;
   }

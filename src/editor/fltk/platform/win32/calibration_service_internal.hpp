@@ -5,6 +5,8 @@
 
 #include <filesystem>
 
+class Fl_Window;
+
 namespace layerc::editor::detail {
 
 [[nodiscard]] CalibrationPump fltk_calibration_pump(Fl_Window &owner);

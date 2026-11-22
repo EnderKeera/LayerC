@@ -1,6 +1,7 @@
 #include "task_list.hpp"
 
 #include "layerc/core/utf8.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -62,12 +63,11 @@ TaskApplied apply_task(layerc::core::GameProfile &profile, const TaskCandidate &
     status = "Application selected — matching by window class; its executable is not readable.";
   }
   if (unsaved && (profile.name == "New Profile" || profile.name.empty())) {
-    const auto stem = std::filesystem::path(!task.executable_name.empty() ? task.executable_name
-                                                                         : task.class_name)
-                          .stem()
-                          .string();
-    if (!stem.empty()) {
-      profile.name = stem;
+    const auto path = platform::path_from_utf8(task.executable_name.empty()
+                                                  ? task.class_name : task.executable_name);
+    const auto stem = path ? platform::path_to_utf8(path->stem()) : std::nullopt;
+    if (stem && !stem->empty()) {
+      profile.name = *stem;
       profile.id = layerc::core::slugify(profile.name, "profile");
     }
   }

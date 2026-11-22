@@ -98,7 +98,7 @@ void EditorApp::build(std::optional<AppearanceLoad> startup_appearance) {
   window.resizable(content);
   window.callback([](Fl_Widget *, void *data) {
     auto &app = *static_cast<EditorApp *>(data);
-    if (app.may_leave()) app.window.hide();
+    app.close_window();
   }, this);
   accessibility = std::make_unique<EditorAccessibility>(*this);
   // The visible line follows every change, including the one that happens

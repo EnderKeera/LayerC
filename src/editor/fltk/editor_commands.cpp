@@ -136,12 +136,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](EditorApp &app) { app.open_profiles_folder(); }},
       {EditorCommand::close, "&File/&Quit", "&Quit", FL_CTRL | 'q', 0, 0, 0, 0,
        +[](const EditorApp &) { return true; },
-       +[](EditorApp &app) {
-         if (app.may_leave()) {
-           app.stop_edit_services();
-           app.window.hide();
-         }
-       }},
+       +[](EditorApp &app) { app.close_window(); }},
       {EditorCommand::undo, "&Edit/&Undo", "&Undo", FL_CTRL | 'z', 0, 0, 0, 0,
        +[](const EditorApp &app) {
          return app.session.has_document() &&
@@ -592,7 +587,13 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        }},
       {EditorCommand::split_bars, "&Tools/Split grouped &bars",
        "Split grouped &bars", 0, 0, FL_MENU_DIVIDER, 0, 0,
-       +[](const EditorApp &) { return true; },
+       +[](const EditorApp &app) {
+         return app.session.has_document() &&
+                std::ranges::any_of(app.session.document().profile().panels,
+                    [](const auto &panel) {
+                      return panel.style == core::PanelStyle::bar && panel.cooldown_ids.size() > 1;
+                    });
+       },
        +[](EditorApp &app) {
          if (!app.apply_fields()) return;
          std::optional<std::size_t> first;
