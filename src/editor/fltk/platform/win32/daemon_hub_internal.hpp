@@ -19,7 +19,9 @@ using Clock = std::chrono::steady_clock;
 struct Request final {
   // Trace requests have no waiting caller: their outcome is the relay's
   // subscription state.
-  enum class Kind { status, reload, trace_subscribe, trace_unsubscribe };
+  enum class Kind {
+    status, reload, trace_subscribe, trace_unsubscribe, retry_visual, retry_automation,
+  };
 
   Request(Kind request_kind, std::optional<CommittedProfile> profile,
           const Clock::time_point request_deadline)
@@ -33,6 +35,8 @@ struct Request final {
   bool completed{};
   DaemonStatus status_result;
   ReloadResult reload_result;
+  layerc::core::LiveMessage retry_message;
+  DaemonCommandResult retry_result;
   std::uint64_t trace_id{};
   std::atomic<bool> request_sent{};
 };

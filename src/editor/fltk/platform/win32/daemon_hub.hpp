@@ -54,6 +54,10 @@ public:
   [[nodiscard]] ReloadResult
   reload(const std::optional<CommittedProfile> &committed);
 
+  [[nodiscard]] DaemonCommandResult retry_visual();
+  [[nodiscard]] DaemonCommandResult retry_automation(
+      const std::filesystem::path &profile, std::string_view automation_id);
+
   // The automation trace subscription LayerD pushes over the same pipe
   // (TraceRelay). subscribe_trace starts a fresh subscription and returns
   // its id; the others act only while that id is current. None of them

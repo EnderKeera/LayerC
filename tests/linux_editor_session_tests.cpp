@@ -461,9 +461,11 @@ void visual_candidates_history_and_recovery() {
          "invalid calibration cannot weaken the unreadable-sidecar gate");
   const auto model = editor::CalibrationModel::open(base, "ability", std::nullopt);
   expect(model.has_value(), "seed an explicit repair calibration");
+  if (!model) return;
   auto result = model->build_result(model->initial_controls(), {});
   const auto *visual = std::get_if<core::VisualProfile>(&result);
   expect(visual != nullptr, "a pixel calibration builds one valid observation and trigger");
+  if (!visual) return;
   auto prepared_repair = session.prepare_calibration("ability", *visual, {}, {});
   auto *accepted_repair = std::get_if<editor::AcceptedCalibration>(&prepared_repair);
   expect(accepted_repair != nullptr, "a valid repair calibration prepares");
@@ -597,11 +599,13 @@ void calibration_assets_publish_with_bundle_and_survive_undo() {
   auto model = editor::CalibrationModel::open(session.document().profile(), "ability",
                                               session.document().visual());
   expect(model && model->add_reference({canonical.sha256}), "seed a template calibration");
+  if (!model) return;
   auto controls = model->initial_controls();
   controls.predicate = editor::CalibrationPredicate::template_match;
   auto built = model->build_result(controls, std::vector<core::TemplateImage>{image});
   const auto *visual = std::get_if<core::VisualProfile>(&built);
   expect(visual != nullptr, "a template calibration builds one observation and trigger");
+  if (!visual) return;
   const auto sidecar = platform::visual_sidecar_path(fixture.path);
   const auto before = layerc::test::read_file(sidecar);
   const auto update = [] { return editor::SharedObservationChoice::update_shared; };

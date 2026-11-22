@@ -74,6 +74,8 @@ void tasks_picker_restores_capture();
 #endif
 void linux_editor_field_error_contracts();
 void linux_editor_pending_automation_status_contracts();
+void diagnostics_summary_raw_and_retry();
+void automation_validate_json_is_a_dry_run();
 void linux_editor_calibration_layout_contracts();
 void linux_editor_black_accent_dialog_contracts();
 void linux_editor_main_window_text_and_tab_labels();
@@ -1062,6 +1064,8 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_field_error_contracts),
   LAYERC_TEST_CASE(linux_editor_pending_automation_status_contracts),
+  LAYERC_TEST_CASE(diagnostics_summary_raw_and_retry),
+  LAYERC_TEST_CASE(automation_validate_json_is_a_dry_run),
   LAYERC_CALIBRATION_LAYOUT_CASE
   LAYERC_TEST_CASE(linux_editor_black_accent_dialog_contracts),
   LAYERC_TEST_CASE(linux_editor_main_window_text_and_tab_labels),

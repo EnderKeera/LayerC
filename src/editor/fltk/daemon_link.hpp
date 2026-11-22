@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 // The editor's authenticated link to LayerD: daemon status for the
@@ -87,6 +89,20 @@ struct CommittedProfile {
 // Asks the running daemon to reload profiles after a committed change.
 [[nodiscard]] ReloadResult
 request_daemon_reload(const std::optional<CommittedProfile> &committed = std::nullopt);
+
+enum class DaemonCommandState { acknowledged, refused, daemon_unavailable, unsupported };
+struct DaemonCommandResult {
+  DaemonCommandState state{DaemonCommandState::daemon_unavailable};
+  std::string text;
+};
+
+[[nodiscard]] bool daemon_retry_supported() noexcept;
+[[nodiscard]] DaemonCommandResult request_visual_retry();
+[[nodiscard]] DaemonCommandResult request_automation_retry(
+    const std::filesystem::path &profile, std::string_view automation_id);
+
+[[nodiscard]] std::pair<StatusKind, std::string>
+automation_retry_report(const DaemonCommandResult &result);
 
 // Ends the daemon link before exit: fails any pending request and joins the
 // link's worker. Idempotent; Linux holds nothing to release.

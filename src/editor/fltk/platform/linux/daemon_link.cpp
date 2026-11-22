@@ -169,6 +169,17 @@ ReloadResult request_daemon_reload(const std::optional<CommittedProfile> &) {
   return {ReloadState::failed, std::move(error)};
 }
 
+bool daemon_retry_supported() noexcept { return false; }
+
+DaemonCommandResult request_visual_retry() {
+  return {DaemonCommandState::unsupported, "LayerD on Linux has no retry command."};
+}
+
+DaemonCommandResult request_automation_retry(const std::filesystem::path &,
+                                             std::string_view) {
+  return request_visual_retry();
+}
+
 void shutdown_daemon_link() noexcept {}
 
 } // namespace layerc::editor

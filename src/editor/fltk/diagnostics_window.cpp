@@ -14,7 +14,11 @@
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/fl_draw.H>
 
+#include <FL/Fl_Round_Button.H>
+#include "layerc/core/json.hpp"
+
 #include <algorithm>
+#include <utility>
 
 namespace layerc::editor {
 namespace {
@@ -83,26 +87,40 @@ void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text) {
   window.size(window.w(), std::min(window.h() + needed - text.h(), limit));
 }
 
-DiagnosticsWindow::DiagnosticsWindow()
+DiagnosticsWindow::DiagnosticsWindow(std::function<DaemonStatus()> status,
+                                     std::function<DaemonCommandResult()> retry)
     : window_(std::make_unique<Fl_Double_Window>(diagnostics_width, diagnostics_height,
-                                                 "Runtime diagnostics — LayerE")) {
+                                                 "Runtime diagnostics — LayerE")),
+      status_(std::move(status)), retry_(std::move(retry)) {
   window_->begin();
-  text_ = new EditorField<Fl_Multiline_Output>(margin, margin, diagnostics_width - 2 * margin,
-      diagnostics_height - 3 * margin - button_height, "Runtime diagnostics");
-  text_->wrap(1);
+  mode_ = new Fl_Group(margin, margin, diagnostics_width - 2 * margin, editor_input_height);
+  summary_mode_ = new Fl_Round_Button(margin, margin, 110, editor_input_height, "&Summary");
+  raw_ = new Fl_Round_Button(margin + 120, margin, 110, editor_input_height, "Raw &JSON");
+  for (auto *button : {summary_mode_, raw_}) {
+    button->type(FL_RADIO_BUTTON);
+    button->callback(on_mode, this);
+  }
+  summary_mode_->setonly();
+  mode_->deactivate();
+  mode_->end();
+  const int top = mode_->y() + mode_->h() + margin;
+  text_ = new EditorField<Fl_Multiline_Output>(margin, top, diagnostics_width - 2 * margin,
+      diagnostics_height - top - 2 * margin - button_height, "Runtime diagnostics");
   text_->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE);
   text_->labeltype(FL_NO_LABEL);
-  text_->textfont(FL_COURIER);
   const int y = diagnostics_height - margin - button_height;
   auto *refresh_button = new Fl_Button(margin, y, 110, button_height, "&Refresh");
   refresh_button->callback(on_refresh, this);
-  auto *copy = new Fl_Button(margin + 120, y, 150, button_height, "&Copy raw JSON");
-  copy->callback(on_copy, this);
+  retry_button_ = new Fl_Button(margin + 120, y, 110, button_height, "Retry &visual");
+  retry_button_->callback(on_retry, this);
+  retry_button_->hide();
+  copy_ = new Fl_Button(retry_button_->x(), y, 150, button_height, "&Copy raw JSON");
+  copy_->callback(on_copy, this);
   auto *close = new Fl_Button(diagnostics_width - margin - 110, y, 110, button_height, "Close");
   primary_button(*close);
   close->callback(on_close, this);
   window_->resizable(text_);
-  window_->size_range(480, 320);
+  window_->size_range(530, 320);
   window_->end();
 }
 DiagnosticsWindow::~DiagnosticsWindow() = default;
@@ -114,22 +132,64 @@ void DiagnosticsWindow::show() {
 bool DiagnosticsWindow::shown() const { return window_->shown() != 0; }
 
 void DiagnosticsWindow::refresh() {
-  // The authenticated control socket proves the peer, so a reply is both
-  // connected and authenticated.
-  const auto status = query_daemon_status();
+  const auto status = status_();
   raw_json_ = status.payload_json;
   auto view = runtime_diagnostics_view(raw_json_, status.running, status.running, true);
   if (!status.running)
     view.lines.push_back(status.summary());
   else if (!status.error.empty())
     view.lines.push_back("Status problem: " + status.error);
-  text_->value(join(view).c_str());
-  fit_text_view(*window_, *text_);
+  if (!retry_outcome_.empty()) view.lines.push_back(retry_outcome_);
+  summary_ = join(view);
+  if (raw_json_.empty()) {
+    mode_->deactivate();
+    copy_->deactivate();
+  } else {
+    mode_->activate();
+    copy_->activate();
+  }
+  if (daemon_retry_supported() && status.running && view.retry_visual)
+    retry_button_->show();
+  else
+    retry_button_->hide();
+  copy_->position(retry_button_->x() + (retry_button_->visible() ? retry_button_->w() + margin : 0),
+                  copy_->y());
+  window_->init_sizes();
+  refresh_details();
+}
+
+void DiagnosticsWindow::refresh_details() {
+  const bool raw = raw_->value() && !raw_json_.empty();
+  text_->textfont(raw ? FL_COURIER : FL_HELVETICA);
+  text_->wrap(!raw);
+  if (raw) {
+    auto formatted = core::json::format(raw_json_);
+    std::erase(formatted, '\r');
+    text_->value(formatted.c_str());
+  } else {
+    text_->value(summary_.c_str());
+    fit_text_view(*window_, *text_);
+  }
   text_->redraw();
 }
 
 void DiagnosticsWindow::on_refresh(Fl_Widget *, void *data) {
-  static_cast<DiagnosticsWindow *>(data)->refresh();
+  auto &self = *static_cast<DiagnosticsWindow *>(data);
+  self.retry_outcome_.clear();
+  self.refresh();
+}
+
+void DiagnosticsWindow::on_retry(Fl_Widget *, void *data) {
+  auto &self = *static_cast<DiagnosticsWindow *>(data);
+  const auto result = self.retry_();
+  self.retry_outcome_ = (result.state == DaemonCommandState::acknowledged
+                             ? "Visual retry: " : "Visual retry failed: ") + result.text;
+  self.summary_mode_->setonly();
+  self.refresh();
+}
+
+void DiagnosticsWindow::on_mode(Fl_Widget *, void *data) {
+  static_cast<DiagnosticsWindow *>(data)->refresh_details();
 }
 void DiagnosticsWindow::on_copy(Fl_Widget *, void *data) {
   const auto &json = static_cast<DiagnosticsWindow *>(data)->raw_json_;

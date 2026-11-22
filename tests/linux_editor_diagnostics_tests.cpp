@@ -3,6 +3,7 @@
 #include "automation_editor.hpp"
 #include "automation_graph.hpp"
 #include "editor_app.hpp"
+#include "layerc/core/json.hpp"
 #include "editor_menus.hpp"
 #include "editor_tools.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -24,12 +25,12 @@ namespace editor = layerc::editor;
 #include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Output.H>
+#include <FL/Fl_Round_Button.H>
 
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <functional>
-#include <memory>
 #include <string>
 #include <string_view>
 
@@ -189,6 +190,146 @@ void linux_editor_pending_automation_status_contracts() {
                                                    document.profile()),
          "discarding the buffer restores the committed summary");
   editor::EditorAppTestAccess::window(app).hide();
+}
+
+void diagnostics_summary_raw_and_retry() {
+  Fixture fixture;
+  namespace runtime = layerc::runtime;
+  runtime::RuntimeDiagnostics diagnostics;
+  diagnostics.package_version = "test-build";
+  diagnostics.helpers.emplace_back().quarantined = true;
+  const auto snapshot = runtime::serialize_runtime_diagnostics_json(diagnostics);
+  editor::DaemonStatus status;
+  int queries{}, retries{};
+  editor::DaemonCommandResult result{editor::DaemonCommandState::acknowledged,
+                                     "visual runtime retry requested"};
+  editor::DiagnosticsWindow window([&] { ++queries; return status; },
+                                   [&] { ++retries; return result; });
+  window.show();
+  Fl_Window *dialog = Fl::first_window();
+  const bool shown = dialog && dialog->label() &&
+      std::string_view(dialog->label()) == "Runtime diagnostics — LayerE";
+  expect(shown, "show the diagnostics tool window");
+  if (!dialog || !shown) return;
+  auto *summary = find_typed<Fl_Round_Button>(*dialog, "&Summary");
+  auto *raw = find_typed<Fl_Round_Button>(*dialog, "Raw &JSON");
+  auto *details = find_typed<Fl_Multiline_Output>(*dialog, "Runtime diagnostics");
+  auto *retry = find_typed<Fl_Button>(*dialog, "Retry &visual");
+  expect(summary && raw && details && retry, "find the single details box and its controls");
+  if (!summary || !raw || !details || !retry) return;
+  expect(summary->value() && !raw->active_r() && !summary->active_r() && !retry->visible(),
+         "without a snapshot Summary is selected and unavailable actions are disabled");
+  status.payload_json = snapshot;
+  window.refresh();
+  expect(!retry->visible(), "a quarantined snapshot without a running daemon cannot be retried");
+  status.running = true;
+  diagnostics.helpers.front().quarantined = false;
+  status.payload_json = runtime::serialize_runtime_diagnostics_json(diagnostics);
+  window.refresh();
+  expect(!retry->visible(), "a running daemon without quarantine cannot be retried");
+  status.payload_json = snapshot;
+  window.refresh();
+  const std::string summary_text(details->value());
+  expect(raw->active_r() && summary->active_r() && summary_text.find("Quarantined") != std::string::npos &&
+             static_cast<bool>(retry->visible()) == editor::daemon_retry_supported(),
+         "the review state and platform support govern retry visibility");
+  auto formatted = layerc::core::json::format(snapshot);
+  std::erase(formatted, '\r');
+  raw->setonly();
+  raw->do_callback();
+  expect(details->value() == formatted, "Raw JSON shows formatted text in the details box");
+  window.refresh();
+  expect(raw->value() && details->value() == formatted, "refresh preserves the details mode");
+  status.payload_json = "{invalid";
+  window.refresh();
+  expect(std::string_view(details->value()) == "{invalid", "invalid JSON is displayed verbatim");
+  status.payload_json = snapshot;
+  window.refresh();
+  summary->setonly();
+  summary->do_callback();
+  expect(details->value() == summary_text, "Summary restores the original details");
+  if (editor::daemon_retry_supported()) {
+    const int before = queries;
+    retry->do_callback();
+    expect(retries == 1 && queries == before + 1 &&
+               std::string_view(details->value()).ends_with("Visual retry: visual runtime retry requested"),
+           "retry refreshes and shows the acknowledgement");
+    result = {editor::DaemonCommandState::refused, "test refusal"};
+    retry->do_callback();
+    expect(retries == 2 && std::string_view(details->value()).ends_with("Visual retry failed: test refusal"),
+           "retry displays the refusal in the refreshed summary");
+  }
+}
+
+void automation_validate_json_is_a_dry_run() {
+  Fixture fixture;
+  fixture.store();
+  editor::EditorApp app;
+  show(app);
+  app.command(editor::EditorCommand::automation_page);
+  auto *group = editor::EditorAppTestAccess::automation(app)->group();
+  tab(app, group);
+  auto *retry = find_typed<Fl_Button>(*group, "Retry");
+  expect((retry != nullptr) == editor::daemon_retry_supported() && (!retry || !retry->active()),
+         "Retry exists only on a supported platform and requires a selected automation");
+  automation_control<Fl_Button>(app, "New automation").do_callback();
+  expect(!retry || retry->active(), "selecting an automation in a stored profile enables Retry");
+  auto &view = automation_control<Fl_Choice>(app, "Automation view");
+  view.value(2);
+  view.do_callback();
+  auto &json = automation_control<Fl_Multiline_Input>(app, "Advanced automation JSON");
+  auto &validation = automation_control<Fl_Output>(app, "Automation validation");
+  auto &validate = automation_control<Fl_Button>(app, "Validate JSON");
+  const auto original = app.session.document().automation();
+  auto edited = original;
+  expect(edited && !edited->automations.empty(), "seed one automation for the dry run");
+  if (!edited || edited->automations.empty()) return;
+  edited->automations.front().name = "Validated, not applied";
+  auto text = editor::automation_graph_json(edited);
+  std::erase(text, '\r');
+  const auto generation = app.session.edit_generation();
+  const bool undo = app.session.can_undo(), redo = app.session.can_redo();
+  json.value(text.c_str());
+  json.do_callback();
+  validate.do_callback();
+  expect(std::string_view(validation.value()) == "Valid - ready to apply" &&
+             app.session.document().automation() == original &&
+             generation == app.session.edit_generation() &&
+             undo == app.session.can_undo() && redo == app.session.can_redo(),
+         "a valid dry run does not change document or history");
+  automation_control<Fl_Button>(app, "Validate / Apply JSON").do_callback();
+  expect(app.session.document().automation() == edited, "Validate leaves the buffer pending for Apply");
+  constexpr auto invalid = "{\n  \"schemaVersion\": x\n}";
+  json.value(invalid);
+  json.do_callback();
+  validate.do_callback();
+  const auto parsed = layerc::core::parse_automation_profile_json(invalid, app.session.document().profile());
+  const auto *error = std::get_if<layerc::core::AutomationError>(&parsed);
+  expect(error != nullptr, "the fixture has a JSON parse error");
+  if (!error) return;
+  const auto location = editor::locate_json_error(invalid, *error);
+  expect(location.begin && location.end, "the parse error has a precise span");
+  if (!location.begin || !location.end) return;
+  const auto begin = static_cast<int>(*location.begin), end = static_cast<int>(*location.end);
+  const auto selected = [&] { return json.mark() == begin && json.insert_position() == end; };
+  expect(std::string(validation.value()) == "Pending JSON is invalid and not applied: " + location.message &&
+             selected() && app.session.document().automation() == edited,
+         "an invalid dry run selects the located error without applying");
+  json.insert_position(0);
+  const int old_key = Fl::e_keysym;
+  Fl::e_keysym = FL_Enter;
+  const bool focused = validation.take_focus() != 0;
+  const bool handled = validation.handle(FL_KEYDOWN) != 0;
+  Fl::e_keysym = old_key;
+  expect(focused && handled && selected(), "Enter on validation restores the error selection");
+  using enum editor::DaemonCommandState;
+  expect(editor::automation_retry_report({acknowledged, "wire text"}) ==
+             std::pair{editor::StatusKind::success, std::string("Automation retry requested.")} &&
+             editor::automation_retry_report({refused, "refused"}) ==
+             std::pair{editor::StatusKind::failure, std::string("Automation retry failed: refused")} &&
+             editor::automation_retry_report({daemon_unavailable, "offline"}) ==
+             std::pair{editor::StatusKind::failure, std::string("Automation retry failed: offline")},
+         "the retry status mapping preserves LayerD failure details");
 }
 
 void linux_editor_semantic_row_extents() {

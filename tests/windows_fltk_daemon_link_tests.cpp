@@ -1,6 +1,7 @@
 #include "platform/win32/daemon_hub.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 #include "layerc/runtime/runtime_services.hpp"
 #include "test_support.hpp"
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -176,6 +178,10 @@ public:
     return edit_packets_;
   }
 
+  [[nodiscard]] std::vector<core::LiveMessage> retry_packets() {
+    std::lock_guard lock(mutex_);
+    return retry_packets_;
+  }
   [[nodiscard]] bool wait_for_edit_packets(core::LiveMessageType type, std::size_t count,
                                            std::chrono::milliseconds timeout) {
     std::unique_lock lock(mutex_);
@@ -247,6 +253,20 @@ private:
               "trace unsubscribed");
       return;
     }
+    if (message.type == core::LiveMessageType::retry_visual ||
+        message.type == core::LiveMessageType::retry_automation) {
+      {
+        std::lock_guard lock(mutex_);
+        retry_packets_.push_back(message);
+      }
+      if (mode_ == ReplyMode::error)
+        reply(channel, message, core::LiveMessageType::error, "test retry refused");
+      else if (mode_ != ReplyMode::silent)
+        reply(channel, message, core::LiveMessageType::acknowledgement,
+              message.type == core::LiveMessageType::retry_visual
+                  ? "visual runtime retry requested" : "automation retry requested");
+      return;
+    }
     if (message.edit_session != 0) {
       {
         std::lock_guard lock(mutex_);
@@ -274,7 +294,7 @@ private:
   }
 
   void serve() {
-    platform::NamedPipeEditorDaemonChannel channel(
+    auto channel = std::make_unique<platform::NamedPipeEditorDaemonChannel>(
         platform::NamedPipeEditorDaemonChannel::Role::server, pipe_name_,
         expected_client_pid_);
     const bool pipe_ready = WaitNamedPipeW(pipe_name_.c_str(), 1000) != FALSE;
@@ -294,19 +314,19 @@ private:
         disconnect = std::exchange(disconnect_requested_, false);
         trace_packets.swap(pending_trace_packets_);
       }
-      const bool was_connected = channel.connected();
-      if (disconnect) channel.disconnect_peer();
+      const bool was_connected = channel->connected();
+      if (disconnect) channel->disconnect_peer();
       for (auto &packet : trace_packets) {
         core::LiveMessage message;
         message.type = core::LiveMessageType::automation_trace_event;
         message.text = std::move(packet);
-        (void)channel.send(message);
+        (void)channel->send(message);
       }
-      for (const auto &result : channel.poll()) {
+      for (const auto &result : channel->poll()) {
         if (const auto *message = std::get_if<core::LiveMessage>(&result))
-          handle(channel, *message);
+          handle(*channel, *message);
       }
-      if (was_connected && !channel.connected()) {
+      if (was_connected && !channel->connected()) {
         {
           std::lock_guard lock(mutex_);
           disconnected_ = true;
@@ -317,7 +337,7 @@ private:
       std::array<HANDLE, 5> handles{};
       handles[0] = stop_event_;
       handles[1] = work_event_;
-      const auto pipe_count = channel.wait_handles(
+      const auto pipe_count = channel->wait_handles(
           std::span<HANDLE>(handles).subspan(2));
       const DWORD count = static_cast<DWORD>(pipe_count + 2U);
       const DWORD waited =
@@ -327,6 +347,7 @@ private:
   }
 
   std::wstring pipe_name_;
+  std::vector<core::LiveMessage> retry_packets_;
   ReplyMode mode_;
   DWORD expected_client_pid_{};
   HANDLE stop_event_{};
@@ -993,9 +1014,45 @@ void editor_image_allowlist_is_exact() {
                        "the editor trust allowlist accepts only both editor images");
 }
 
+void hub_retry_visual_and_automation_replies() {
+  using enum editor::DaemonCommandState;
+  using layerc::test::expect;
+  layerc::test::TempDirectory temporary("layerc-retry");
+  const auto profile = make_committed_profile(temporary);
+  if (!expect(profile.has_value(), "create a private retry profile")) return;
+  std::atomic<unsigned> starts{}, signals{};
+  for (const auto mode : {ReplyMode::acknowledge, ReplyMode::error}) {
+    FakeLayerD server(mode);
+    if (!expect(server.start(), "start the private retry fixture")) return;
+    editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+    const bool accepts = mode == ReplyMode::acknowledge;
+    const auto visual = hub.retry_visual();
+    const auto automation = hub.retry_automation(profile->path, "test-automation");
+    expect(visual.state == (accepts ? acknowledged : refused) &&
+               visual.text == (accepts ? "visual runtime retry requested" : "test retry refused"),
+           "visual retry preserves the correlated reply");
+    expect(automation.state == (accepts ? acknowledged : refused) &&
+               automation.text == (accepts ? "automation retry requested" : "test retry refused"),
+           "automation retry preserves the correlated reply");
+    const auto packets = server.retry_packets();
+    expect(packets.size() == 2 &&
+               packets[0].type == core::LiveMessageType::retry_visual &&
+               packets[1].type == core::LiveMessageType::retry_automation &&
+               packets[1].profile_key == platform::canonical_profile_key(profile->path) &&
+               packets[1].text == "test-automation" && server.handshakes() == 1,
+           "retries share the authenticated pipe and send the canonical automation identity");
+  }
+  editor::DaemonHub absent(make_environment(private_pipe_name(), starts, signals));
+  expect(absent.retry_visual().state == daemon_unavailable &&
+             absent.retry_automation(profile->path, "test-automation").state == daemon_unavailable &&
+             starts == 0 && signals == 0,
+         "retry never launches or signals LayerD when its private pipe is absent");
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(
+     LAYERC_TEST_CASE(hub_retry_visual_and_automation_replies),
     LAYERC_TEST_CASE(lazy_worker_and_absent_status),
     LAYERC_TEST_CASE(absent_reload_starts_once_without_claiming_success),
     LAYERC_TEST_CASE(acknowledgement_confirms_committed_reload),

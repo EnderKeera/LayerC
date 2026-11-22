@@ -24,6 +24,10 @@ constexpr auto minimum_connect_wait = std::chrono::milliseconds(25);
 constexpr auto caller_backstop_grace = std::chrono::milliseconds(500);
 
 std::string win32_reason(DWORD error);
+bool is_retry(const Request &request) noexcept {
+  return request.kind == Request::Kind::retry_visual ||
+         request.kind == Request::Kind::retry_automation;
+}
 bool is_trace(const Request &request) noexcept {
   return request.kind == Request::Kind::trace_subscribe ||
          request.kind == Request::Kind::trace_unsubscribe;
@@ -105,6 +109,16 @@ void finish_reload(const std::shared_ptr<DaemonHub::State> &state,
   request->ready.notify_all();
 }
 
+void finish_retry(const std::shared_ptr<DaemonHub::State> &state,
+                  const std::shared_ptr<Request> &request,
+                  DaemonCommandResult result) {
+  std::lock_guard lock(state->mutex);
+  if (request->completed) return;
+  request->retry_result = std::move(result);
+  request->completed = true;
+  request->ready.notify_all();
+}
+
 void finish_trace(const std::shared_ptr<DaemonHub::State> &state,
                   const std::shared_ptr<Request> &request,
                   std::optional<std::string> failure) {
@@ -181,6 +195,10 @@ void fail_unreachable(const std::shared_ptr<DaemonHub::State> &state,
     finish_status(state, request, disconnected_status(std::move(reason)));
     return;
   }
+  if (is_retry(*request)) {
+    finish_retry(state, request, {DaemonCommandState::daemon_unavailable, std::move(reason)});
+    return;
+  }
   (void)call_service(environment.signal_reload);
   finish_reload(state, request,
                 {ReloadState::failed,
@@ -198,7 +216,10 @@ void fail_closed(const std::shared_ptr<DaemonHub::State> &state,
     finish_status(state, request, disconnected_status(std::move(reason)));
     return;
   }
-  finish_reload(state, request, {ReloadState::failed, std::move(reason)});
+  if (is_retry(*request))
+    finish_retry(state, request, {DaemonCommandState::daemon_unavailable, std::move(reason)});
+  else
+    finish_reload(state, request, {ReloadState::failed, std::move(reason)});
 }
 
 void fail_timeout(const std::shared_ptr<DaemonHub::State> &state,
@@ -217,21 +238,27 @@ void fail_timeout(const std::shared_ptr<DaemonHub::State> &state,
     finish_status(state, request, std::move(status));
     return;
   }
-  finish_reload(state, request,
-                {ReloadState::failed,
-                 "LayerD did not confirm the profile reload before the deadline."});
+  if (is_retry(*request))
+    finish_retry(state, request, {DaemonCommandState::daemon_unavailable,
+                 "LayerD did not answer the retry request before the deadline."});
+  else
+    finish_reload(state, request,
+                  {ReloadState::failed,
+                   "LayerD did not confirm the profile reload before the deadline."});
+}
+
+void set_unavailable_result(Request &request, std::string reason) {
+  if (request.kind == Request::Kind::status)
+    request.status_result.error = std::move(reason);
+  else if (is_retry(request))
+    request.retry_result = {DaemonCommandState::daemon_unavailable, std::move(reason)};
+  else if (!is_trace(request))
+    request.reload_result = {ReloadState::failed, std::move(reason)};
 }
 
 void fail_shutdown_locked(const std::shared_ptr<Request> &request) {
   if (request->completed) return;
-  if (is_trace(*request)) {
-    // Nothing waits for it; shutdown ends the subscription with the pipe.
-  } else if (request->kind == Request::Kind::status) {
-    request->status_result.error = "The LayerD link was shut down.";
-  } else {
-    request->reload_result = {ReloadState::failed,
-                              "The LayerD link was shut down."};
-  }
+  set_unavailable_result(*request, "The LayerD link was shut down.");
   request->completed = true;
   request->ready.notify_all();
 }
@@ -260,6 +287,10 @@ void handle_absent(const std::shared_ptr<DaemonHub::State> &state,
     DaemonStatus status;
     status.socket_missing = true;
     finish_status(state, request, std::move(status));
+    return;
+  }
+  if (is_retry(*request)) {
+    finish_retry(state, request, {DaemonCommandState::daemon_unavailable, "LayerD is not running."});
     return;
   }
   const bool started = call_service(environment.start_daemon);
@@ -341,6 +372,15 @@ bool handle_reply(const std::shared_ptr<DaemonHub::State> &state,
       return true;
     }
     return false;
+  }
+  if (is_retry(*request)) {
+    if (message.type != LiveMessageType::acknowledgement &&
+        message.type != LiveMessageType::error) return false;
+    finish_retry(state, request,
+                 {message.type == LiveMessageType::acknowledgement
+                      ? DaemonCommandState::acknowledged : DaemonCommandState::refused,
+                  message.text});
+    return true;
   }
   if (message.type == LiveMessageType::acknowledgement) {
     finish_reload(state, request, {ReloadState::acknowledged, {}});
@@ -638,7 +678,9 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         sent = session->send_authenticated(LiveMessage{
             .type = request->kind == Request::Kind::trace_subscribe
                         ? LiveMessageType::automation_trace_subscribe
-                        : LiveMessageType::automation_trace_unsubscribe});
+                         : LiveMessageType::automation_trace_unsubscribe});
+      } else if (is_retry(*request)) {
+        sent = session->send_authenticated(std::move(request->retry_message));
       } else {
         const auto &committed = *request->committed;
         const auto key = layerc::platform::canonical_profile_key(committed.path);
@@ -717,20 +759,18 @@ void run_worker(const std::shared_ptr<DaemonHub::State> &state,
 std::shared_ptr<Request> submit_request(
     const std::shared_ptr<DaemonHub::State> &state,
     const DaemonHubEnvironment &environment, const Request::Kind kind,
-    std::optional<CommittedProfile> committed = std::nullopt) {
+    std::optional<CommittedProfile> committed = std::nullopt,
+    LiveMessage retry_message = {}) {
   const auto timeout = std::max(environment.reply_timeout,
                                 std::chrono::milliseconds::zero());
   auto request = std::make_shared<Request>(kind, std::move(committed),
                                            Clock::now() + timeout);
+  request->retry_message = std::move(retry_message);
   {
     std::lock_guard lifecycle_lock(state->lifecycle_mutex);
     std::unique_lock state_lock(state->mutex);
     if (state->stopping) {
-      if (kind == Request::Kind::status)
-        request->status_result.error = "The LayerD link was shut down.";
-      else
-        request->reload_result = {ReloadState::failed,
-                                  "The LayerD link was shut down."};
+      set_unavailable_result(*request, "The LayerD link was shut down.");
       request->completed = true;
       return request;
     }
@@ -738,10 +778,7 @@ std::shared_ptr<Request> submit_request(
       const auto &reason = !state->initialization_error.empty()
                                ? state->initialization_error
                                : state->worker_error;
-      if (kind == Request::Kind::status)
-        request->status_result.error = reason;
-      else
-        request->reload_result = {ReloadState::failed, reason};
+      set_unavailable_result(*request, reason);
       request->completed = true;
       return request;
     }
@@ -755,11 +792,7 @@ std::shared_ptr<Request> submit_request(
               run_worker(worker_state, worker_environment);
             });
       } catch (...) {
-        if (kind == Request::Kind::status)
-          request->status_result.error = "The LayerD link worker could not start.";
-        else
-          request->reload_result = {ReloadState::failed,
-                                    "The LayerD link worker could not start."};
+        set_unavailable_result(*request, "The LayerD link worker could not start.");
         request->completed = true;
         return request;
       }
@@ -771,11 +804,7 @@ std::shared_ptr<Request> submit_request(
     std::lock_guard lock(state->mutex);
     if (!request->completed) {
       request->completed = true;
-      if (kind == Request::Kind::status)
-        request->status_result.error = "The LayerD link wake event failed.";
-      else
-        request->reload_result = {ReloadState::failed,
-                                  "The LayerD link wake event failed."};
+      set_unavailable_result(*request, "The LayerD link wake event failed.");
       request->ready.notify_all();
     }
     return request;
@@ -791,10 +820,11 @@ std::shared_ptr<Request> submit_request(
           ? "LayerD did not answer the status request before the deadline."
           : "LayerD did not authenticate the live pipe before the deadline.";
     } else {
-      request->reload_result = {ReloadState::failed,
-                                request->request_sent.load()
-                                    ? "LayerD did not confirm the profile reload before the deadline."
-                                    : "LayerD did not authenticate the live pipe before the deadline."};
+      set_unavailable_result(*request, !request->request_sent.load()
+          ? "LayerD did not authenticate the live pipe before the deadline."
+          : is_retry(*request)
+              ? "LayerD did not answer the retry request before the deadline."
+              : "LayerD did not confirm the profile reload before the deadline.");
     }
     request->ready.notify_all();
     lock.unlock();
@@ -873,6 +903,33 @@ ReloadResult DaemonHub::reload(
   const auto request = submit_request(state_, environment_, Request::Kind::reload,
                                       committed);
   return request->reload_result;
+}
+
+bool daemon_retry_supported() noexcept { return true; }
+
+DaemonCommandResult request_visual_retry() {
+  return product_daemon_hub().retry_visual();
+}
+
+DaemonCommandResult request_automation_retry(const std::filesystem::path &profile,
+                                             const std::string_view automation_id) {
+  return product_daemon_hub().retry_automation(profile, automation_id);
+}
+
+DaemonCommandResult DaemonHub::retry_visual() {
+  return submit_request(state_, environment_, Request::Kind::retry_visual,
+                        std::nullopt, {.type = LiveMessageType::retry_visual})->retry_result;
+}
+
+DaemonCommandResult DaemonHub::retry_automation(
+    const std::filesystem::path &profile, const std::string_view automation_id) {
+  auto key = layerc::platform::canonical_profile_key(profile);
+  if (key.empty())
+    return {DaemonCommandState::refused, "The profile path could not be canonicalized."};
+  return submit_request(state_, environment_, Request::Kind::retry_automation, std::nullopt,
+                        {.type = LiveMessageType::retry_automation,
+                         .profile_key = std::move(key), .text = std::string(automation_id)})
+      ->retry_result;
 }
 
 std::uint64_t DaemonHub::subscribe_trace() {

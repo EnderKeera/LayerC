@@ -1,4 +1,5 @@
 #include "automation_editor.hpp"
+#include "accessible_widgets.hpp"
 #include "automation_trace_client.hpp"
 #include <exception>
 #include "editor_app.hpp"
@@ -54,7 +55,28 @@ std::optional<std::filesystem::path> trace_destination(const bool save) {
   if (chooser.show() || !chooser.filename() || !*chooser.filename()) return std::nullopt;
   return std::filesystem::path(chooser.filename());
 }
+class ValidationOutput final : public EditorField<Fl_Output> {
+public:
+  using EditorField<Fl_Output>::EditorField;
+  std::function<bool()> jump;
+
+  int handle(const int event) override {
+    const bool click = event == FL_RELEASE && Fl::event_button() == FL_LEFT_MOUSE &&
+                       Fl::event_inside(this);
+    const bool enter = event == FL_KEYDOWN && Fl::focus() == this &&
+                       (Fl::event_key() == FL_Enter || Fl::event_key() == FL_KP_Enter);
+    if ((click || enter) && jump && jump()) return 1;
+    return EditorField<Fl_Output>::handle(event);
+  }
+};
 } // namespace
+
+std::pair<StatusKind, std::string>
+automation_retry_report(const DaemonCommandResult &result) {
+  if (result.state == DaemonCommandState::acknowledged)
+    return {StatusKind::success, "Automation retry requested."};
+  return {StatusKind::failure, "Automation retry failed: " + result.text};
+}
 
 struct LinuxAutomationEditor::Impl {
   enum class Pending { none, basic, json };
@@ -66,10 +88,12 @@ struct LinuxAutomationEditor::Impl {
   Fl_Input *sim_source{}, *sim_fields{}, *breakpoint{}, *assertions{};
   Fl_Check_Button *enabled{}, *repeating{}, *trace_enabled{};
   Fl_Multiline_Input *json{};
-  Fl_Output *validation{};
+  ValidationOutput *validation{};
+  JsonErrorLocation last_json_error;
   Fl_Multiline_Output *state{}, *trace_state{};
   Fl_Scroll *state_scroll{};
   Fl_Button *create{}, *remove{}, *add{}, *erase{}, *apply{}, *json_apply{};
+  Fl_Button *json_validate{}, *retry{};
   Fl_Button *reset{}, *step{}, *play{}, *event_add{}, *load_trace{}, *save_trace{}, *trace_replay{};
   AutomationSelection selection;
   std::vector<AutomationNodeRow> rows;
@@ -99,6 +123,10 @@ struct LinuxAutomationEditor::Impl {
     basic = new EditorScroll(270, 130, 775, 265);
     basic->begin();
     automations = browser(285, 165, 215, 200, "Automations");
+    if (daemon_retry_supported()) {
+      retry = button(285, 375, 110, "Retry");
+      accessibility::describe_with_tooltip(*retry, "Ask LayerD to retry this automation after a runtime fault.");
+    }
     name = input(520, 165, 325, "Automation name");
     enabled = check(860, 165, 170, "Automation enabled");
     palette = choice(520, 230, 325, "Node palette");
@@ -135,6 +163,7 @@ struct LinuxAutomationEditor::Impl {
     json->when(FL_WHEN_CHANGED);
     bind(*json);
     json_apply = button(285, 365, 220, "Validate / Apply JSON");
+    json_validate = button(515, 365, 150, "Validate JSON");
     advanced->end();
 
     simulation = new Fl_Group(270, 130, 775, 335);
@@ -177,8 +206,9 @@ struct LinuxAutomationEditor::Impl {
     page->begin();
     load_trace = button(285, 415, 160, "Load trace...");
     save_trace = button(460, 415, 160, "Save trace...");
-    validation = new EditorField<Fl_Output>(645, 415, 385, editor_input_height, "Automation validation");
+    validation = new ValidationOutput(645, 415, 385, editor_input_height, "Automation validation");
     validation->align(FL_ALIGN_TOP_LEFT);
+    validation->jump = [this] { return select_json_error(); };
     page->end();
     show_view();
   }
@@ -281,13 +311,12 @@ struct LinuxAutomationEditor::Impl {
   // The validation box describes the pending buffer while one exists; refresh()
   // restores the committed summary when the buffer is applied or discarded.
   void show_pending_validation() {
+    last_json_error = {};
     if (pending == Pending::json) {
       const auto text = std::string(json->value());
       auto parsed = core::parse_automation_profile_json(text, app.session.document().profile());
       if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
-        validation->value(("Pending JSON is invalid and not applied: " +
-                           locate_json_error(text, *failure).message)
-                              .c_str());
+        show_json_error(text, *failure);
         return;
       }
       validation
@@ -300,6 +329,31 @@ struct LinuxAutomationEditor::Impl {
       return;
     }
     validation->value("Pending changes are not applied yet.");
+  }
+  void show_json_error(const std::string_view text, const core::AutomationError &failure) {
+    last_json_error = locate_json_error(text, failure);
+    validation->value(((pending != Pending::none ? "Pending JSON is invalid and not applied: "
+                                                 : "Invalid automation JSON: ") +
+                       last_json_error.message).c_str());
+  }
+  bool select_json_error() {
+    if (!last_json_error.begin || !last_json_error.end) return false;
+    const auto bound = static_cast<std::size_t>(json->size());
+    json->take_focus();
+    json->insert_position(static_cast<int>(std::min(*last_json_error.end, bound)),
+                          static_cast<int>(std::min(*last_json_error.begin, bound)));
+    return true;
+  }
+  void validate_json() {
+    const std::string_view text(json->value());
+    const auto parsed = core::parse_automation_profile_json(text, app.session.document().profile());
+    if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
+      show_json_error(text, *failure);
+      (void)select_json_error();
+    } else {
+      last_json_error = {};
+      validation->value("Valid - ready to apply");
+    }
   }
   void message(const StatusKind kind, const std::string &text,
                const StatusVoice voice = StatusVoice::announced) {
@@ -341,6 +395,8 @@ struct LinuxAutomationEditor::Impl {
     stop();
     if (pending != Pending::none) app.module_fields_changed(false);
     pending = Pending::none;
+    if (retry) retry->deactivate();
+    last_json_error = {};
     if (!app.session.has_document()) {
       stop_live();
       profile_id.clear();
@@ -389,6 +445,7 @@ struct LinuxAutomationEditor::Impl {
     } else {
       name->activate(); enabled->activate(); remove->activate(); add->activate();
     }
+    if (retry && selection.automation >= 0 && !document.path().empty()) retry->activate();
     if (selection.rule < 0) { properties->deactivate(); erase->deactivate(); }
     else { properties->activate(); erase->activate(); }
     if (selection.action < 0) action_fields->deactivate();
@@ -422,15 +479,9 @@ struct LinuxAutomationEditor::Impl {
       const auto source_text = std::string(json->value());
       auto parsed = core::parse_automation_profile_json(source_text, session.document().profile());
       if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
-        const auto location = locate_json_error(source_text, *failure);
-        show_pending_validation();
-        if (location.begin && location.end) {
-          const auto bound = static_cast<std::size_t>(std::numeric_limits<int>::max());
-          json->insert_position(static_cast<int>(std::min(*location.end, bound)),
-                         static_cast<int>(std::min(*location.begin, bound)));
-          json->take_focus();
-        }
-        return "Invalid automation JSON: " + location.message;
+        show_json_error(source_text, *failure);
+        (void)select_json_error();
+        return "Invalid automation JSON: " + last_json_error.message;
       }
       error = session.edit_automation([&](auto &graph) -> std::optional<std::string> {
         graph = std::move(std::get<core::AutomationProfile>(parsed));
@@ -455,6 +506,7 @@ struct LinuxAutomationEditor::Impl {
       });
     }
     if (error) {
+      last_json_error = {};
       validation->value(("Pending changes are not applied: " + *error).c_str());
       return "Not applied: " + *error;
     }
@@ -588,6 +640,17 @@ struct LinuxAutomationEditor::Impl {
         selection.action = rows[static_cast<std::size_t>(chosen)].action;
       }
       refresh(); return;
+    }
+    if (widget == json_validate) { validate_json(); return; }
+    if (widget == retry) {
+      const auto &document = app.session.document();
+      const auto &graph = document.automation();
+      if (!graph || document.path().empty() || selection.automation < 0 ||
+          static_cast<std::size_t>(selection.automation) >= graph->automations.size()) return;
+      const auto &id = graph->automations[static_cast<std::size_t>(selection.automation)].id;
+      const auto [kind, text] = automation_retry_report(request_automation_retry(document.path(), id));
+      message(kind, text);
+      return;
     }
     if (widget == apply || widget == json_apply) {
       if (const auto error = apply_pending()) message(StatusKind::failure, *error);

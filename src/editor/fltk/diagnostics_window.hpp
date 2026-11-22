@@ -1,11 +1,17 @@
 #pragma once
 
+#include "daemon_link.hpp"
+
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 
+class Fl_Button;
 class Fl_Double_Window;
+class Fl_Group;
 class Fl_Multiline_Output;
+class Fl_Round_Button;
 class Fl_Widget;
 class Fl_Window;
 
@@ -16,7 +22,8 @@ namespace layerc::editor {
 // comes from the shared runtime_diagnostics_view formatter.
 class DiagnosticsWindow final {
 public:
-  DiagnosticsWindow();
+  explicit DiagnosticsWindow(std::function<DaemonStatus()> status = query_daemon_status,
+                             std::function<DaemonCommandResult()> retry = request_visual_retry);
   ~DiagnosticsWindow();
   DiagnosticsWindow(const DiagnosticsWindow &) = delete;
   DiagnosticsWindow &operator=(const DiagnosticsWindow &) = delete;
@@ -27,11 +34,20 @@ public:
 
 private:
   static void on_refresh(Fl_Widget *, void *);
+  static void on_retry(Fl_Widget *, void *);
+  static void on_mode(Fl_Widget *, void *);
   static void on_copy(Fl_Widget *, void *);
   static void on_close(Fl_Widget *, void *);
+  void refresh_details();
+
   std::unique_ptr<Fl_Double_Window> window_;
+  Fl_Group *mode_{};
+  Fl_Round_Button *summary_mode_{}, *raw_{};
   Fl_Multiline_Output *text_{};
-  std::string raw_json_;
+  Fl_Button *retry_button_{}, *copy_{};
+  std::function<DaemonStatus()> status_;
+  std::function<DaemonCommandResult()> retry_;
+  std::string raw_json_, summary_, retry_outcome_;
 };
 
 // Modal read-only text with Close and, when copy_text is not empty, a
