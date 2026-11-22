@@ -129,7 +129,7 @@ The model has no expandable state or radio-group role: an adaptor reports expand
 
 ## 7. Phases
 
-Every phase ends on a green `ci.yml` for its exact commit, an agent review with no open high-severity finding (§9), and no change to the profile format. From phase 0 the Win32 frontend takes fixes only; design work lands in the FLTK frontend.
+Every phase ends on a green `ci.yml` for its exact commit, an agent review with no open high-severity finding (§9), and no change to the profile format. A phase lands as a series of reviewable slices on its working branch; each pushed slice gets its own `ci.yml` run so failures surface early, but only the green run for the phase's exact final commit closes the phase. From phase 0 the Win32 frontend takes fixes only; design work lands in the FLTK frontend.
 
 The approved execution order is **0 → 1 → 2 → 3 → 4 → 7 → 5 → 6**. Phase 7 includes completing missing backend prerequisites under [Wayland.md](Wayland.md), not just changing the editor's window backend. Inspect current code and gates first; reuse and verify prerequisites already implemented. No Wayland support claim is made before its own qualification requirements pass, and Gamescope remains unsupported.
 
@@ -139,7 +139,7 @@ The §9 accessibility gate applies from phase 0 on both platforms. Necessary Win
 | --- | --- | --- |
 | 0. Groundwork | Vendor FLTK 1.4.5 in `third_party/fltk` with `UPSTREAM.md` and a `THIRD_PARTY_NOTICES.md` entry, the way miniz is; its licence's exception allows static linking. Build it static, without OpenGL, as system headers so MSVC and MinGW stay warning-free. Move the Flatpak to 1.4.5. Rename `src/editor/linux` to `src/editor/fltk` and extract the platform services (§4) on Linux without behaviour change. Add a `layere_fltk` target on Windows that builds but doesn't ship, with the Windows accessibility implementation and client/tree tests needed for the full §9 gate. | Linux editor suites pass unchanged; `layere_fltk.exe` opens an empty window on `windows-2022`; both platforms' accessibility tree suites and all §9 gates pass. |
 | 1. Accessibility | Model split; the AT-SPI adaptor replaces ATK on Linux; the UI Automation adaptor on Windows; the CI tree tests (§5.4). Ubuntu 24.04's CI row turns the editor on. | AT-SPI assertions unchanged and passing on Debian 13 and Ubuntu 24.04; the Windows tree test covers fields' text ranges. |
-| 2. Windows parity | The Windows services (§4) and every row of the Windows feature matrix (§8) in `layere_fltk.exe`, on today's widgets. | The matrix is all *implemented* on Windows; Windows editor tests run against the FLTK build. |
+| 2. Windows parity | First the real editor startup on Windows (single instance, startup recovery), since every other row runs inside it; then the Windows services (§4) and every row of the Windows feature matrix (§8) in `layere_fltk.exe`, on today's widgets. | The matrix is all *implemented* on Windows; Windows editor tests run against the FLTK build. |
 | 3. LayerE kit | Painters, metrics, layout, menus, keyboard and contrast themes (§6); the design-system changes in §10, with the checker. | Each component renders from the kit on both platforms and matches its design-system preview in reviewed screenshots. |
 | 4. Screens | The main window (three slots, no tabs) and all 13 dialogs, on the kit, to [DesignSystem.md](DesignSystem.md) v2.1, both platforms together. FLTK's colour chooser goes. | The walkthrough passes on both platforms; Linux resource ceilings hold; the Linux-only items leave [Known deviations](DesignSystem.md#known-deviations-in-the-shipped-editor). |
 | 7. Wayland prerequisites and window | Before the preview, complete missing V2.7 backend prerequisites under [Wayland.md](Wayland.md), then stop forcing X11 in the editor; X11-only services use an XWayland connection when one exists and otherwise report themselves unavailable. | Applicable backend and editor gates, including failure, fallback and cleanup paths, pass; physical qualification gaps remain explicit and no support claim precedes the owning requirements. |
@@ -148,22 +148,22 @@ The §9 accessibility gate applies from phase 0 on both platforms. Necessary Win
 
 ## 8. Windows feature matrix
 
-Kept like the Linux matrix in [LinuxEditorPlan.md](LinuxEditorPlan.md): each Windows feature is *implemented*, *preserved but not editable*, *unavailable on this platform* or *deferred* in `layere_fltk.exe`. The starting rows, from the Win32 sources:
+Kept like the Linux matrix in [LinuxEditorPlan.md](LinuxEditorPlan.md): each Windows feature is *implemented*, *preserved but not editable*, *unavailable on this platform* or *deferred* in `layere_fltk.exe`. The starting rows, from the Win32 sources. The slice that implements a row records its status and Windows tests in the same commit, and the Phase 2 gate audits every row against the Win32 sources; a dash means not yet recorded.
 
-| Area | Feature | Win32 source | Needs |
-| --- | --- | --- | --- |
-| Profiles | List, new, duplicate, rename, turn on / off, delete, save, save as, open folder, game match, legacy upgrade | `editor_profiles`, `editor_shell` | Store service, `ShellExecuteW` |
-| Profiles | Detected tasks | `editor_tasks`, `window_discovery` | Tasks service |
-| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | FLTK frontend has the Windows focused capture adapter for physical scans, mouse input, and XInput edges; trial launcher integration remains pending |
-| Bindings | Generic HID capture | `editor_hid`, `hid_device` | FLTK frontend has a foreground Raw Input dialog with advanced system-device opt-in and a validated local slot assignment; trial launcher integration and physical device checks remain pending |
-| Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter |
-| Exchange | Import and export packs | `editor_packs` | File dialogs |
-| Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service |
-| Advanced | Automation, simulator, trace | `editor_automation*` | Shared editor tools; live trace uses the authenticated LayerD pipe on Windows |
-| Advanced | Visual triggers and calibration | `editor_visual`, `calibration_session` | Visual service |
-| Options | Visual recognition, overlay and editor capture exclusion, launcher updates, text size | `editor_dialog` (Options) | Capture exclusion, settings |
-| Appearance | Presets, roles, contrast checks | `editor_appearance`, `appearance_contrast` | Shared contrast code |
-| Interface | DPI changes, dark chrome, contrast themes, tooltips, shortcuts, screen readers | `native_theme`, `editor_shortcuts`, `accessible_text` | Kit (§6), UIA (§5.3) |
+| Area | Feature | Win32 source | Needs | Windows tests | Status |
+| --- | --- | --- | --- | --- | --- |
+| Profiles | List, new, duplicate, rename, turn on / off, delete, save, save as, open folder, game match, legacy upgrade | `editor_profiles`, `editor_shell` | Store service, `ShellExecuteW` | `layerc_windows_fltk_startup_tests` (startup, single instance, recovery) | — |
+| Profiles | Detected tasks | `editor_tasks`, `window_discovery` | Tasks service | — | — |
+| Cooldowns and bindings | Fields, groups, keyboard / mouse / gamepad capture | `editor_cooldowns`, `editor_dialog` | FLTK frontend has the Windows focused capture adapter for physical scans, mouse input, and XInput edges; trial launcher integration remains pending | `layerc_windows_fltk_binding_tests` | — |
+| Bindings | Generic HID capture | `editor_hid`, `hid_device` | FLTK frontend has a foreground Raw Input dialog with advanced system-device opt-in and a validated local slot assignment; trial launcher integration and physical device checks remain pending | `layerc_windows_fltk_binding_tests` | — |
+| Panels | Items, bars, colours, split grouped bars, preview, Position on window | `editor_items`, `editor_bars`, `editor_preview_render`, `editor_color_picker` | Shared preview painter | `layerc_editor_overlay_preview_tests`, `layerc_windows_fltk_position_tests`, `layerc_windows_fltk_on_window_tests` | — |
+| Exchange | Import and export packs | `editor_packs` | File dialogs | — | — |
+| Runtime | LayerD status, live drafts, autosave, diagnostics, clipboard | `editor_live_edit`, `live_edit_session`, `editor_diagnostics` | Daemon-link service | `layerc_windows_fltk_daemon_link_tests` | — |
+| Advanced | Automation, simulator, trace | `editor_automation*` | Shared editor tools; live trace uses the authenticated LayerD pipe on Windows | `layerc_windows_fltk_trace_relay_tests`, `layerc_windows_fltk_daemon_link_tests` | — |
+| Advanced | Visual triggers and calibration | `editor_visual`, `calibration_session` | Visual service | `layerc_windows_fltk_calibration_tests` | — |
+| Options | Visual recognition, overlay and editor capture exclusion, launcher updates, text size | `editor_dialog` (Options) | Capture exclusion, settings | `layerc_windows_fltk_settings_tests` | — |
+| Appearance | Presets, roles, contrast checks | `editor_appearance`, `appearance_contrast` | Shared contrast code | `layerc_windows_fltk_settings_tests` | — |
+| Interface | DPI changes, dark chrome, contrast themes, tooltips, shortcuts, screen readers | `native_theme`, `editor_shortcuts`, `accessible_text` | Kit (§6), UIA (§5.3) | `layerc_windows_fltk_settings_tests`, `layerc_windows_fltk_accessibility_tests`, `layerc_windows_fltk_text_tests`, `layerc_windows_fltk_patterns_tests` | — |
 
 ## 9. Evidence (D10)
 
