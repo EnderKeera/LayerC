@@ -22,7 +22,8 @@ EXPECTED = {
                              "renamed copy with the same cooldowns, which Delete then removes.",
     "split-grouped-bars": "A bar shared by two cooldowns splits into two single-cooldown bars "
                           "stacked around the shared anchor, autosaves, and undoes exactly; "
-                          "a profile without shared bars is reported unchanged.",
+                          "without a shared bar Tools > Split grouped bars is unavailable, "
+                          "as in the Windows editor, and the profile is unchanged.",
     "editor-appearance": "Without a saved appearance the editor paints Graphite / Copper; Tools > "
                          "Appearance previews a preset live, Apply persists it to "
                          "editor-appearance.json and repaints the editor, Cancel restores the "
@@ -122,10 +123,17 @@ class ToolsWalk:
         self.focus("LayerE", "split-focused")
         self.select_fixture("split-fixture")
         original = self.profile()[0]["json"]
-        self.menu_item("alt+t", 3, "split-none")
-        self.until(lambda n: "already independent" in self.status_text(n),
-                   "Split on independent bars did not report the unchanged profile")
-        require(self.profile()[0]["json"] == original, "an empty split changed the profile")
+        # As in the Windows editor, Split is unavailable until a bar is shared.
+        # Keyboard navigation skips inactive items, so read the exported state
+        # instead of walking to it.
+        self.key("alt+t", "split-none-menu")
+        item = self.until(lambda n: next(
+            (node for node in n if node["role"] == "menu item" and
+             node["name"].replace("&", "") == "Split grouped bars" and node.get("showing")), None),
+            "Tools did not show Split grouped bars")
+        require(not item["enabled"], "Split grouped bars is available without a shared bar")
+        self.key("Escape", "split-none-closed")
+        require(self.profile()[0]["json"] == original, "opening Tools changed the profile")
 
         # The ordered item editor deliberately authors typed panels, which
         # Split must preserve (IDs may be automation targets). Import a legacy
