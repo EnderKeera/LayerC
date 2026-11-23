@@ -1,8 +1,12 @@
 // F17 diagnostics: the panel-colours layout, the field-specific status text and
 // the pending-automation validation box the Linux editor reports.
+#include "accessible_widgets.hpp"
+#include "appearance_window.hpp"
 #include "automation_editor.hpp"
 #include "automation_graph.hpp"
 #include "editor_app.hpp"
+#include "editor_color.hpp"
+#include "editor_style.hpp"
 #include "layerc/core/json.hpp"
 #include "editor_menus.hpp"
 #include "editor_tools.hpp"
@@ -19,6 +23,7 @@ namespace editor = layerc::editor;
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Menu_Bar.H>
@@ -259,6 +264,81 @@ void diagnostics_summary_raw_and_retry() {
     expect(retries == 2 && std::string_view(details->value()).ends_with("Visual retry failed: test refusal"),
            "retry displays the refusal in the refreshed summary");
   }
+}
+
+void appearance_checks_diagnostics_both_modes() {
+  Fixture fixture;
+  editor::install_editor_style();
+  Fl_Double_Window root(300, 200, "Appearance fixture");
+  root.end();
+  editor::apply_editor_appearance({}, root);
+  root.show();
+  if (!expect(!editor::editor_style_contrast_palette(),
+              "the ordinary palette fixture is not a contrast theme")) return;
+
+  editor::DaemonStatus snapshot;
+  snapshot.running = true;
+  snapshot.payload_json = R"({"schemaVersion":1})";
+  editor::DiagnosticsWindow diagnostics([&] { return snapshot; });
+  diagnostics.show();
+  auto *window = Fl::first_window();
+  if (!expect(window && window != &root, "diagnostics is a separate, shown window")) return;
+  auto *details = find_typed<Fl_Multiline_Output>(*window, "Runtime diagnostics");
+  auto *raw = find_typed<Fl_Round_Button>(*window, "Raw &JSON");
+  auto *summary = find_typed<Fl_Round_Button>(*window, "&Summary");
+  if (!expect(details && raw && summary, "find the details field and both modes")) return;
+  const auto colors = [](const Fl_Multiline_Output &field) {
+    return std::pair{Fl::get_color(field.textcolor()) >> 8U, Fl::get_color(field.color()) >> 8U};
+  };
+  const auto original = colors(*details);
+  struct Drive {
+    std::function<void(Fl_Window &)> action;
+    bool delivered{};
+    static void run(void *data) {
+      auto &self = *static_cast<Drive *>(data);
+      if (auto *modal = Fl::modal()) {
+        self.delivered = true;
+        self.action(*modal);
+        modal->hide();
+      }
+    }
+  };
+  Drive drive{[&](Fl_Window &modal) {
+    auto *role = find_typed<Fl_Choice>(modal, "Role");
+    auto *fill = find_typed<Fl_Input>(modal, "Role fill");
+    auto *apply = find_typed<Fl_Button>(modal, "Apply");
+    if (!expect(role && fill && apply, "find the Appearance controls")) return;
+    role->value(static_cast<int>(editor::EditorRole::status));
+    role->do_callback();
+    fill->value("#444444");
+    fill->do_callback();
+    const auto [summary_ink, ground] = colors(*details);
+    expect(summary->value() && ground == 0x444444U &&
+               editor::rgb_contrast_ratio(summary_ink, ground) >= 4.5,
+           "live preview paints the modeless details field and its Summary pair is readable");
+    const auto warning = editor::accessibility::accessible_description(*fill);
+    expect(warning.starts_with("Status text: Text / Fill contrast is "),
+           "Appearance warns about Raw JSON with only Summary showing");
+    raw->setonly();
+    raw->do_callback();
+    const auto [verbose_ink, raw_ground] = colors(*details);
+    expect(details->textfont() == FL_COURIER && raw_ground == ground &&
+               verbose_ink == editor::current_editor_tokens().verbose &&
+               editor::rgb_contrast_ratio(verbose_ink, raw_ground) < 4.5,
+           "Raw JSON actually paints the failing pair without a theme change");
+    apply->do_callback();
+    expect(modal.shown() && Fl::focus() == fill &&
+               editor::accessibility::accessible_description(*fill) == warning,
+           "the auxiliary pair refuses Apply and focuses its edited fill");
+    summary->setonly();
+    summary->do_callback();
+    expect(colors(*details) == std::pair{summary_ink, ground}, "switching back restores Summary ink");
+  }};
+  Fl::add_timeout(0, Drive::run, &drive);
+  const auto choice = editor::edit_editor_appearance({}, root, nullptr, nullptr);
+  Fl::remove_timeout(Drive::run, &drive);
+  expect(drive.delivered && !choice && colors(*details) == original,
+         "Cancel restores the original Appearance on the auxiliary window");
 }
 
 void automation_validate_json_is_a_dry_run() {

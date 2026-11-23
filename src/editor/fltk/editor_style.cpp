@@ -222,9 +222,11 @@ bool is_primary_button(const Fl_Widget &widget) noexcept {
 
 void refresh_primary_button(Fl_Button &button) {
   const auto tokens = current_editor_tokens();
+  constexpr auto role = static_cast<std::size_t>(EditorRole::button);
+  const auto fill = style_appearance.overrides[role].fill.value_or(tokens.panel);
   button.color(fl_of(tokens.accent));
   button.selection_color(contrast_palette ? fl_of(tokens.accent)
-      : fl_color_average(fl_of(tokens.accent), fl_of(tokens.panel), 195.0F / 255.0F));
+      : fl_color_average(fl_of(tokens.accent), fl_of(fill), 195.0F / 255.0F));
   button.labelcolor(fl_of(tokens.on_accent));
   button.redraw();
 }

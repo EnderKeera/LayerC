@@ -96,6 +96,7 @@ struct RoleContrastFailure {
   // role's own fill (a painted pair below).
   std::optional<EditorRole> ground;
   SurfacePart ground_part{SurfacePart::fill};
+  bool primary_button{};
   bool operator==(const RoleContrastFailure &) const = default;
 };
 [[nodiscard]] std::optional<RoleContrastFailure>

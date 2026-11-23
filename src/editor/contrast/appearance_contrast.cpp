@@ -74,6 +74,21 @@ ContrastPairKind pair_kind(const ContrastPair pair) noexcept {
   return ContrastPairKind::text_fill;
 }
 
+// A System pair is changed only if its foreground or actual background is
+// authored. A retained border or hover override does not change Text / Fill.
+bool system_pair_changed(const std::uint32_t fields, const ContrastPair pair,
+                         const bool accent_overridden) {
+  using namespace layerc::platform;
+  switch (pair) {
+  case ContrastPair::disabled_fill: return (fields & (editor_disabled | editor_fill)) != 0;
+  case ContrastPair::text_hover: return (fields & (editor_text | editor_hover)) != 0;
+  case ContrastPair::text_selection:
+    return accent_overridden || (fields & (editor_text | editor_selection)) != 0;
+  case ContrastPair::text_fill: return (fields & (editor_text | editor_fill)) != 0;
+  }
+  return false;
+}
+
 std::wstring minimum_text(const double minimum) {
   std::array<wchar_t, 16> buffer{};
   if (minimum == std::floor(minimum))
@@ -126,11 +141,15 @@ std::uint32_t contrast_pair_field(const ContrastPair pair) noexcept {
 
 std::optional<ContrastFailure>
 first_contrast_failure(const layerc::platform::EditorAppearanceSettings &settings) {
+  using namespace layerc::platform;
+  const bool system = settings.theme == EditorTheme::system;
+  const bool accent_overridden = settings.accent != 0;
   for (std::size_t index = 0; index < settings.overrides.size(); ++index) {
     const auto role = static_cast<EditorControlRole>(index);
     const auto colors = role_colors(settings, role);
     for (const auto pair : contrast_pairs) {
-      if (!contrast_pair_applies(role, pair))
+      if (!contrast_pair_applies(role, pair) ||
+          (system && !system_pair_changed(settings.overrides[index].fields, pair, accent_overridden)))
         continue;
       const auto [foreground, background] = pair_colors(colors, pair);
       const double ratio = layerc::platform::contrast_ratio(foreground, background);
@@ -138,6 +157,23 @@ first_contrast_failure(const layerc::platform::EditorAppearanceSettings &setting
         return ContrastFailure{role, pair, ratio};
     }
   }
+
+  constexpr auto role = EditorControlRole::button;
+  const auto colors = role_colors(settings, role);
+  const auto fields = settings.overrides[static_cast<std::size_t>(role)].fields;
+  const auto check_primary = [&](const ContrastPair pair, const bool pressed, const bool hot)
+      -> std::optional<ContrastFailure> {
+    const double ratio = contrast_ratio(colors.on_accent, native_primary_button_fill(colors, pressed, hot));
+    if (ratio < contrast_minimum(pair))
+      return ContrastFailure{role, pair, ratio, true};
+    return std::nullopt;
+  };
+  if (!system || accent_overridden)
+    if (auto failure = check_primary(ContrastPair::text_fill, false, false)) return failure;
+  if (!system || accent_overridden || (fields & editor_text) != 0)
+    if (auto failure = check_primary(ContrastPair::text_hover, false, true)) return failure;
+  if (!system || accent_overridden || (fields & editor_fill) != 0)
+    return check_primary(ContrastPair::text_selection, true, false);
   return std::nullopt;
 }
 
@@ -158,7 +194,8 @@ std::wstring contrast_ratio_text(const double ratio) {
 std::wstring contrast_failure_text(const ContrastFailure &failure) {
   return layerc::platform::utf8_to_wide(contrast_refusal_text(
       layerc::platform::wide_to_utf8(appearance_role_label(failure.role)),
-      pair_kind(failure.pair), failure.ratio));
+      pair_kind(failure.pair), failure.ratio,
+      failure.primary_button ? primary_button_surface(pair_kind(failure.pair)) : std::string_view{}));
 }
 
 std::vector<ContrastTarget>

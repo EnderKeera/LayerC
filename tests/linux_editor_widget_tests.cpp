@@ -78,6 +78,7 @@ void tasks_pick_needs_capture_watch();
 void linux_editor_field_error_contracts();
 void linux_editor_pending_automation_status_contracts();
 void diagnostics_summary_raw_and_retry();
+void appearance_checks_diagnostics_both_modes();
 void automation_validate_json_is_a_dry_run();
 void linux_editor_calibration_layout_contracts();
 void linux_editor_black_accent_dialog_contracts();
@@ -1101,6 +1102,7 @@ int main() {
   LAYERC_TEST_CASE(linux_editor_field_error_contracts),
   LAYERC_TEST_CASE(linux_editor_pending_automation_status_contracts),
   LAYERC_TEST_CASE(diagnostics_summary_raw_and_retry),
+  LAYERC_TEST_CASE(appearance_checks_diagnostics_both_modes),
   LAYERC_TEST_CASE(save_as_shortcut_saves_separate_named_profile),
   LAYERC_TEST_CASE(open_profiles_folder_passes_private_store_to_launcher),
   LAYERC_TEST_CASE(choose_running_opens_detected_tasks),

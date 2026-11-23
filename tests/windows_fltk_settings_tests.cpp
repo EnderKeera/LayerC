@@ -1,5 +1,6 @@
 #include "accessible_widgets.hpp"
 #include "appearance_window.hpp"
+#include "editor_color.hpp"
 #include "editor_style.hpp"
 #include "linux_editor_test_access.hpp"
 #include "options_window.hpp"
@@ -98,7 +99,7 @@ void shared_appearance_record() {
     role.fill = 7;
     role.border = 1;
     role.hover = 2;
-    role.disabled = 3;
+    role.disabled = 0x808080U;
   }
   if (!expect(static_cast<bool>(platform::write_editor_appearance(native)), "seed Win32 appearance")) return;
   editor::EditorAppearance choice;
@@ -111,7 +112,7 @@ void shared_appearance_record() {
     const auto &role = saved.value->overrides[i];
     const auto preserved = platform::editor_border | platform::editor_hover | platform::editor_disabled;
     const auto fields = i == 0 ? preserved | platform::editor_selection : preserved;
-    expect(role.fields == fields && role.border == 1 && role.hover == 2 && role.disabled == 3,
+    expect(role.fields == fields && role.border == 1 && role.hover == 2 && role.disabled == 0x808080U,
            "Win32-only fields and values survive and stale FLTK fields are replaced");
   }
   expect(editor::load_platform_appearance().appearance == choice, "FLTK reads its saved choice");
@@ -729,6 +730,116 @@ void appearance_shared_record_floors() {
   editor::apply_editor_appearance({}, root);
 }
 
+void appearance_primary_button_and_system_floors() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  editor::install_editor_style();
+  Fl_Double_Window root(260, 160, "Appearance primary fixture");
+  root.end();
+  root.show();
+
+  const auto ratio = [](Fl_Color a, Fl_Color b) {
+    return editor::rgb_contrast_ratio(Fl::get_color(a) >> 8U, Fl::get_color(b) >> 8U);
+  };
+  bool delivered{};
+  const auto fixed = drive_appearance(root, [&](Fl_Window &modal) {
+    auto *accent = dynamic_cast<Fl_Input *>(child(modal, "Accent #RRGGBB"));
+    auto *apply = dynamic_cast<Fl_Button *>(child(modal, "Apply"));
+    if (!expect(accent && apply, "Appearance owns the accent field and primary Apply")) return;
+    accent->value("#888888");
+    accent->do_callback();
+    const auto [line, warning] = appearance_line(modal);
+    expect(ratio(apply->labelcolor(), apply->color()) < 4.5 && warning &&
+               line.find("on the primary button accent") != std::string::npos &&
+               editor::accessibility::accessible_description(*accent) == line,
+           "actual 3.54:1 primary ink triggers the visible and accessible refusal");
+    apply->do_callback();
+    expect(modal.shown() && Fl::focus() == accent &&
+               platform::read_editor_appearance().missing(),
+           "refusing an unreadable accent focuses its field and leaves the registry alone");
+    accent->value("#909090");
+    accent->do_callback();
+    const auto [pressed_line, pressed_warning] = appearance_line(modal);
+    expect(ratio(apply->labelcolor(), apply->color()) >= 4.5 &&
+               ratio(apply->labelcolor(), apply->selection_color()) < 4.5 &&
+               pressed_warning && pressed_line.find("primary button pressed fill") != std::string::npos,
+           "a readable idle color can still refuse the pressed button pair");
+    accent->value("");
+    accent->do_callback();
+    expect(appearance_line(modal).first.empty() &&
+               ratio(apply->labelcolor(), apply->color()) >= 4.5 &&
+               ratio(apply->labelcolor(), apply->selection_color()) >= 4.5 &&
+               ratio(fl_contrast(apply->labelcolor(), apply->selection_color()),
+                     apply->selection_color()) >= 4.5,
+           "the restored preset paints readable idle and both pressed inks");
+    apply->do_callback();
+  }, delivered);
+  expect(delivered && fixed == editor::EditorAppearance{}, "reset accent allows Apply");
+
+  // Every published preset passes the primary floors in both editors. System
+  // follows the Windows accent, which this fixture does not control.
+  bool presets_readable{};
+  (void)drive_appearance(root, [&](Fl_Window &modal) {
+    auto *theme = dynamic_cast<Fl_Choice *>(child(modal, "Theme"));
+    auto *apply = dynamic_cast<Fl_Button *>(child(modal, "Apply"));
+    auto *cancel = child(modal, "Cancel");
+    if (!expect(theme && apply && cancel, "Appearance owns Theme, Apply and Cancel")) return;
+    presets_readable = true;
+    for (int index = 0; index < static_cast<int>(editor::EditorTheme::count); ++index) {
+      theme->value(index);
+      theme->do_callback();
+      editor::EditorAppearance preset;
+      preset.theme = static_cast<editor::EditorTheme>(index);
+      const bool system_theme = preset.theme == editor::EditorTheme::system;
+      const auto pressed = apply->selection_color();
+      const bool readable =
+          appearance_line(modal).first.empty() && !editor::shared_appearance_failure(preset) &&
+          (system_theme || (ratio(apply->labelcolor(), apply->color()) >= 4.5 &&
+                            ratio(apply->labelcolor(), pressed) >= 4.5 &&
+                            ratio(fl_contrast(apply->labelcolor(), pressed), pressed) >= 4.5));
+      const std::string name = theme->text() ? theme->text() : "?";
+      presets_readable = expect(readable, (name + " clears the primary floors").c_str()) &&
+                         presets_readable;
+    }
+    cancel->do_callback();
+  }, delivered);
+  expect(delivered && presets_readable, "no published preset refuses its own primary Apply");
+
+  editor::EditorAppearance system;
+  system.theme = editor::EditorTheme::system;
+  expect(!editor::shared_appearance_failure(system), "untouched System colors never refuse");
+  system.accent = 0x888888U;
+  const auto native_accent = editor::shared_appearance_failure(system);
+  expect(native_accent && native_accent->primary_button &&
+             native_accent->pair == editor::ContrastPairKind::text_fill,
+         "an explicit System accent checks the same native primary pair");
+  system.accent.reset();
+  expect(!editor::save_platform_appearance(system), "save the untouched System palette");
+
+  constexpr auto buttons = static_cast<std::size_t>(editor::EditorRole::button);
+  platform::EditorAppearanceSettings later;
+  later.theme = platform::EditorTheme::system;
+  later.accent = 0xD88E4BU;
+  later.overrides.front().fields = platform::editor_border;
+  later.overrides[buttons].fields = platform::editor_hover;
+  later.overrides[buttons].hover = 0xF3F3F3U;
+  expect(static_cast<bool>(platform::write_editor_appearance(later)),
+         "a later registry record carries an unreadable Win32-only part");
+  const auto hover = editor::shared_appearance_failure(system);
+  expect(hover && hover->role == editor::EditorRole::button &&
+             hover->pair == editor::ContrastPairKind::text_hover && !hover->primary_button,
+         "a retained System hover checks its pair even with an unrelated border override");
+  const auto refused = editor::save_platform_appearance(system);
+  const auto kept = platform::read_editor_appearance();
+  expect(refused && refused->find("Buttons: Text / Hover contrast is 1.0:1") != std::string::npos &&
+             kept.value && kept.value->accent == later.accent &&
+             kept.value->overrides[buttons].hover == 0xF3F3F3U,
+         "persistence rechecks the merged record without replacing it on refusal");
+  editor::apply_editor_appearance({}, root);
+}
+
 void caption_decoration_and_pruning() {
   const SettingsFixture fixture;
   if (!expect(fixture.ready(), "isolate registry and profile store")) return;
@@ -884,6 +995,7 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
       LAYERC_TEST_CASE(appearance_contrast_theme_sets_floors_aside),
       LAYERC_TEST_CASE(appearance_shared_record_floors),
+      LAYERC_TEST_CASE(appearance_primary_button_and_system_floors),
       LAYERC_TEST_CASE(caption_decoration_and_pruning),
       LAYERC_TEST_CASE(dpi_changes_keep_text_scale),
       LAYERC_TEST_CASE(editor_tooltips_keys_and_menu),

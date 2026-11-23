@@ -1,4 +1,5 @@
 #include "diagnostics_window.hpp"
+#include "appearance_window.hpp"
 #include "editor_style.hpp"
 #include "daemon_link.hpp"
 #include "platform/product_text.hpp"
@@ -24,6 +25,11 @@ namespace layerc::editor {
 namespace {
 constexpr int diagnostics_width = 680, diagnostics_height = 480, margin = 10;
 constexpr int button_height = editor_button_height;
+
+class DiagnosticsOutput final : public EditorField<Fl_Multiline_Output> {
+public:
+  using EditorField<Fl_Multiline_Output>::EditorField;
+};
 
 // The window stretches its content; the action row stretches only its spacer.
 // Buttons are measured once and stay fixed-width and right-aligned on resize.
@@ -73,6 +79,10 @@ std::string join(const RuntimeDiagnosticsView &view) {
 }
 } // namespace
 
+bool has_diagnostics_text_modes(const Fl_Widget &widget) noexcept {
+  return dynamic_cast<const DiagnosticsOutput *>(&widget) != nullptr;
+}
+
 void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text) {
   fl_font(text.textfont(), text.textsize());
   // Fl_Input_ draws inside its box frame with a small text margin.
@@ -104,7 +114,7 @@ DiagnosticsWindow::DiagnosticsWindow(std::function<DaemonStatus()> status,
   mode_->deactivate();
   mode_->end();
   const int top = mode_->y() + mode_->h() + margin;
-  text_ = new EditorField<Fl_Multiline_Output>(margin, top, diagnostics_width - 2 * margin,
+  text_ = new DiagnosticsOutput(margin, top, diagnostics_width - 2 * margin,
       diagnostics_height - top - 2 * margin - button_height, "Runtime diagnostics");
   text_->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE);
   text_->labeltype(FL_NO_LABEL);
@@ -172,7 +182,7 @@ void DiagnosticsWindow::refresh_details() {
     text_->value(summary_.c_str());
     fit_text_view(*window_, *text_);
   }
-  text_->redraw();
+  apply_editor_window_appearance(*window_);
 }
 
 void DiagnosticsWindow::on_refresh(Fl_Widget *, void *data) {
@@ -223,6 +233,7 @@ void show_text_dialog(const char *title, const std::string &text, const std::str
   dialog.minimum(static_cast<int>(fl_width("LayerE — Runtime diagnostics")) + 2 * margin,
                    8 * fl_height());
   fit_text_view(dialog, *output);
+  apply_editor_window_appearance(dialog);
   dialog.set_modal();
   dialog.show();
   close->take_focus();
@@ -278,6 +289,7 @@ void show_shortcuts_dialog(const std::string_view rows) {
   primary_button(*close);
   close->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
   dialog.minimum(keys + descriptions, 6 * (fl_height() + 4));
+  apply_editor_window_appearance(dialog);
   dialog.set_modal();
   dialog.show();
   close->take_focus();

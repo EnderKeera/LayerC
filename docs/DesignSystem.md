@@ -234,8 +234,14 @@ own fill when its control draws one, otherwise on the surface beneath (a
 label or check box on the window, a tab label on its tab), and names that
 surface: "Labels: Text / Fill contrast is 1.3:1 on the Window fill; at least
 4.5:1 is required." On Windows it also checks the record it shares with the
-Win32 editor, including the border, hover and disabled colors it keeps but
-cannot edit. The refusal never comes as a surprise:
+Win32 editor, including the hover and disabled colors it keeps but cannot
+edit; border contrast remains advisory. It checks that merged record again
+before writing. Primary actions must also clear 4.5:1 on the accent and
+their painted hover and pressed fills. This uses each painter's actual ink,
+so a custom accent can be refused without changing the preset token rule.
+Appearance checks open tool windows and both Diagnostics text modes. In
+System, an untouched desktop pair never refuses, but each pair that uses an
+overridden color is checked. The refusal never comes as a surprise:
 
 - **While picking,** Choose color shows one line under its preview with the
   pair nearest its minimum (the lowest ratio over minimum among the colors

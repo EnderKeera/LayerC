@@ -21,12 +21,16 @@ void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root
                              const Fl_Widget *sidebar = nullptr,
                              const Fl_Widget *preview = nullptr);
 
-// The text pairs FLTK paints below `root` (layer55 F-01), walked like the
+// Styles a newly shown auxiliary window without changing the desktop palette.
+void apply_editor_window_appearance(Fl_Window &window);
+
+// The text pairs FLTK paints below `root`, walked like the
 // theme application, hidden pages included and each pair once: a widget's
 // text on its own fill when its box paints, else on the nearest painted
 // surface beneath; outside labels in the Labels text on their parent; tab
 // labels on the selected tab and, with a `preset`, on the Buttons fill of
-// the others. Primary buttons and the preview's contents are left out.
+// the others. Primary buttons have a separate accent-pair check; preview
+// contents use the profile palette.
 [[nodiscard]] std::vector<PaintedTextPair> painted_text_pairs(Fl_Widget &root,
                                                               const Fl_Widget *sidebar,
                                                               const Fl_Widget *preview,

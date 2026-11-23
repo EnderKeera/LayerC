@@ -343,26 +343,28 @@ void EditorWindow::refresh_appearance_controls(const HWND window) {
   // The line under the role list warns in the refusal's own words before
   // Apply or OK refuses (DesignSystem.md, Roles).
   const HWND line = GetDlgItem(window, IDC_APPEARANCE_CONTRAST);
-  if (const auto failure =
-          first_contrast_failure(appearance_editor_.draft().staged()))
-    set_status_line(line, layerc::platform::StatusGlyph::warning,
-                    contrast_failure_text(*failure));
-  else if (colors(layerc::platform::EditorControlRole::window).high_contrast)
+  const bool contrast = layerc::platform::native_high_contrast();
+  const auto failure = contrast ? std::nullopt
+      : first_contrast_failure(appearance_editor_.draft().staged());
+  if (contrast)
     set_status_line(line, layerc::platform::StatusGlyph::accent_2,
                     L"A contrast theme is on, so Windows colors are in use.");
+  else if (failure)
+    set_status_line(line, layerc::platform::StatusGlyph::warning,
+                    contrast_failure_text(*failure));
   else
     set_status_line(line, std::nullopt, {});
   // Each color button says the color it paints, which is otherwise only
   // drawn; the contrast line belongs to them and to the role list
   // (DesignSystem.md, Screen readers).
-  const std::wstring contrast = window_text(line);
+  const std::wstring description = window_text(line);
   for (const auto &entry : appearance_fields) {
     const HWND button = GetDlgItem(window, entry.control);
     if (const auto color = appearance_color(window, entry.field))
       set_color_button_name(button, color_hex(native_rgb_value(*color)));
-    set_accessible_description(button, contrast);
+    set_accessible_description(button, description);
   }
-  set_accessible_description(GetDlgItem(window, IDC_APPEARANCE_TREE), contrast);
+  set_accessible_description(GetDlgItem(window, IDC_APPEARANCE_TREE), description);
   RedrawWindow(window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
@@ -403,6 +405,7 @@ void EditorWindow::reset_appearance(const HWND window) {
 void EditorWindow::reset_all_appearance(const HWND window) {
   auto &appearance = appearance_editor_.draft().staged();
   appearance.theme = layerc::platform::EditorTheme::copper;
+  appearance.accent = 0;
   for (auto &overrides : appearance.overrides)
     overrides = {};
   select_appearance_preset(window, appearance.theme);
@@ -412,7 +415,9 @@ void EditorWindow::reset_all_appearance(const HWND window) {
 
 bool EditorWindow::apply_appearance(const HWND window) {
   const auto &appearance = appearance_editor_.draft().staged();
-  if (const auto failure = first_contrast_failure(appearance)) {
+  const auto failure = layerc::platform::native_high_contrast() ? std::nullopt
+      : first_contrast_failure(appearance);
+  if (failure) {
     // Show the failing role and focus the override to adjust.
     select_role_row(GetDlgItem(window, IDC_APPEARANCE_TREE), failure->role);
     if (!advanced_appearance_shown(window))
@@ -420,10 +425,13 @@ bool EditorWindow::apply_appearance(const HWND window) {
     refresh_appearance_controls(window);
     const auto message = L"Could not save the appearance. " +
                          contrast_failure_text(*failure) +
-                         L" Adjust this override or use Reset selected.";
+                         (failure->primary_button ? L" Use Reset all."
+                                                  : L" Adjust this override or use Reset selected.");
     themed_message_box(window, message.c_str(), L"Appearance",
                        MB_OK | MB_ICONWARNING);
-    if (const auto *entry = appearance_field(contrast_pair_field(failure->pair)))
+    if (failure->primary_button)
+      SetFocus(GetDlgItem(window, IDC_APPEARANCE_RESET_ALL));
+    else if (const auto *entry = appearance_field(contrast_pair_field(failure->pair)))
       SetFocus(GetDlgItem(window, entry->control));
     return false;
   }

@@ -131,6 +131,9 @@ inline constexpr std::array<PaletteColor, 24> color_palette{
 [[nodiscard]] COLORREF blend_color(COLORREF base, COLORREF over, int amount);
 // Preset accent; `system` follows the Windows accent color.
 [[nodiscard]] std::uint32_t theme_accent(EditorTheme theme);
+// The fill the enabled primary action paints in a given state.
+[[nodiscard]] COLORREF native_primary_button_fill(const NativeThemeColors &colors,
+                                                   bool pressed, bool hot);
 // WCAG 2 contrast ratio of two colors (1 to 21).
 [[nodiscard]] double contrast_ratio(COLORREF first, COLORREF second);
 // True while a Windows contrast theme is on (SPI_GETHIGHCONTRAST): every

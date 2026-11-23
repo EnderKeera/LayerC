@@ -1,5 +1,6 @@
 #include "appearance_window.hpp"
 #include "accessible_widgets.hpp"
+#include "diagnostics_window.hpp"
 #include "editor_color.hpp"
 #include "editor_style.hpp"
 #include "profile_mutations.hpp"
@@ -212,15 +213,20 @@ void collect_pairs(Fl_Widget &widget, PairScope &scope, const PaintedSurface gro
   PaintedSurface beneath = ground;
   if (role && paints_surface(widget))
     beneath = {*role, dynamic_cast<Fl_Input_ *>(&widget) != nullptr, SurfacePart::fill};
-  // A primary button paints the accent with its computed contrasting label.
+  // All primary buttons use the same accent palette, checked separately.
   const bool primary = is_primary_button(widget);
   if (role && !primary) {
-    if (auto *output = dynamic_cast<Fl_Multiline_Output *>(&widget);
-        output != nullptr && output->textfont() == FL_COURIER)
-      scope.add(*role, TextInk::verbose, beneath);
-    else if (dynamic_cast<Fl_Input_ *>(&widget) || dynamic_cast<Fl_Browser_ *>(&widget) ||
-             dynamic_cast<Fl_Menu_ *>(&widget))
+    if (has_diagnostics_text_modes(widget)) {
+      // Both faces can be selected after Apply, no matter which is showing.
       scope.add(*role, TextInk::role_text, beneath);
+      scope.add(*role, TextInk::verbose, beneath);
+    } else if (auto *output = dynamic_cast<Fl_Multiline_Output *>(&widget);
+               output != nullptr && output->textfont() == FL_COURIER) {
+      scope.add(*role, TextInk::verbose, beneath);
+    } else if (dynamic_cast<Fl_Input_ *>(&widget) || dynamic_cast<Fl_Browser_ *>(&widget) ||
+               dynamic_cast<Fl_Menu_ *>(&widget)) {
+      scope.add(*role, TextInk::role_text, beneath);
+    }
     const char *label = widget.label();
     if (label != nullptr && *label != '\0' && widget.labeltype() != FL_NO_LABEL &&
         !widget.as_window()) {
@@ -253,6 +259,40 @@ void collect_pairs(Fl_Widget &widget, PairScope &scope, const PaintedSurface gro
   }
 }
 
+// Fl_Button::draw may change the ink when pressed; Fl_Return_Button::draw
+// (used by primary OK buttons) keeps it. Check the states of both against
+// the colors refresh_primary_button assigned, not a separate approximation.
+std::optional<RoleContrastFailure> primary_contrast_failure(const Fl_Button &button,
+                                                            const EditorAppearance &appearance) {
+  const bool system_accent = appearance.theme == EditorTheme::system && !appearance.accent;
+  constexpr auto role = static_cast<std::size_t>(EditorRole::button);
+  const auto check = [](const ContrastPairKind pair, const Fl_Color ink, const Fl_Color fill)
+      -> std::optional<RoleContrastFailure> {
+    const double ratio = rgb_contrast_ratio(rgb_of(ink), rgb_of(fill));
+    if (ratio < contrast_floor(pair))
+      return RoleContrastFailure{EditorRole::button, pair, ratio, {}, SurfacePart::fill, true};
+    return std::nullopt;
+  };
+  const auto ink = button.labelcolor();
+  if (!system_accent) {
+    if (auto failure = check(ContrastPairKind::text_fill, ink, button.color())) return failure;
+  } else if (!appearance.overrides[role].fill) {
+    return std::nullopt;
+  }
+  const auto pressed = button.selection_color();
+  if (auto failure = check(ContrastPairKind::text_selection, ink, pressed)) return failure;
+  return check(ContrastPairKind::text_selection, fl_contrast(ink, pressed), pressed);
+}
+
+bool appearance_document_window(const Fl_Window &window) {
+  return !window.parent() && !window.menu_window() && !window.tooltip_window();
+}
+
+class AppearanceDialog;
+void apply_desktop_appearance(const EditorAppearance &appearance, Fl_Window &root,
+                              const Fl_Widget *sidebar, const Fl_Widget *preview,
+                              AppearanceDialog *dialog = nullptr);
+
 std::string hex_or_empty(const std::optional<std::uint32_t> &color) {
   return color ? format_rgb(*color) : std::string{};
 }
@@ -279,7 +319,11 @@ public:
     for (std::size_t index = 0; index < editor_role_count; ++index)
       role->add(std::string(role_label(static_cast<EditorRole>(index))).c_str());
     role->value(0);
-    role->callback([](Fl_Widget *, void *self) { static_cast<AppearanceDialog *>(self)->load_role(); }, this);
+    role->callback([](Fl_Widget *, void *self) {
+      auto &dialog = *static_cast<AppearanceDialog *>(self);
+      dialog.load_role();
+      dialog.preview_changes();
+    }, this);
     fill = input(150, 175, 200, "Role fill");
     chooser(360, 175, "Choose fill...", &AppearanceDialog::choose_fill);
     text = input(150, 210, 200, "Role text");
@@ -311,10 +355,10 @@ public:
       accessibility::describe_with(*control, *status);
     auto *cancel = new Fl_Button(265, 385, 115, editor_button_height, "Cancel");
     cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-    auto *apply = new Fl_Button(390, 385, 115, editor_button_height, "Apply");
+    apply_ = new Fl_Button(390, 385, 115, editor_button_height, "Apply");
     // Cancel stays left, the primary Apply right (DesignSystem.md, Dialogs).
-    primary_button(*apply);
-    apply->callback([](Fl_Widget *, void *self) {
+    primary_button(*apply_);
+    apply_->callback([](Fl_Widget *, void *self) {
       static_cast<AppearanceDialog *>(self)->apply_changes();
     }, this);
     theme->callback([](Fl_Widget *, void *self) {
@@ -324,14 +368,6 @@ public:
     }, this);
     end();
     set_modal();
-    // The trees keep their widgets while the dialog is open: the pairs of
-    // the main window and of this dialog, for presets and for System.
-    for (const bool preset : {true, false}) {
-      auto &pairs = preset ? painted_preset_ : painted_system_;
-      pairs = painted_text_pairs(root_, sidebar_, preview_, preset);
-      for (const auto &pair : painted_text_pairs(*this, nullptr, nullptr, preset))
-        if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end()) pairs.push_back(pair);
-    }
     load();
   }
 
@@ -343,9 +379,16 @@ public:
     if (!invalid_fields_) {
       failure_.reset();
       if (!editor_style_contrast_palette()) {
-        failure_ = first_role_contrast_failure(
-            staged, system_role_set(),
-            staged.theme == EditorTheme::system ? painted_system_ : painted_preset_);
+        PairScope scope{sidebar_, preview_, staged.theme != EditorTheme::system, {}};
+        const PaintedSurface background{EditorRole::window, false, SurfacePart::fill};
+        collect_pairs(root_, scope, background);
+        collect_pairs(*this, scope, background);
+        // Modeless tools can stay open while Appearance previews its draft.
+        for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
+          if (window != &root_ && window != this && appearance_document_window(*window))
+            collect_pairs(*window, scope, background);
+        failure_ = first_role_contrast_failure(staged, system_role_set(), scope.pairs);
+        if (!failure_) failure_ = primary_contrast_failure(*apply_, staged);
         if (!failure_) failure_ = shared_appearance_failure(staged);
       }
       if (editor_style_contrast_palette())
@@ -375,13 +418,26 @@ private:
   // Apply refuses below a floor unless a contrast theme sets the overrides
   // aside; reading the fields measures the shared record once more first.
   // It selects the failing role and focuses its text, the colour every text
-  // pair involves, or its fill for Disabled / Fill. When only the surface
-  // beneath was overridden, that role and part are selected instead.
+  // pair involves, or its fill for Disabled / Fill. Accent and mixed pairs
+  // focus the corresponding color field instead.
   void apply_changes() {
     if (!read_fields()) return;
-    if (failure_ && !editor_style_contrast_palette()) {
+    preview_changes();
+    if (failure_) {
       auto selected = failure_->role;
-      Fl_Input *focus = failure_->pair == ContrastPairKind::disabled_fill ? fill : text;
+      const auto &overrides = staged.overrides[static_cast<std::size_t>(selected)];
+      const bool fill_failure = failure_->pair == ContrastPairKind::disabled_fill ||
+          (failure_->pair == ContrastPairKind::text_fill && !failure_->ground &&
+           !overrides.text && overrides.fill);
+      Fl_Input *focus = fill_failure ? fill : text;
+      if (failure_->primary_button) {
+        if (failure_->pair == ContrastPairKind::text_selection && overrides.fill)
+          focus = fill;
+        else if (failure_->pair == ContrastPairKind::text_hover && overrides.text)
+          focus = text;
+        else
+          focus = accent;
+      }
       if (failure_->ground && !staged.overrides[static_cast<std::size_t>(failure_->role)].text) {
         const auto &ground = staged.overrides[static_cast<std::size_t>(*failure_->ground)];
         const bool on_selection = failure_->ground_part == SurfacePart::selection;
@@ -494,18 +550,15 @@ private:
     staged.accent = accent_value;
     item = next;
     invalid_fields_ = false;
-    refresh_contrast_notice();
     return true;
   }
   void preview_changes() {
-    apply_editor_appearance(staged, root_, sidebar_, preview_);
-    apply_editor_appearance(staged, *this);
+    apply_desktop_appearance(staged, root_, sidebar_, preview_, this);
     name_choosers();
   }
 
   bool invalid_fields_{};
   std::optional<RoleContrastFailure> failure_;
-  std::vector<PaintedTextPair> painted_preset_, painted_system_;
 
   struct Target {
     AppearanceDialog *dialog{};
@@ -517,6 +570,7 @@ private:
   std::size_t chooser_count_{};
   Fl_Choice *theme{}, *role{};
   Fl_Input *accent{}, *fill{}, *text{}, *selection{};
+  Fl_Button *apply_{};
   Fl_Box *status{};
   EditorStatusMark *status_mark{};
   Fl_Window &root_;
@@ -545,8 +599,24 @@ void paint_appearance_window(const EditorAppearance &appearance, Fl_Window &root
   const Fl_Color label_color = label ? fl(label->text)
                                : label_override.text ? fl(*label_override.text) : FL_FOREGROUND_COLOR;
   apply_tree(&root, appearance, sidebar, preview, label_color);
-  if (auto *dialog = dynamic_cast<AppearanceDialog *>(&root)) dialog->refresh_contrast_notice();
   root.redraw();
+}
+
+void apply_desktop_appearance(const EditorAppearance &appearance, Fl_Window &root,
+                              const Fl_Widget *sidebar, const Fl_Widget *preview,
+                              AppearanceDialog *dialog) {
+  set_appearance_palette(appearance);
+  paint_appearance_window(appearance, root, sidebar, preview);
+  for (auto *window = Fl::first_window(); window; window = Fl::next_window(window)) {
+    if (window == &root || window == dialog || !appearance_document_window(*window)) continue;
+    if (auto *candidate = dynamic_cast<AppearanceDialog *>(window)) dialog = candidate;
+    else paint_appearance_window(appearance, *window, nullptr, nullptr);
+  }
+  if (dialog) {
+    paint_appearance_window(appearance, *dialog, nullptr, nullptr);
+    dialog->refresh_contrast_notice();
+  }
+  refresh_editor_window_chrome();
 }
 
 } // namespace
@@ -565,25 +635,25 @@ void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root
   refresh_editor_window_chrome();
 }
 
+void apply_editor_window_appearance(Fl_Window &window) {
+  paint_appearance_window(current_editor_style_appearance(), window, nullptr, nullptr);
+}
+
 void reapply_editor_desktop_appearance(Fl_Window &root, const Fl_Widget *sidebar,
                                        const Fl_Widget *preview) {
   const auto appearance = current_editor_style_appearance();
-  set_appearance_palette(appearance);
-  paint_appearance_window(appearance, root, sidebar, preview);
-  for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
-    if (window != &root) paint_appearance_window(appearance, *window, nullptr, nullptr);
-  refresh_editor_window_chrome();
+  apply_desktop_appearance(appearance, root, sidebar, preview);
 }
 
 std::optional<EditorAppearance>
 edit_editor_appearance(const EditorAppearance &current, Fl_Window &root,
                        const Fl_Widget *sidebar, const Fl_Widget *preview) {
   AppearanceDialog dialog(current, root, sidebar, preview);
-  apply_editor_appearance(current, dialog);
+  apply_desktop_appearance(current, root, sidebar, preview, &dialog);
   dialog.show();
   while (dialog.shown()) Fl::wait();
   if (!dialog.applied) {
-    apply_editor_appearance(current, root, sidebar, preview);
+    apply_desktop_appearance(current, root, sidebar, preview);
     return std::nullopt;
   }
   return dialog.staged;

@@ -262,6 +262,14 @@ std::uint32_t theme_accent(const EditorTheme theme) {
   }
 }
 
+COLORREF native_primary_button_fill(const NativeThemeColors &colors,
+                                    const bool pressed, const bool hot) {
+  if (colors.high_contrast) return colors.accent;
+  if (pressed) return blend_color(colors.accent, colors.fill, 60);
+  if (hot) return blend_color(colors.accent, colors.text, 40);
+  return colors.accent;
+}
+
 double contrast_ratio(const COLORREF first, const COLORREF second) {
   return rgb_contrast_ratio(native_rgb_value(first), native_rgb_value(second));
 }

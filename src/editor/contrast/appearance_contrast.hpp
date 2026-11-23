@@ -21,6 +21,7 @@ struct ContrastFailure {
   layerc::platform::EditorControlRole role{};
   ContrastPair pair{};
   double ratio{};
+  bool primary_button{};
 };
 
 [[nodiscard]] double contrast_minimum(ContrastPair pair) noexcept;
@@ -31,9 +32,9 @@ struct ContrastFailure {
                                          ContrastPair pair) noexcept;
 // The override field to adjust when `pair` fails.
 [[nodiscard]] std::uint32_t contrast_pair_field(ContrastPair pair) noexcept;
-// The first role, in list order, whose colors fall below a minimum. The
-// overrides are measured against the preset they paint over, even while a
-// contrast theme sets them aside.
+// The first role, in list order, whose colors fall below a minimum. System
+// pairs are checked when one of the two painted colors is overridden. The
+// same check covers retained parts of the Windows record in both editors.
 [[nodiscard]] std::optional<ContrastFailure>
 first_contrast_failure(const layerc::platform::EditorAppearanceSettings &settings);
 

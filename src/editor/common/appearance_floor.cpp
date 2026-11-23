@@ -33,6 +33,14 @@ std::string_view contrast_pair_label(const ContrastPairKind pair) noexcept {
   return "Text / Fill";
 }
 
+std::string_view primary_button_surface(const ContrastPairKind pair) noexcept {
+  switch (pair) {
+  case ContrastPairKind::text_hover: return "primary button hover fill";
+  case ContrastPairKind::text_selection: return "primary button pressed fill";
+  default: return "primary button accent";
+  }
+}
+
 std::string contrast_ratio_label(const double ratio) {
   std::array<char, 24> buffer{};
   std::snprintf(buffer.data(), buffer.size(), "%.1f:1",

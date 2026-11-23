@@ -3,6 +3,8 @@
 #include "appearance_contrast.hpp"
 
 #include "layerc/platform/platform_events.hpp"
+#include "layerc/platform/native_theme.hpp"
+#include "layerc/platform/text.hpp"
 
 namespace layerc::editor {
 namespace {
@@ -68,8 +70,12 @@ AppearanceLoad load_platform_appearance() {
 
 std::optional<std::string> save_platform_appearance(const EditorAppearance &appearance) {
   const auto read = platform::read_editor_appearance();
-  const auto current = read.value.value_or(platform::EditorAppearanceSettings{});
-  if (!platform::write_editor_appearance(merge_editor_appearance(appearance, current)))
+  const auto merged = merge_editor_appearance(
+      appearance, read.value.value_or(platform::EditorAppearanceSettings{}));
+  if (!platform::native_high_contrast())
+    if (const auto failure = first_contrast_failure(merged))
+      return "Appearance not saved: " + platform::wide_to_utf8(contrast_failure_text(*failure));
+  if (!platform::write_editor_appearance(merged))
     return "Appearance not saved: Windows refused the setting.";
   return std::nullopt;
 }
@@ -87,8 +93,6 @@ std::optional<RoleContrastFailure> shared_appearance_failure(const EditorAppeara
   const auto failure = first_contrast_failure(merged);
   if (!failure) return std::nullopt;
   const auto index = static_cast<std::size_t>(failure->role);
-  if (merged.theme == platform::EditorTheme::system && merged.overrides[index].fields == 0)
-    return std::nullopt;
   ContrastPairKind pair = ContrastPairKind::text_fill;
   switch (failure->pair) {
   case ContrastPair::disabled_fill: pair = ContrastPairKind::disabled_fill; break;
@@ -96,7 +100,8 @@ std::optional<RoleContrastFailure> shared_appearance_failure(const EditorAppeara
   case ContrastPair::text_selection: pair = ContrastPairKind::text_selection; break;
   case ContrastPair::text_fill: break;
   }
-  return RoleContrastFailure{static_cast<EditorRole>(index), pair, failure->ratio, {}, SurfacePart::fill};
+  return RoleContrastFailure{static_cast<EditorRole>(index), pair, failure->ratio, {},
+                             SurfacePart::fill, failure->primary_button};
 }
 
 int load_editor_text_scale() {

@@ -264,6 +264,9 @@ first_role_contrast_failure(const EditorAppearance &appearance, const SystemRole
 }
 
 std::string role_contrast_failure_text(const RoleContrastFailure &failure) {
+  if (failure.primary_button)
+    return contrast_refusal_text(role_label(failure.role), failure.pair, failure.ratio,
+                                 primary_button_surface(failure.pair));
   std::string surface;
   if (failure.ground) {
     surface = role_label(*failure.ground);

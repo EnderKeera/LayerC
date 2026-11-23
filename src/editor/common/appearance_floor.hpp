@@ -15,6 +15,8 @@ enum class ContrastPairKind : std::uint8_t { text_fill, disabled_fill, text_hove
 [[nodiscard]] double contrast_floor(ContrastPairKind pair) noexcept;
 // "Text / Fill", "Disabled / Fill", "Text / Hover", "Text / Selection".
 [[nodiscard]] std::string_view contrast_pair_label(ContrastPairKind pair) noexcept;
+// The surface in a refusal for an accent-filled primary action.
+[[nodiscard]] std::string_view primary_button_surface(ContrastPairKind pair) noexcept;
 // "12.9:1", rounded down to one decimal so a ratio just below a floor never
 // reads as it; ratios below 1 print as 1.0:1.
 [[nodiscard]] std::string contrast_ratio_label(double ratio);

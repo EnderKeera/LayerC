@@ -921,11 +921,7 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
     outline = colors.divider;
     text_color = colors.disabled;
   } else if (primary) {
-    // A contrast theme keeps COLOR_HIGHLIGHT under hover and press.
-    fill = colors.high_contrast ? colors.accent
-           : pressed            ? blend_color(colors.accent, colors.fill, 60)
-           : hot ? blend_color(colors.accent, colors.text, 40)
-                 : colors.accent;
+    fill = native_primary_button_fill(colors, pressed, hot);
     outline = fill;
     text_color = colors.on_accent;
   } else if (pressed || hot) {

@@ -1,5 +1,6 @@
 #include "diagnostic_text.hpp"
 #include "tasks_window.hpp"
+#include "appearance_window.hpp"
 #include "daemon_link.hpp"
 #include "platform/services.hpp"
 #include "editor_style.hpp"
@@ -104,6 +105,7 @@ void TasksWindow::show(const std::string &reason, const TaskRequest request) {
   request_ = request;
   refresh();
   if (!reason.empty()) set_message(reason);
+  apply_editor_window_appearance(*window_);
   window_->show();
 }
 

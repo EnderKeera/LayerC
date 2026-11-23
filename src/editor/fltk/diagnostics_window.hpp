@@ -51,6 +51,9 @@ private:
   std::string raw_json_, summary_, retry_outcome_;
 };
 
+// The mode-switching diagnostics output can paint both status and verbose ink.
+[[nodiscard]] bool has_diagnostics_text_modes(const Fl_Widget &widget) noexcept;
+
 // Modal read-only text with Close and, when copy_text is not empty, a
 // "Copy details" button that places copy_text on the clipboard.
 // Grows `window` (whose resizable() is `text`) until `text` shows its whole
