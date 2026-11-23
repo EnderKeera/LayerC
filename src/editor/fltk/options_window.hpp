@@ -6,6 +6,7 @@
 
 #include <functional>
 
+class Fl_Box;
 class Fl_Button;
 class Fl_Check_Button;
 
@@ -23,6 +24,7 @@ public:
 
   OptionsWindow(const EditorOptions &initial, const EditorAppearance &appearance, int work_width,
                 Commit commit, Applied applied, Failed failed);
+  void refresh_capture_warning();
 
 private:
   void enable_apply();
@@ -31,6 +33,8 @@ private:
   Fl_Check_Button *visual_{}, *overlays_{}, *editor_{}, *updates_{};
   EditorChoice *text_size_{};
   Fl_Button *apply_{};
+  Fl_Box *capture_hint_{};
+  std::string_view capture_warning_;
   Commit commit_;
   Applied applied_;
   Failed failed_;

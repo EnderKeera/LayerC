@@ -31,6 +31,11 @@ constexpr auto capture_hint = "Screenshots, screen sharing and Magnifier cannot 
 constexpr auto text_size_hint = "Adds to the Windows text size setting.";
 constexpr auto updates_hint = "The launcher checks GitHub for a signed release before it starts LayerD.";
 
+std::string capture_hint_with_warning(const std::string_view warning) {
+  if (warning.empty()) return capture_hint;
+  return std::string(capture_hint) + "\n" + std::string(warning);
+}
+
 int label_width(const char *text) {
   int width = 0, height = 0;
   const auto saved = fl_draw_shortcut;
@@ -92,9 +97,9 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
     y += height;
     return control;
   };
-  const auto hint = [&](const int x, const char *text) -> Fl_Widget & {
+  const auto hint = [&](const int x, const char *text, int minimum_height = 0) -> Fl_Box & {
     const int w = width - margin - x;
-    const int height = wrapped_height(text, w);
+    const int height = std::max(minimum_height, wrapped_height(text, w));
     auto *line = new OptionHint(x, y, w, height, text);
     line->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
     y += height + gap;
@@ -106,9 +111,13 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   overlays_ = check(overlays_label, initial.overlay_capture_exclusion);
   y += gap;
   editor_ = check(editor_label, initial.editor_capture_exclusion);
-  auto &capture = hint(margin + check_indent, capture_hint);
-  accessibility::describe_with(*overlays_, capture);
-  accessibility::describe_with(*editor_, capture);
+  const int capture_width = row_width - check_indent;
+  capture_hint_ = &hint(margin + check_indent, capture_hint,
+      std::max(wrapped_height(capture_hint_with_warning(capture_exclusion_incomplete).c_str(), capture_width),
+               wrapped_height(capture_hint_with_warning(capture_exclusion_not_cleared).c_str(), capture_width)));
+  accessibility::describe_with(*overlays_, *capture_hint_);
+  accessibility::describe_with(*editor_, *capture_hint_);
+  refresh_capture_warning();
 
   text_size_ = new EditorChoice(choice_x, y, choice_width, editor_input_height, text_size_label);
   text_size_->shortcut_label(1);
@@ -151,6 +160,15 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   apply_editor_appearance(appearance, *this);
 }
 
+void OptionsWindow::refresh_capture_warning() {
+  const auto warning = editor_capture_exclusion_warning();
+  if (capture_warning_ == warning) return;
+  capture_warning_ = warning;
+  auto text = capture_hint_with_warning(warning);
+  capture_hint_->copy_label(text.c_str());
+  accessibility::set_accessible_description(*editor_, std::move(text));
+}
+
 void OptionsWindow::enable_apply() { apply_->activate(); }
 
 bool OptionsWindow::apply() {
@@ -168,11 +186,12 @@ bool OptionsWindow::apply() {
   }
   apply_->deactivate();
   applied_(options);
+  refresh_capture_warning();
   return true;
 }
 
 void show_options_dialog(EditorApp &app) {
-  const auto loaded = load_editor_options(editor_capture_exclusion_enabled(), current_editor_text_scale());
+  const auto loaded = load_editor_options(editor_capture_exclusion_requested(), current_editor_text_scale());
   auto &owner = *app.main_window();
   int x = 0, y = 0, w = 0, h = 0;
   Fl::screen_work_area(x, y, w, h, owner.screen_num());
@@ -195,7 +214,10 @@ void show_options_dialog(EditorApp &app) {
     fl_message_title(title);
     fl_alert("%s", loaded.warning.data());
   }
-  while (dialog.shown()) Fl::wait();
+  while (dialog.shown()) {
+    Fl::wait();
+    dialog.refresh_capture_warning();
+  }
 }
 
 } // namespace layerc::editor

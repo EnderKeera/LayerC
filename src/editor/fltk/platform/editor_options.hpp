@@ -28,7 +28,13 @@ void notify_editor_options_reload();
 commit_editor_options(const EditorOptions &options, void (*reload)() = notify_editor_options_reload);
 
 [[nodiscard]] int current_editor_text_scale() noexcept;
-[[nodiscard]] bool editor_capture_exclusion_enabled() noexcept;
+// The stored preference does not imply every editor window accepted it.
+[[nodiscard]] bool editor_capture_exclusion_requested() noexcept;
+[[nodiscard]] std::string_view editor_capture_exclusion_warning() noexcept;
+inline constexpr char capture_exclusion_incomplete[] =
+    "Capture exclusion incomplete — the editor may appear in captures.";
+inline constexpr char capture_exclusion_not_cleared[] =
+    "Capture exclusion could not be cleared — the editor may remain hidden.";
 void apply_editor_options_live(const EditorOptions &options);
 
 } // namespace layerc::editor

@@ -53,7 +53,8 @@ std::string editor_window_title(const std::optional<std::string_view> profile_na
 
 void EditorApp::report(const StatusKind kind, std::string text, const StatusVoice voice) {
   status_text_ = std::move(text);
-  status_pane_->set_status(kind, status_text_);
+  status_kind_ = kind;
+  render_status();
   const auto title = session.has_document()
       ? editor_window_title(session.document().profile().name,
                             pending_fields_ || session.has_unsaved_changes())
@@ -69,6 +70,24 @@ void EditorApp::report(const StatusKind kind, std::string text, const StatusVoic
     accessibility->announce(nullptr, last_announced_);
   }
 }
+void EditorApp::set_capture_exclusion_warning(const std::string_view warning) {
+  if (capture_exclusion_warning_ == warning) return;
+  capture_exclusion_warning_ = warning;
+  render_status();
+  if (accessibility && !warning.empty())
+    accessibility->announce(nullptr, capture_exclusion_warning_);
+}
+
+void EditorApp::render_status() {
+  if (capture_exclusion_warning_.empty()) {
+    status_pane_->set_status(status_kind_, status_text_);
+    return;
+  }
+  // Keep the privacy fault visible without discarding unrelated action outcomes.
+  const auto kind = status_kind_ == StatusKind::failure ? status_kind_ : StatusKind::warning;
+  status_pane_->set_status(kind, capture_exclusion_warning_ + "\n" + status_text_);
+}
+
 void EditorApp::query_status() {
   const auto state = query_daemon_status();
   daemon_text_ = state.summary();

@@ -67,7 +67,8 @@ int current_editor_text_scale() noexcept { return text_scale_choices.front(); }
 // never added here, so there is no editor-owned size to select.
 void select_editor_text_scale(int) {}
 
-bool editor_capture_exclusion_enabled() noexcept { return false; }
+bool editor_capture_exclusion_requested() noexcept { return false; }
+std::string_view editor_capture_exclusion_warning() noexcept { return {}; }
 
 void apply_editor_options_live(const EditorOptions &) {}
 

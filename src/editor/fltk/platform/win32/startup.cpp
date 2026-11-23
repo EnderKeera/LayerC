@@ -121,7 +121,6 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
     std::fputs("Smoke requires LAYERC_PROFILE_DIR and LAYERC_SETTINGS_KEY overrides.\n", stderr);
     return 1;
   }
-  WindowsWindowDecorator decorator;
   if (const auto error = recover_startup_profiles(platform::profile_directory())) {
     fl_message_title("LayerC profile recovery");
     fl_alert("%s", error->c_str());
@@ -131,7 +130,11 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
   auto settings = load_startup_settings();
   install_editor_style();
   EditorApp app;
+  WindowsWindowDecorator decorator;
   app.build(std::move(settings.appearance.editor));
+  decorator.set_warning_reporter([&app](std::string_view warning) {
+    app.set_capture_exclusion_warning(warning);
+  });
   const WindowsTextScaleShortcuts text_shortcuts([&app](StatusKind kind, std::string text) {
     app.report(kind, std::move(text));
   });

@@ -1,6 +1,7 @@
 #include "accessible_widgets.hpp"
 #include "appearance_window.hpp"
 #include "editor_style.hpp"
+#include "linux_editor_test_access.hpp"
 #include "options_window.hpp"
 #include "platform/contrast.hpp"
 #include "platform/win32/desktop_listener.hpp"
@@ -273,8 +274,116 @@ void capture_exclusion_on_existing_and_new_windows() {
   last.show();
   last.wait_for_expose();
   Fl::check();
-  expect(!editor::editor_capture_exclusion_enabled() && has_affinity(last, WDA_NONE),
+  expect(!editor::editor_capture_exclusion_requested() && has_affinity(last, WDA_NONE),
          "the decorator does not exclude new windows after capture exclusion is turned off");
+}
+
+struct AffinityProbe {
+  enum class Result { allow, deny, unchanged, deny_clear };
+  static inline HWND window{};
+  static inline Result result{Result::allow};
+
+  static bool set(HWND target, bool exclude) {
+    if (target == window) {
+      if (exclude && result == Result::deny) return false;
+      if (exclude && result == Result::unchanged) return true;
+      if (!exclude && result == Result::deny_clear) return false;
+    }
+    return platform::apply_capture_exclusion(target, exclude);
+  }
+};
+
+void capture_exclusion_failure_and_recovery() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  AffinityProbe::window = nullptr;
+  AffinityProbe::result = AffinityProbe::Result::allow;
+  editor::EditorApp app;
+  editor::WindowsWindowDecorator decorator(AffinityProbe::set);
+  app.build();
+  app.show();
+  auto *const status = editor::EditorAppTestAccess::status(app);
+  decorator.set_warning_reporter([&](std::string_view warning) { app.set_capture_exclusion_warning(warning); });
+  editor::OptionsWindow dialog({}, app.appearance(), 640,
+      [](const editor::EditorOptions &options) { return editor::commit_editor_options(options, count_reload); },
+      [&](const editor::EditorOptions &options) {
+        editor::apply_editor_options_live(options);
+        app.report(editor::StatusKind::success, "Options saved.");
+      }, [](std::string_view) { expect(false, "the settings write succeeds"); });
+  auto *const capture = dynamic_cast<Fl_Check_Button *>(child(dialog, "Hide the &editor from screen capture"));
+  auto *const visual = dynamic_cast<Fl_Check_Button *>(child(dialog, "Enable &visual recognition"));
+  auto *const apply = child(dialog, "&Apply");
+  if (!expect(status && capture && visual && apply, "Options fixture exposes settings and status")) return;
+  const auto warning = [] { return editor::editor_capture_exclusion_warning(); };
+  using platform::BoolSetting;
+  auto &main = *app.main_window();
+  dialog.show();
+  AffinityProbe::window = fl_xid(&dialog);
+  AffinityProbe::result = AffinityProbe::Result::deny;
+  capture->value(1);
+  capture->do_callback();
+  visual->value(0);
+  visual->do_callback();
+  apply->do_callback();
+  expect(editor::editor_capture_exclusion_requested() &&
+             platform::read_bool_setting(BoolSetting::editor_capture_exclusion).value == true &&
+             platform::read_bool_setting(BoolSetting::visual_recognition).value == false,
+         "Options persists both preferences despite failing to hide one window");
+  expect(has_affinity(main, platform::capture_exclusion_affinity) && has_affinity(dialog, WDA_NONE) &&
+             warning() == editor::capture_exclusion_incomplete,
+         "successful affinity on the main window does not hide the dialog's refusal");
+  const auto visible_warning = [&](std::string_view text) {
+    const std::string hint = "Screenshots, screen sharing and Magnifier cannot see a hidden window.\n" +
+                             std::string(text);
+    return child(dialog, hint) && editor::accessibility::accessible_description(*capture) == hint;
+  };
+  expect(visible_warning(warning()) && std::string_view(status->value()).starts_with(warning()),
+         "refusal is rendered in Options and the main status, and describes the setting");
+  app.report(editor::StatusKind::information, "Unrelated outcome.");
+  expect(std::string_view(status->value()).starts_with(warning()) &&
+             std::string_view(status->value()).ends_with("Unrelated outcome."),
+         "unrelated action outcomes do not clear the outstanding privacy warning");
+
+  AffinityProbe::result = AffinityProbe::Result::unchanged;
+  decorator.refresh();
+  expect(warning() == editor::capture_exclusion_incomplete,
+         "an apparent setter success is not enough without matching readback");
+  AffinityProbe::result = AffinityProbe::Result::allow;
+  InvalidateRect(AffinityProbe::window, nullptr, FALSE);
+  expect(wait_for([&] { return warning().empty() && has_affinity(dialog, platform::capture_exclusion_affinity); }),
+         "a later paint retries previously failed affinity without changing the preference");
+  dialog.refresh_capture_warning();
+  expect(std::string_view(status->value()) == "Unrelated outcome." &&
+             !visible_warning(editor::capture_exclusion_incomplete) &&
+             editor::accessibility::accessible_description(*capture) ==
+                 "Screenshots, screen sharing and Magnifier cannot see a hidden window.",
+         "verified recovery clears the fault and restores the capture hint");
+
+  AffinityProbe::result = AffinityProbe::Result::deny_clear;
+  capture->value(0);
+  capture->do_callback();
+  apply->do_callback();
+  expect(!editor::editor_capture_exclusion_requested() && has_affinity(main, WDA_NONE) &&
+             has_affinity(dialog, platform::capture_exclusion_affinity) &&
+             warning() == editor::capture_exclusion_not_cleared && visible_warning(warning()),
+         "clearing the preference reports failure until every managed window is capturable");
+  AffinityProbe::result = AffinityProbe::Result::allow;
+  editor::set_editor_capture_exclusion(false);
+  expect(warning().empty() && has_affinity(dialog, WDA_NONE), "an explicit retry verifies clearing affinity");
+  dialog.hide();
+
+  editor::set_editor_capture_exclusion(true);
+  Fl_Double_Window later(220, 100, "Later capture refusal");
+  later.end();
+  later.show();
+  AffinityProbe::window = fl_xid(&later);
+  AffinityProbe::result = AffinityProbe::Result::deny;
+  expect(wait_for([&] { return warning() == editor::capture_exclusion_incomplete; }) &&
+             std::string_view(status->value()).starts_with(warning()),
+         "a newly shown unprotected window reports a fault without reapplying Options");
+  later.hide();
+  expect(wait_for([&] { return warning().empty(); }) && has_affinity(main, platform::capture_exclusion_affinity),
+         "closing the unprotected window clears its fault without unprotecting the main window");
 }
 
 int shortcut(Fl_Window &window, const int key, const int modifiers, char *text) {
@@ -722,7 +831,35 @@ void dpi_changes_keep_text_scale() {
 
 } // namespace
 
+// An owned renderer fixture, not a shipping option. No capture preference is
+// written and the refusal path does not change real desktop settings.
+static int show_capture_options_evidence(const bool refuse) {
+  const SettingsFixture fixture;
+  if (!fixture.ready()) return 2;
+  Fl::keyboard_screen_scaling(0);
+  fl_open_display();
+  editor::install_editor_style();
+  editor::EditorApp app;
+  editor::WindowsWindowDecorator decorator(+[](HWND, bool hide) { return !hide; });
+  app.build();
+  decorator.set_warning_reporter([&app](std::string_view warning) {
+    app.set_capture_exclusion_warning(warning);
+  });
+  editor::set_editor_capture_exclusion(refuse);
+  app.show();
+  Fl::add_timeout(0.0, [](void *data) {
+    auto &owner = *static_cast<editor::EditorApp *>(data);
+    editor::show_options_dialog(owner);
+    owner.close_window();
+  }, &app);
+  return Fl::run();
+}
+
 int main(const int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--evidence-capture-refused")
+    return show_capture_options_evidence(true);
+  if (argc == 2 && std::string_view(argv[1]) == "--evidence-capture-off")
+    return show_capture_options_evidence(false);
   if (argc == 2 && (std::string_view(argv[1]) == "--evidence-contrast" ||
                     std::string_view(argv[1]) == "--evidence-tooltip")) {
     if (GetEnvironmentVariableW(L"LAYERC_PROFILE_DIR", nullptr, 0) <= 1 ||
@@ -742,6 +879,7 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(options_store),
       LAYERC_TEST_CASE(options_dialog_actions_and_descriptions),
       LAYERC_TEST_CASE(capture_exclusion_on_existing_and_new_windows),
+      LAYERC_TEST_CASE(capture_exclusion_failure_and_recovery),
       LAYERC_TEST_CASE(text_scale_startup_and_keys),
       LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
       LAYERC_TEST_CASE(appearance_contrast_theme_sets_floors_aside),

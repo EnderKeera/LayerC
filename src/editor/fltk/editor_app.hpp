@@ -116,6 +116,7 @@ public:
   void refresh_forms();
   void report(StatusKind kind, std::string text,
               StatusVoice voice = StatusVoice::announced);
+  void set_capture_exclusion_warning(std::string_view warning);
   void query_status();
   void module_fields_changed(bool pending);
   void field_changed(Fl_Widget *widget);
@@ -148,8 +149,9 @@ private:
   const SteadyTimeout::Now timer_now_;
   const SteadyTimeout::Scheduler timer_scheduler_;
   SteadyTimeout autosave_timer_;
-  std::string cooldown_id_, panel_id_, status_text_, daemon_text_;
-  StatusKind daemon_kind_{StatusKind::none};
+  std::string cooldown_id_, panel_id_, status_text_, daemon_text_, capture_exclusion_warning_;
+  StatusKind status_kind_{StatusKind::none}, daemon_kind_{StatusKind::none};
+  void render_status();
   // The last message spoken, so a repeating failure is said once.
   std::string last_announced_;
   int binding_index_{-1};
