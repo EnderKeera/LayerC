@@ -163,46 +163,113 @@ std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
   return colors;
 }
 
+namespace {
+
+// A role's colours as `appearance` paints them: the preset's, else FLTK's
+// System colours (as an input field or as another control) with the
+// overrides applied.
+RoleColors resolved_role_colors(const EditorAppearance &appearance,
+                                const SystemRoleColors &system, const EditorRole role,
+                                const bool input_field) {
+  if (const auto preset = theme_role_colors(appearance, role)) return *preset;
+  const auto index = static_cast<std::size_t>(role);
+  RoleColors colors = (input_field ? system.field : system.control)[index];
+  const auto &item = appearance.overrides[index];
+  if (item.fill) colors.fill = *item.fill;
+  if (item.text) colors.text = *item.text;
+  if (item.selection) colors.selection = *item.selection;
+  return colors;
+}
+
+// One role's own pairs: Text / Fill, and Text / Selection where the
+// selection sits behind text.
+std::optional<RoleContrastFailure> nominal_role_failure(const EditorAppearance &appearance,
+                                                        const SystemRoleColors &system,
+                                                        const EditorRole role,
+                                                        const bool input_field) {
+  const bool system_theme = appearance.theme == EditorTheme::system;
+  const auto &item = appearance.overrides[static_cast<std::size_t>(role)];
+  const auto colors = resolved_role_colors(appearance, system, role, input_field);
+  // Check boxes draw their selection colour as the mark, not behind text.
+  // Disabled / Fill and Text / Hover need role parts FLTK overrides do not
+  // have yet; both arrive with the Phase 3 painters.
+  const bool selection_behind_text = role == EditorRole::button ||
+                                     role == EditorRole::list || role == EditorRole::sidebar;
+  const auto measure = [&](const ContrastPairKind pair, const std::uint32_t background,
+                           const bool overridden) -> std::optional<RoleContrastFailure> {
+    if (system_theme && !overridden) return std::nullopt;
+    const double ratio = rgb_contrast_ratio(colors.text, background);
+    if (ratio < contrast_floor(pair)) return RoleContrastFailure{role, pair, ratio, {}, SurfacePart::fill};
+    return std::nullopt;
+  };
+  if (auto failure = measure(ContrastPairKind::text_fill, colors.fill,
+                             item.text.has_value() || item.fill.has_value()))
+    return failure;
+  if (!selection_behind_text) return std::nullopt;
+  return measure(ContrastPairKind::text_selection, colors.selection,
+                 item.text.has_value() || item.selection.has_value());
+}
+
+} // namespace
+
 std::optional<RoleContrastFailure>
 first_role_contrast_failure(const EditorAppearance &appearance,
                             const std::array<RoleColors, editor_role_count> &system_roles) {
-  const bool system = appearance.theme == EditorTheme::system;
+  const SystemRoleColors system{
+      system_roles, system_roles,
+      system_roles[static_cast<std::size_t>(EditorRole::status)].text};
+  return first_role_contrast_failure(appearance, system, {});
+}
+
+std::optional<RoleContrastFailure>
+first_role_contrast_failure(const EditorAppearance &appearance, const SystemRoleColors &system,
+                            const std::span<const PaintedTextPair> painted) {
+  const bool system_theme = appearance.theme == EditorTheme::system;
   for (std::size_t index = 0; index < editor_role_count; ++index) {
     const auto role = static_cast<EditorRole>(index);
-    const auto &item = appearance.overrides[index];
-    RoleColors colors = system_roles[index];
-    if (const auto preset = theme_role_colors(appearance, role)) {
-      colors = *preset;
-    } else {
-      if (item.fill) colors.fill = *item.fill;
-      if (item.text) colors.text = *item.text;
-      if (item.selection) colors.selection = *item.selection;
+    if (auto failure = nominal_role_failure(appearance, system, role, true)) return failure;
+    // Under System a choice fills with the window colour, a field with the
+    // input colour: the edit role is measured as both.
+    if (system_theme && role == EditorRole::edit)
+      if (auto failure = nominal_role_failure(appearance, system, role, false)) return failure;
+  }
+  const auto verbose = system_theme ? system.verbose : editor_tokens(appearance).verbose;
+  for (const auto &pair : painted) {
+    const auto &text_item = appearance.overrides[static_cast<std::size_t>(pair.text)];
+    const auto &ground_item = appearance.overrides[static_cast<std::size_t>(pair.ground.role)];
+    const bool selection = pair.ground.part == SurfacePart::selection;
+    const bool overridden = text_item.text.has_value() ||
+                            (selection ? ground_item.selection : ground_item.fill).has_value();
+    if (system_theme && !overridden) continue;
+    // Mono diagnostics keep the verbose ink until their role's text is set.
+    const auto ink = pair.ink == TextInk::verbose && !text_item.text
+                         ? verbose
+                         : resolved_role_colors(appearance, system, pair.text,
+                                                pair.text != pair.ground.role ||
+                                                    pair.ground.input_field)
+                               .text;
+    const auto ground = resolved_role_colors(appearance, system, pair.ground.role,
+                                             pair.ground.input_field);
+    const auto kind = selection ? ContrastPairKind::text_selection : ContrastPairKind::text_fill;
+    const double ratio = rgb_contrast_ratio(ink, selection ? ground.selection : ground.fill);
+    if (ratio >= contrast_floor(kind)) continue;
+    RoleContrastFailure failure{pair.text, kind, ratio, {}, SurfacePart::fill};
+    if (pair.ground.role != pair.text) {
+      failure.ground = pair.ground.role;
+      failure.ground_part = pair.ground.part;
     }
-    // Check boxes draw their selection colour as the mark, not behind text.
-    // Disabled / Fill and Text / Hover need role parts FLTK overrides do not
-    // have yet; both arrive with the Phase 3 painters.
-    const bool selection_behind_text = role == EditorRole::button ||
-                                       role == EditorRole::list || role == EditorRole::sidebar;
-    const auto measure = [&](const ContrastPairKind pair, const std::uint32_t background,
-                             const bool overridden) -> std::optional<RoleContrastFailure> {
-      if (system && !overridden) return std::nullopt;
-      const double ratio = rgb_contrast_ratio(colors.text, background);
-      if (ratio < contrast_floor(pair)) return RoleContrastFailure{role, pair, ratio};
-      return std::nullopt;
-    };
-    if (auto failure = measure(ContrastPairKind::text_fill, colors.fill,
-                               item.text.has_value() || item.fill.has_value()))
-      return failure;
-    if (!selection_behind_text) continue;
-    if (auto failure = measure(ContrastPairKind::text_selection, colors.selection,
-                               item.text.has_value() || item.selection.has_value()))
-      return failure;
+    return failure;
   }
   return std::nullopt;
 }
 
 std::string role_contrast_failure_text(const RoleContrastFailure &failure) {
-  return contrast_refusal_text(role_label(failure.role), failure.pair, failure.ratio);
+  std::string surface;
+  if (failure.ground) {
+    surface = role_label(*failure.ground);
+    surface += failure.ground_part == SurfacePart::selection ? " selection" : " fill";
+  }
+  return contrast_refusal_text(role_label(failure.role), failure.pair, failure.ratio, surface);
 }
 
 std::uint32_t control_border(const std::uint32_t fill) noexcept {

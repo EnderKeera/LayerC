@@ -19,8 +19,12 @@ enum class ContrastPairKind : std::uint8_t { text_fill, disabled_fill, text_hove
 // reads as it; ratios below 1 print as 1.0:1.
 [[nodiscard]] std::string contrast_ratio_label(double ratio);
 // "Buttons: Text / Hover contrast is 3.2:1; at least 4.5:1 is required."
-// UTF-8; the floor prints without decimals when it is whole.
+// UTF-8; the floor prints without decimals when it is whole. A `surface`
+// names where the text is painted when that is not the role's own colour:
+// "Labels: Text / Fill contrast is 1.3:1 on the Window fill; at least 4.5:1
+// is required."
 [[nodiscard]] std::string contrast_refusal_text(std::string_view role_label,
-                                                ContrastPairKind pair, double ratio);
+                                                ContrastPairKind pair, double ratio,
+                                                std::string_view surface = {});
 
 } // namespace layerc::editor

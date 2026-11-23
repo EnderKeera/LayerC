@@ -41,12 +41,17 @@ std::string contrast_ratio_label(const double ratio) {
 }
 
 std::string contrast_refusal_text(const std::string_view role_label,
-                                  const ContrastPairKind pair, const double ratio) {
+                                  const ContrastPairKind pair, const double ratio,
+                                  const std::string_view surface) {
   std::string text(role_label);
   text += ": ";
   text += contrast_pair_label(pair);
   text += " contrast is ";
   text += contrast_ratio_label(ratio);
+  if (!surface.empty()) {
+    text += " on the ";
+    text += surface;
+  }
   text += "; at least ";
   text += floor_label(contrast_floor(pair));
   text += ":1 is required.";

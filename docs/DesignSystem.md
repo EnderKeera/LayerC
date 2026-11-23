@@ -229,7 +229,13 @@ Appearance checks every role's overrides when you press Apply or OK and refuses 
 below these minimums, naming the role, the pair and the ratio: Text / Fill
 4.5:1, Disabled / Fill 3:1, Text / Hover 4.5:1 (buttons and check boxes), Text
 / Selection 4.5:1 (buttons, check boxes, lists and the profile list). The
-refusal never comes as a surprise:
+FLTK editor checks the same floors where it paints the text: on the role's
+own fill when its control draws one, otherwise on the surface beneath (a
+label or check box on the window, a tab label on its tab), and names that
+surface: "Labels: Text / Fill contrast is 1.3:1 on the Window fill; at least
+4.5:1 is required." On Windows it also checks the record it shares with the
+Win32 editor, including the border, hover and disabled colors it keeps but
+cannot edit. The refusal never comes as a surprise:
 
 - **While picking,** Choose color shows one line under its preview with the
   pair nearest its minimum (the lowest ratio over minimum among the colors
@@ -1335,7 +1341,7 @@ listed under [Verification](#verification).
 | Control painting | `native_controls.cpp` (`paint_native_button`, `paint_native_check_box`, `paint_flat_combo`, `paint_flat_frame`, menu bar); `native_theme.cpp` (`paint_focus_ring`, `paint_status_glyph`, `high_contrast_colors`) | `editor_style.hpp/.cpp` (`install_editor_style`, `EditorField`, `EditorChoice`, `draw_editor_focus`, `primary_button`); `editor_geometry.cpp` (`EditorTabs::draw`); `editor_menus.cpp` (`ContextBrowser::draw`) |
 | Applying a theme | `editor_theme.cpp`; `EditorWindow` drawing in `editor_draw.cpp` | `appearance_window.cpp` (`apply_editor_appearance`) |
 | Metrics | `dialog_layout.hpp` (`native_control_height`, `DialogLayout`), `editor_dialog_layouts.cpp` (Options, Appearance, Choose color, Keyboard shortcuts), `editor_layout.cpp`, `editor_automation_layout.cpp` | `editor_input_height`, `editor_button_height` in `editor_style.hpp`; form builders in `editor_pages.cpp`; `desktop_text_metrics` and `apply_desktop_font` for app-local text scaling |
-| Contrast checks | `appearance_contrast.cpp` (Appearance refusal and live lines, Choose color line); floors and wording from the shared `appearance_floor.cpp` | `editor_appearance.cpp` (`first_role_contrast_failure`: Text / Fill, and Text / Selection where the selection sits behind text) and `appearance_window.cpp` (warning line, Apply refusal), with the same `appearance_floor.cpp` |
+| Contrast checks | `contrast/appearance_contrast.cpp` (Appearance refusal and live lines, Choose color line); floors and wording from the shared `appearance_floor.cpp` | `editor_appearance.cpp` (`first_role_contrast_failure`: Text / Fill, Text / Selection where the selection sits behind text, and each painted pair) and `appearance_window.cpp` (`painted_text_pairs`, warning line, Apply refusal), with the same `appearance_floor.cpp`; on Windows also `shared_appearance_failure` through the Win32 `contrast/appearance_contrast.cpp` |
 | Status lines and text tones | `StatusKind` in the shared `status_kind.hpp`; `static_style.hpp` (`status_glyph`, `set_status_line`, `set_strip_status`, `set_text_tone`); `visual_runtime_status.hpp` (`visual_runtime_status_kind`); `EditorWindow::draw_status_line` | `StatusKind` in the shared `status_kind.hpp`; `EditorStatusMark`, `draw_editor_status_glyph`, `StatusPane`; `DaemonStatus::kind` and `save_report_kind` in `daemon_link.hpp` |
 | Keyboard shortcuts | `editor_shortcuts.cpp` (command table, `shortcut_rows` from the accelerators) | `editor_commands.cpp` (`shortcut_help`, including F1); `diagnostics_window.cpp` (`show_shortcuts_dialog`, measured browser columns) |
 | Startup | dialog chrome on create | `main.cpp` calls `install_editor_style()` before any widget |

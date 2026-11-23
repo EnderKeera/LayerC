@@ -87,16 +87,59 @@ struct DesktopTextMetrics {
 // `system_roles` (FLTK's own colours) with the overrides applied, and only
 // pairs with at least one overridden colour: untouched desktop colours never
 // refuse.
+enum class SurfacePart : std::uint8_t { fill, selection };
 struct RoleContrastFailure {
   EditorRole role{};
   ContrastPairKind pair{};
   double ratio{};
+  // The role whose colour the text is painted on, when that is not the
+  // role's own fill (a painted pair below).
+  std::optional<EditorRole> ground;
+  SurfacePart ground_part{SurfacePart::fill};
   bool operator==(const RoleContrastFailure &) const = default;
 };
 [[nodiscard]] std::optional<RoleContrastFailure>
 first_role_contrast_failure(const EditorAppearance &appearance,
                             const std::array<RoleColors, editor_role_count> &system_roles);
-// "Lists: Text / Fill contrast is 1.0:1; at least 4.5:1 is required."
+
+// Where FLTK paints a role's text, which is not always the role's own fill:
+// a label or check box without a box draws on the surface beneath, an
+// outside label in the Labels text on its parent, a tab label on a tab.
+// `input_field` picks the System colours of an input field over those of a
+// choice; it only matters for the edit role.
+struct PaintedSurface {
+  EditorRole role{};
+  bool input_field{};
+  SurfacePart part{SurfacePart::fill};
+  bool operator==(const PaintedSurface &) const = default;
+};
+// `verbose` is the mono diagnostics ink, the verbose token until the text
+// role's own text is overridden.
+enum class TextInk : std::uint8_t { role_text, verbose };
+struct PaintedTextPair {
+  EditorRole text{};
+  TextInk ink{TextInk::role_text};
+  PaintedSurface ground{};
+  bool operator==(const PaintedTextPair &) const = default;
+};
+// FLTK's own colours under the System theme: each role as an input field
+// paints it and as any other control does, and the System verbose ink.
+struct SystemRoleColors {
+  std::array<RoleColors, editor_role_count> field{};
+  std::array<RoleColors, editor_role_count> control{};
+  std::uint32_t verbose{};
+  bool operator==(const SystemRoleColors &) const = default;
+};
+// The nominal pairs above (the System edit role measured as a field and as a
+// choice), then each painted pair: the text role's colour on the ground
+// role's fill or selection. A preset measures every painted pair; System
+// only those whose text or used ground part is overridden.
+[[nodiscard]] std::optional<RoleContrastFailure>
+first_role_contrast_failure(const EditorAppearance &appearance, const SystemRoleColors &system,
+                            std::span<const PaintedTextPair> painted);
+// "Lists: Text / Fill contrast is 1.0:1; at least 4.5:1 is required.", and
+// for a painted pair "Labels: Text / Fill contrast is 1.3:1 on the Window
+// fill; at least 4.5:1 is required."
 [[nodiscard]] std::string role_contrast_failure_text(const RoleContrastFailure &failure);
 
 // The 1 px outline of a flat control filled with `fill`: a third of the way

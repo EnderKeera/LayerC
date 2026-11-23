@@ -2,10 +2,12 @@
 // the calibration form's full-precision layout and a black accent that is
 // distinct from the preset. Rendered judgement stays with the lead; these
 // cases only assert the widget contract on a private X11 display.
+#include "accessible_widgets.hpp"
 #include "appearance_window.hpp"
 #include "calibration_window.hpp"
 #include "diagnostics_window.hpp"
 #include "editor_app.hpp"
+#include "editor_color.hpp"
 #include "editor_menus.hpp"
 #include "editor_style.hpp"
 #include "profile_edit.hpp"
@@ -38,6 +40,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -484,6 +487,153 @@ void linux_editor_appearance_contrast_floor_dialog() {
   expect(reset_cleared, "Reset role colors clears the line and the glyph");
   expect(restored && *restored == initial, "Apply after Reset role colors returns the preset");
   editor::apply_editor_appearance({}, root);
+}
+
+// review layer55 F-01: Appearance measures what FLTK paints in the real main
+// window, a role's text on the surface beneath it, and refuses like the
+// role's own pairs.
+void linux_editor_appearance_painted_pairs_dialog() {
+  if (editor::platform_contrast_palette()) {
+    std::cout << "Not applicable: a desktop contrast theme sets the overrides aside\n";
+    return;
+  }
+  using editor::EditorRole;
+  using editor::PaintedTextPair;
+  using editor::SurfacePart;
+  using editor::TextInk;
+  PrivateStore store;
+  editor::EditorApp app;
+  app.build();
+  auto &window = editor::EditorAppTestAccess::window(app);
+  window.show();
+  Fl::check();
+  for (const auto command : {editor::EditorCommand::profile_page, editor::EditorCommand::cooldown_page,
+                             editor::EditorCommand::binding_page, editor::EditorCommand::panel_page,
+                             editor::EditorCommand::automation_page, editor::EditorCommand::visual_page}) {
+    app.command(command);
+    Fl::check();
+  }
+  auto *profiles = editor::EditorAppTestAccess::profiles(app);
+  const Fl_Widget *preview = editor::EditorAppTestAccess::preview(app);
+
+  const auto pairs = editor::painted_text_pairs(window, profiles, preview, true);
+  const auto has = [&pairs](const PaintedTextPair &pair) {
+    return std::find(pairs.begin(), pairs.end(), pair) != pairs.end();
+  };
+  std::map<std::string, int> counts;
+  for (const auto &pair : pairs) {
+    std::string key(editor::role_label(pair.text));
+    key += pair.ink == TextInk::verbose ? " (verbose) -> " : " -> ";
+    key += editor::role_label(pair.ground.role);
+    key += pair.ground.input_field ? " field" : "";
+    key += pair.ground.part == SurfacePart::selection ? " selection" : " fill";
+    ++counts[key];
+  }
+  for (const auto &[key, count] : counts) std::cerr << "painted pair " << key << "\n";
+  expect(has({EditorRole::label, TextInk::role_text, {EditorRole::window, false, SurfacePart::fill}}),
+         "Labels text is painted on the window fill");
+  expect(has({EditorRole::checkbox, TextInk::role_text,
+              {EditorRole::window, false, SurfacePart::fill}}),
+         "check box text is painted on the window fill beneath it");
+  expect(std::any_of(pairs.begin(), pairs.end(),
+                     [](const PaintedTextPair &pair) {
+                       return pair.text == EditorRole::edit && pair.ground.role == EditorRole::edit &&
+                              !pair.ground.input_field;
+                     }),
+         "a choice's text is painted on its non-field fill");
+  expect(has({EditorRole::label, TextInk::role_text,
+              {EditorRole::window, false, SurfacePart::selection}}) &&
+             has({EditorRole::label, TextInk::role_text,
+                  {EditorRole::button, false, SurfacePart::fill}}),
+         "tab labels are painted on the selected and the unselected tab");
+  expect(std::none_of(pairs.begin(), pairs.end(),
+                      [](const PaintedTextPair &pair) {
+                        return (pair.text == EditorRole::list || pair.text == EditorRole::sidebar) &&
+                               pair.ground.role != pair.text;
+                      }),
+         "a browser paints its own fill: FLTK draws one without a box as a down box");
+
+  constexpr auto labels = static_cast<int>(EditorRole::label);
+  constexpr auto lists = static_cast<int>(EditorRole::list);
+  const std::string labels_refusal =
+      "Labels: Text / Fill contrast is " +
+      editor::contrast_ratio_label(editor::rgb_contrast_ratio(0x000000, 0x1F1F1F)) +
+      " on the Window fill; at least 4.5:1 is required.";
+  const std::string lists_refusal =
+      "Lists: Text / Selection contrast is 1.0:1; at least 4.5:1 is required.";
+  const auto status_line = [](Fl_Window &modal) {
+    for (int index = 0; index < modal.children(); ++index)
+      if (auto *mark = dynamic_cast<editor::EditorStatusMark *>(modal.child(index))) {
+        const auto *line = index + 1 < modal.children() ? modal.child(index + 1) : nullptr;
+        return std::pair<std::string, editor::StatusKind>{
+            line && line->label() ? line->label() : "", mark->kind()};
+      }
+    return std::pair<std::string, editor::StatusKind>{"<no mark>", editor::StatusKind::none};
+  };
+  bool warned{}, described{}, refused{}, selection_warned{}, selection_refused{}, repaired{};
+  ModalAction drive([&](Fl_Window &modal) {
+    auto *role = dynamic_cast<Fl_Choice *>(control(modal, "Role"));
+    auto *fill = dynamic_cast<Fl_Input *>(control(modal, "Role fill"));
+    auto *text = dynamic_cast<Fl_Input *>(control(modal, "Role text"));
+    auto *selection = dynamic_cast<Fl_Input *>(control(modal, "Role selection"));
+    auto *apply = dynamic_cast<Fl_Button *>(control(modal, "Apply"));
+    if (!role || !fill || !text || !selection || !apply) {
+      expect(false, "the appearance dialog owns Role, its colour fields and Apply");
+      modal.hide();
+      return;
+    }
+    expect(status_line(modal).first.empty(), "the Copper preset paints readable pairs");
+    // Readable on the Labels fill, painted on the Copper window.
+    role->value(labels);
+    role->do_callback();
+    fill->value("#FFFFFF");
+    fill->do_callback();
+    text->value("#000000");
+    text->do_callback();
+    warned = status_line(modal) ==
+             std::pair<std::string, editor::StatusKind>{labels_refusal, editor::StatusKind::warning};
+    described = editor::accessibility::accessible_description(*text) == labels_refusal;
+    role->value(0);
+    role->do_callback();
+    apply->do_callback();
+    refused = modal.shown() && role->value() == labels && Fl::focus() == text &&
+              status_line(modal).first == labels_refusal;
+    fill->value("");
+    fill->do_callback();
+    text->value("#FFFFFF");
+    text->do_callback();
+    // A list selection under the list text.
+    role->value(lists);
+    role->do_callback();
+    selection->value("#F0F0F0");
+    selection->do_callback();
+    selection_warned = status_line(modal) == std::pair<std::string, editor::StatusKind>{
+                                                 lists_refusal, editor::StatusKind::warning};
+    apply->do_callback();
+    selection_refused = modal.shown() && role->value() == lists && Fl::focus() == text &&
+                        status_line(modal).first == lists_refusal;
+    selection->value("");
+    selection->do_callback();
+    repaired = status_line(modal) ==
+               std::pair<std::string, editor::StatusKind>{"", editor::StatusKind::none};
+    apply->do_callback();
+    if (modal.shown()) modal.hide();
+  });
+  const auto applied = editor::edit_editor_appearance({}, window, profiles, preview);
+  expect(drive.delivered() && warned,
+         "black Labels text on the window shows the refusal naming the Window fill");
+  expect(described, "the role text field is described by the warning line");
+  expect(refused, "Apply refuses, selects Labels and focuses its text");
+  expect(selection_warned && selection_refused,
+         "a list selection under the list text warns and refuses on Text / Selection");
+  expect(repaired, "readable colours clear the line and the glyph");
+  const auto &label_override = applied ? applied->overrides[static_cast<std::size_t>(labels)]
+                                       : editor::RoleOverride{};
+  expect(applied && label_override.text == 0xFFFFFFU && !label_override.fill &&
+             applied->overrides[static_cast<std::size_t>(lists)] == editor::RoleOverride{},
+         "Apply succeeds once every painted pair clears its floor");
+  editor::apply_editor_appearance({}, window, profiles, preview);
+  window.hide();
 }
 
 void linux_editor_main_window_text_and_tab_labels() {

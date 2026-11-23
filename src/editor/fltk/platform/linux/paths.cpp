@@ -43,6 +43,10 @@ const char *appearance_replacement_prompt() noexcept {
   return "Applying a new choice replaces the file.";
 }
 
+std::optional<RoleContrastFailure> shared_appearance_failure(const EditorAppearance &) {
+  return std::nullopt;
+}
+
 std::optional<ContrastPalette> platform_contrast_palette() { return std::nullopt; }
 
 void refresh_editor_window_chrome() {}

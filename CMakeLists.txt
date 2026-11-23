@@ -425,6 +425,14 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     target_link_libraries(layerc_editor_live PUBLIC layerc_core layerc_windows)
     layerc_win32(layerc_editor_live)
 
+    # The Win32 editor's Appearance floors, free of its dialogs: the FLTK
+    # editor measures the shared registry record with the same check.
+    add_library(layerc_editor_contrast STATIC
+        src/editor/contrast/appearance_contrast.cpp)
+    target_include_directories(layerc_editor_contrast PUBLIC src/editor/contrast)
+    target_link_libraries(layerc_editor_contrast PUBLIC layerc_windows layerc_editor_color)
+    layerc_win32(layerc_editor_contrast)
+
     add_library(layerc_editor_ui STATIC
         src/editor/editor_dialog.cpp
         src/editor/editor_layout.cpp
@@ -442,7 +450,6 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_theme.cpp
         src/editor/editor_draw.cpp
         src/editor/editor_appearance.cpp
-        src/editor/appearance_contrast.cpp
         src/editor/accessible_text.cpp
         src/editor/editor_color_picker.cpp
         src/editor/editor_dialog_layouts.cpp
@@ -459,8 +466,8 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_hid.cpp)
     target_include_directories(layerc_editor_ui PUBLIC src/editor)
     target_link_libraries(layerc_editor_ui PUBLIC
-        layerc_editor_live layerc_editor_core layerc_core layerc_runtime
-        layerc_windows layerc_bundle
+        layerc_editor_live layerc_editor_core layerc_editor_contrast layerc_core
+        layerc_runtime layerc_windows layerc_bundle
         comctl32 comdlg32 dwmapi oleacc oleaut32 ole32 shell32 uxtheme user32 gdi32)
     layerc_win32(layerc_editor_ui)
 

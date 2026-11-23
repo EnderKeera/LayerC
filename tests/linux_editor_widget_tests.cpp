@@ -81,6 +81,7 @@ void automation_validate_json_is_a_dry_run();
 void linux_editor_calibration_layout_contracts();
 void linux_editor_black_accent_dialog_contracts();
 void linux_editor_appearance_contrast_floor_dialog();
+void linux_editor_appearance_painted_pairs_dialog();
 void linux_editor_main_window_text_and_tab_labels();
 void linux_editor_text_views_fit_content();
 void linux_editor_empty_automation_simulator_ready();
@@ -1111,6 +1112,7 @@ int main() {
   LAYERC_CALIBRATION_LAYOUT_CASE
   LAYERC_TEST_CASE(linux_editor_black_accent_dialog_contracts),
   LAYERC_TEST_CASE(linux_editor_appearance_contrast_floor_dialog),
+  LAYERC_TEST_CASE(linux_editor_appearance_painted_pairs_dialog),
   LAYERC_TEST_CASE(linux_editor_main_window_text_and_tab_labels),
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
   LAYERC_TEST_CASE(linux_editor_empty_automation_simulator_ready),

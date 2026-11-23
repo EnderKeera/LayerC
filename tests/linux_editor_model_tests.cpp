@@ -512,6 +512,150 @@ void appearance_floor_contracts() {
          "an overridden System list text below the floor is reported");
 }
 
+// review layer55 F-01: the floors measure the pairs FLTK paints, a role's
+// text on the surface beneath it, not only on the role's own fill.
+void painted_pair_floor_contracts() {
+  using namespace layerc::editor;
+  const auto role = [](const EditorRole value) { return static_cast<std::size_t>(value); };
+  const PaintedTextPair label_on_window{EditorRole::label, TextInk::role_text,
+                                        {EditorRole::window, false, SurfacePart::fill}};
+  const PaintedTextPair label_on_tab{EditorRole::label, TextInk::role_text,
+                                     {EditorRole::window, false, SurfacePart::selection}};
+  const std::array<PaintedTextPair, 9> representative{
+      label_on_window,
+      label_on_tab,
+      PaintedTextPair{EditorRole::label, TextInk::role_text,
+                      {EditorRole::button, false, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::checkbox, TextInk::role_text,
+                      {EditorRole::window, false, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::edit, TextInk::role_text,
+                      {EditorRole::edit, false, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::edit, TextInk::role_text,
+                      {EditorRole::edit, true, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::status, TextInk::verbose,
+                      {EditorRole::status, false, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::button, TextInk::role_text,
+                      {EditorRole::button, false, SurfacePart::fill}},
+      PaintedTextPair{EditorRole::list, TextInk::role_text,
+                      {EditorRole::list, false, SurfacePart::fill}}};
+  const SystemRoleColors unused_system{};
+
+  for (const auto theme : {EditorTheme::copper, EditorTheme::teal, EditorTheme::plum,
+                           EditorTheme::dark}) {
+    for (const auto accent : {std::optional<std::uint32_t>{}, std::optional<std::uint32_t>{0x000000}}) {
+      EditorAppearance appearance;
+      appearance.theme = theme;
+      appearance.accent = accent;
+      expect(!first_role_contrast_failure(appearance, unused_system, representative),
+             "every preset clears the painted pairs with its own or a black accent");
+    }
+  }
+  // A white accent tints the selected tab to #535353: its Labels text, the
+  // secondary grey, reads at 3.8:1 there.
+  EditorAppearance white_accent;
+  white_accent.accent = 0xFFFFFF;
+  const auto tab_failure = first_role_contrast_failure(white_accent, unused_system, representative);
+  expect(tab_failure && tab_failure->role == EditorRole::label &&
+             tab_failure->pair == ContrastPairKind::text_selection &&
+             tab_failure->ground == EditorRole::window &&
+             tab_failure->ground_part == SurfacePart::selection &&
+             role_contrast_failure_text(*tab_failure) ==
+                 "Labels: Text / Selection contrast is 3.8:1 on the Window selection; at least "
+                 "4.5:1 is required.",
+         "a white accent under the selected tab's label refuses on the Window selection");
+
+  // The reviewed case: readable on the Labels fill, painted on the window.
+  EditorAppearance labels;
+  labels.overrides[role(EditorRole::label)].fill = 0xFFFFFF;
+  labels.overrides[role(EditorRole::label)].text = 0x000000;
+  expect(!first_role_contrast_failure(labels, unused_system, {}),
+         "the nominal pairs alone miss Labels text drawn on the window");
+  const std::array<PaintedTextPair, 1> label_pairs{label_on_window};
+  const auto label_failure = first_role_contrast_failure(labels, unused_system, label_pairs);
+  expect(label_failure && label_failure->role == EditorRole::label &&
+             label_failure->pair == ContrastPairKind::text_fill &&
+             label_failure->ground == EditorRole::window &&
+             label_failure->ground_part == SurfacePart::fill &&
+             label_failure->ratio < 4.5 &&
+             role_contrast_failure_text(*label_failure) ==
+                 "Labels: Text / Fill contrast is " +
+                     contrast_ratio_label(rgb_contrast_ratio(0x000000, 0x1F1F1F)) +
+                     " on the Window fill; at least 4.5:1 is required.",
+         "black Labels text on the Copper window refuses and names the window fill");
+
+  // The mono diagnostics ink: #404040 passes the Status text (5.2:1) and
+  // not the verbose ink (3.6:1) until the Status text is set.
+  EditorAppearance status;
+  status.overrides[role(EditorRole::status)].fill = 0x404040;
+  const std::array<PaintedTextPair, 1> verbose_pairs{representative[6]};
+  expect(!first_role_contrast_failure(status, unused_system, {}),
+         "the Status text alone reads on a #404040 fill");
+  const auto verbose_failure = first_role_contrast_failure(status, unused_system, verbose_pairs);
+  expect(verbose_failure && verbose_failure->role == EditorRole::status &&
+             verbose_failure->pair == ContrastPairKind::text_fill && !verbose_failure->ground &&
+             role_contrast_failure_text(*verbose_failure) ==
+                 "Status text: Text / Fill contrast is 3.6:1; at least 4.5:1 is required.",
+         "the verbose ink on an overridden Status fill is measured");
+  status.overrides[role(EditorRole::status)].text = 0xFFFFFF;
+  expect(!first_role_contrast_failure(status, unused_system, verbose_pairs),
+         "a Status text override replaces the verbose ink");
+
+  // System: FLTK fills a text field with the input colour and a choice with
+  // the window colour, so an edit override is measured on both.
+  // FLTK's System colours: black text, white fields, grey controls.
+  SystemRoleColors system;
+  for (auto &colors : system.field) colors = RoleColors{0xFFFFFF, 0x000000, 0x000080};
+  for (auto &colors : system.control) colors = RoleColors{0xC0C0C0, 0x000000, 0x000080};
+  system.verbose = 0x808080;
+  EditorAppearance system_theme;
+  system_theme.theme = EditorTheme::system;
+  expect(!first_role_contrast_failure(system_theme, system, representative),
+         "untouched System roles never refuse, painted pairs included");
+  system_theme.overrides[role(EditorRole::edit)].text = 0x595959;
+  expect(rgb_contrast_ratio(0x595959, 0xFFFFFF) >= 4.5,
+         "the edit text reads in a white field");
+  const auto choice_failure = first_role_contrast_failure(system_theme, system, {});
+  expect(choice_failure && choice_failure->role == EditorRole::edit &&
+             choice_failure->pair == ContrastPairKind::text_fill && !choice_failure->ground &&
+             role_contrast_failure_text(*choice_failure) ==
+                 "Text fields: Text / Fill contrast is " +
+                     contrast_ratio_label(rgb_contrast_ratio(0x595959, 0xC0C0C0)) +
+                     "; at least 4.5:1 is required.",
+         "System edit text readable in a field refuses on a choice's window fill");
+  expect(!first_role_contrast_failure(system_theme, SystemRoleColors{system.field, system.field,
+                                                                     system.verbose},
+                                      {}),
+         "the same text passes where both fills are the input colour");
+
+  // System ground overrides: an untouched label on an overridden surface
+  // whose own text reads.
+  EditorAppearance system_ground;
+  system_ground.theme = EditorTheme::system;
+  system_ground.overrides[role(EditorRole::window)].fill = 0x000000;
+  system_ground.overrides[role(EditorRole::window)].text = 0xFFFFFF;
+  expect(!first_role_contrast_failure(system_ground, system, {}),
+         "the window's own text reads on its black fill");
+  const auto ground_failure = first_role_contrast_failure(system_ground, system, representative);
+  expect(ground_failure && ground_failure->role == EditorRole::label &&
+             ground_failure->ground == EditorRole::window &&
+             ground_failure->ground_part == SurfacePart::fill &&
+             role_contrast_failure_text(*ground_failure) ==
+                 "Labels: Text / Fill contrast is 1.0:1 on the Window fill; at least 4.5:1 is "
+                 "required.",
+         "System label text on an overridden black window fill refuses");
+  system_ground.overrides[role(EditorRole::window)] = {};
+  system_ground.overrides[role(EditorRole::window)].selection = 0x000000;
+  const auto selection_failure =
+      first_role_contrast_failure(system_ground, system, representative);
+  expect(selection_failure && selection_failure->role == EditorRole::label &&
+             selection_failure->pair == ContrastPairKind::text_selection &&
+             selection_failure->ground_part == SurfacePart::selection &&
+             role_contrast_failure_text(*selection_failure) ==
+                 "Labels: Text / Selection contrast is 1.0:1 on the Window selection; at least "
+                 "4.5:1 is required.",
+         "System tab text on an overridden window selection refuses");
+}
+
 // Outcome kinds belong to producers, not to display wording or file paths.
 void typed_status_outcome_contracts() {
   using namespace layerc::editor;
@@ -665,5 +809,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(accessible_status_voice_contracts),
     LAYERC_TEST_CASE(editor_token_contracts),
     LAYERC_TEST_CASE(appearance_floor_contracts),
+    LAYERC_TEST_CASE(painted_pair_floor_contracts),
     LAYERC_TEST_CASE(typed_status_outcome_contracts),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

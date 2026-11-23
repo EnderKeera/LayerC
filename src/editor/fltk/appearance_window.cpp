@@ -3,6 +3,7 @@
 #include "editor_color.hpp"
 #include "editor_style.hpp"
 #include "profile_mutations.hpp"
+#include "platform/editor_appearance_store.hpp"
 #include "platform/window_chrome.hpp"
 
 #include <FL/Fl.H>
@@ -22,8 +23,10 @@
 #include <FL/Fl_Tooltip.H>
 #include <FL/Fl_Window.H>
 
+#include <algorithm>
 #include <array>
 #include <string>
+#include <vector>
 
 namespace layerc::editor {
 namespace {
@@ -109,13 +112,16 @@ RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
   return system_role_colors(role, dynamic_cast<Fl_Input_ *>(widget) != nullptr);
 }
 
-// What the System theme measures each role against: the edit role as an
-// input field, the role Appearance's floors care about.
-std::array<RoleColors, editor_role_count> system_roles() {
-  std::array<RoleColors, editor_role_count> roles{};
-  for (std::size_t index = 0; index < roles.size(); ++index)
-    roles[index] = system_role_colors(static_cast<EditorRole>(index), true);
-  return roles;
+// What the System theme measures each role against: FLTK's colours as an
+// input field and as another control paint it, and the verbose ink.
+SystemRoleColors system_role_set() {
+  SystemRoleColors colors;
+  for (std::size_t index = 0; index < editor_role_count; ++index) {
+    colors.field[index] = system_role_colors(static_cast<EditorRole>(index), true);
+    colors.control[index] = system_role_colors(static_cast<EditorRole>(index), false);
+  }
+  colors.verbose = current_editor_tokens().verbose;
+  return colors;
 }
 
 void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label,
@@ -172,6 +178,79 @@ void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_
   if (auto *group = widget->as_group())
     for (int index = 0; index < group->children(); ++index)
       apply_tree(group->child(index), appearance, sidebar, preview, label);
+}
+
+// A box that fills its area; a frame or no box shows the surface beneath.
+bool paints_surface(const Fl_Widget &widget) {
+  if (widget.as_window()) return true;
+  // Fl_Browser_::draw fills a browser without a box as an FL_DOWN_BOX.
+  if (widget.box() == FL_NO_BOX && dynamic_cast<const Fl_Browser_ *>(&widget)) return true;
+  static constexpr std::array<Fl_Boxtype, 8> unfilled{
+      FL_NO_BOX, FL_UP_FRAME, FL_DOWN_FRAME, FL_THIN_UP_FRAME, FL_THIN_DOWN_FRAME,
+      FL_ENGRAVED_FRAME, FL_EMBOSSED_FRAME, FL_BORDER_FRAME};
+  const auto box = widget.box();
+  return box != FL_SHADOW_FRAME &&
+         std::find(unfilled.begin(), unfilled.end(), box) == unfilled.end();
+}
+
+struct PairScope {
+  const Fl_Widget *sidebar{};
+  const Fl_Widget *preview{};
+  bool preset{};
+  std::vector<PaintedTextPair> pairs;
+  void add(const EditorRole text, const TextInk ink, const PaintedSurface ground) {
+    const PaintedTextPair pair{text, ink, ground};
+    if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end()) pairs.push_back(pair);
+  }
+};
+
+// `ground` is the painted surface this widget sits on.
+void collect_pairs(Fl_Widget &widget, PairScope &scope, const PaintedSurface ground) {
+  if (&widget == scope.preview) return; // its contents keep the profile's colours
+  const auto role = role_of(&widget, scope.sidebar, scope.preview);
+  const auto *tabs = dynamic_cast<const Fl_Tabs *>(widget.parent());
+  PaintedSurface beneath = ground;
+  if (role && paints_surface(widget))
+    beneath = {*role, dynamic_cast<Fl_Input_ *>(&widget) != nullptr, SurfacePart::fill};
+  // A primary button paints the accent with its computed contrasting label.
+  const bool primary = is_primary_button(widget);
+  if (role && !primary) {
+    if (auto *output = dynamic_cast<Fl_Multiline_Output *>(&widget);
+        output != nullptr && output->textfont() == FL_COURIER)
+      scope.add(*role, TextInk::verbose, beneath);
+    else if (dynamic_cast<Fl_Input_ *>(&widget) || dynamic_cast<Fl_Browser_ *>(&widget) ||
+             dynamic_cast<Fl_Menu_ *>(&widget))
+      scope.add(*role, TextInk::role_text, beneath);
+    const char *label = widget.label();
+    if (label != nullptr && *label != '\0' && widget.labeltype() != FL_NO_LABEL &&
+        !widget.as_window()) {
+      if (tabs) {
+        // FLTK 1.4 Fl_Tabs::draw_tab: the selected tab on the tabs' selection
+        // colour, the others on their page's (the Buttons fill with a preset).
+        const auto tabs_role = role_of(widget.parent(), scope.sidebar, scope.preview)
+                                   .value_or(EditorRole::window);
+        scope.add(EditorRole::label, TextInk::role_text,
+                  {tabs_role, false, SurfacePart::selection});
+        scope.add(EditorRole::label, TextInk::role_text,
+                  scope.preset ? PaintedSurface{EditorRole::button, false, SurfacePart::fill}
+                               : PaintedSurface{*role, false, SurfacePart::selection});
+      } else {
+        // Buttons and boxes draw their label in their own text; every other
+        // widget in the Labels text (paint above).
+        const bool own_ink = dynamic_cast<Fl_Button *>(&widget) || dynamic_cast<Fl_Box *>(&widget);
+        const auto align = widget.align();
+        const bool inside = (align & 15U) == 0 || (align & FL_ALIGN_INSIDE) != 0;
+        scope.add(own_ink ? *role : EditorRole::label, TextInk::role_text,
+                  inside ? beneath : ground);
+      }
+    }
+  }
+  if (auto *group = widget.as_group()) {
+    // Fl_Tabs fills its panel with the selected page's colour.
+    const auto inner = tabs && role ? PaintedSurface{*role, false, SurfacePart::fill} : beneath;
+    for (int index = 0; index < group->children(); ++index)
+      collect_pairs(*group->child(index), scope, inner);
+  }
 }
 
 std::string hex_or_empty(const std::optional<std::uint32_t> &color) {
@@ -245,17 +324,30 @@ public:
     }, this);
     end();
     set_modal();
+    // The trees keep their widgets while the dialog is open: the pairs of
+    // the main window and of this dialog, for presets and for System.
+    for (const bool preset : {true, false}) {
+      auto &pairs = preset ? painted_preset_ : painted_system_;
+      pairs = painted_text_pairs(root_, sidebar_, preview_, preset);
+      for (const auto &pair : painted_text_pairs(*this, nullptr, nullptr, preset))
+        if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end()) pairs.push_back(pair);
+    }
     load();
   }
 
   // Precedence: an invalid field's message, then the contrast-theme notice
   // (the overrides are set aside, so nothing refuses), then the first role
-  // below a floor, else an empty line.
+  // below a floor as FLTK paints it, then as the shared Windows record
+  // paints in the other editor, else an empty line.
   void refresh_contrast_notice() {
     if (!invalid_fields_) {
-      failure_ = editor_style_contrast_palette()
-                     ? std::nullopt
-                     : first_role_contrast_failure(staged, system_roles());
+      failure_.reset();
+      if (!editor_style_contrast_palette()) {
+        failure_ = first_role_contrast_failure(
+            staged, system_role_set(),
+            staged.theme == EditorTheme::system ? painted_system_ : painted_preset_);
+        if (!failure_) failure_ = shared_appearance_failure(staged);
+      }
       if (editor_style_contrast_palette())
         status->label("A contrast theme is on, so Windows colors are in use.");
       else if (failure_)
@@ -281,14 +373,26 @@ public:
 private:
   using Choose = void (AppearanceDialog::*)();
   // Apply refuses below a floor unless a contrast theme sets the overrides
-  // aside: it selects the failing role and puts focus on its text, the
-  // colour every measured pair involves.
+  // aside; reading the fields measures the shared record once more first.
+  // It selects the failing role and focuses its text, the colour every text
+  // pair involves, or its fill for Disabled / Fill. When only the surface
+  // beneath was overridden, that role and part are selected instead.
   void apply_changes() {
     if (!read_fields()) return;
     if (failure_ && !editor_style_contrast_palette()) {
-      role->value(static_cast<int>(failure_->role));
+      auto selected = failure_->role;
+      Fl_Input *focus = failure_->pair == ContrastPairKind::disabled_fill ? fill : text;
+      if (failure_->ground && !staged.overrides[static_cast<std::size_t>(failure_->role)].text) {
+        const auto &ground = staged.overrides[static_cast<std::size_t>(*failure_->ground)];
+        const bool on_selection = failure_->ground_part == SurfacePart::selection;
+        if (on_selection ? ground.selection.has_value() : ground.fill.has_value()) {
+          selected = *failure_->ground;
+          focus = on_selection ? selection : fill;
+        }
+      }
+      role->value(static_cast<int>(selected));
       load_role();
-      text->take_focus();
+      focus->take_focus();
       return;
     }
     applied = true;
@@ -401,6 +505,7 @@ private:
 
   bool invalid_fields_{};
   std::optional<RoleContrastFailure> failure_;
+  std::vector<PaintedTextPair> painted_preset_, painted_system_;
 
   struct Target {
     AppearanceDialog *dialog{};
@@ -445,6 +550,13 @@ void paint_appearance_window(const EditorAppearance &appearance, Fl_Window &root
 }
 
 } // namespace
+
+std::vector<PaintedTextPair> painted_text_pairs(Fl_Widget &root, const Fl_Widget *sidebar,
+                                                const Fl_Widget *preview, const bool preset) {
+  PairScope scope{sidebar, preview, preset, {}};
+  collect_pairs(root, scope, {EditorRole::window, false, SurfacePart::fill});
+  return std::move(scope.pairs);
+}
 
 void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root,
                              const Fl_Widget *sidebar, const Fl_Widget *preview) {

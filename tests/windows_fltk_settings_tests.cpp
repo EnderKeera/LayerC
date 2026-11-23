@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -499,6 +500,126 @@ void appearance_contrast_theme_sets_floors_aside() {
   editor::apply_editor_appearance({}, root);
 }
 
+// Runs `action` on the Appearance dialog once FLTK has mapped it.
+std::optional<editor::EditorAppearance>
+drive_appearance(Fl_Window &root, std::function<void(Fl_Window &)> action, bool &delivered) {
+  struct Drive {
+    std::function<void(Fl_Window &)> action;
+    bool *delivered{};
+    int attempts{};
+    static void tick(void *data) {
+      auto &self = *static_cast<Drive *>(data);
+      if (auto *modal = Fl::modal()) {
+        *self.delivered = true;
+        self.action(*modal);
+        if (modal->shown()) modal->hide();
+        return;
+      }
+      if (++self.attempts < 200) Fl::repeat_timeout(0.01, &Drive::tick, data);
+    }
+  } drive{std::move(action), &delivered};
+  delivered = false;
+  Fl::add_timeout(0.01, &Drive::tick, &drive);
+  auto result = editor::edit_editor_appearance({}, root, nullptr, nullptr);
+  Fl::remove_timeout(&Drive::tick, &drive);
+  return result;
+}
+
+// The warning line after the dialog's status mark, and whether it warns.
+std::pair<std::string, bool> appearance_line(Fl_Window &modal) {
+  for (int i = 0; i < modal.children(); ++i)
+    if (auto *mark = dynamic_cast<editor::EditorStatusMark *>(modal.child(i))) {
+      const auto *line = i + 1 < modal.children() ? modal.child(i + 1) : nullptr;
+      return {line && line->label() ? line->label() : "",
+              mark->kind() == editor::StatusKind::warning};
+    }
+  return {"<no mark>", false};
+}
+
+// review layer55 F-01: FLTK's Appearance measures the shared record the
+// Win32 editor paints, with the hover part FLTK keeps but cannot edit.
+void appearance_shared_record_floors() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  constexpr auto buttons = static_cast<std::size_t>(editor::EditorRole::button);
+  const auto seed = [](const std::uint32_t hover) {
+    platform::EditorAppearanceSettings native;
+    native.overrides[buttons].fields = platform::editor_hover;
+    native.overrides[buttons].hover = hover;
+    return static_cast<bool>(platform::write_editor_appearance(native));
+  };
+  editor::EditorAppearance white_text;
+  white_text.overrides[buttons].text = 0xFFFFFFU;
+  expect(!editor::first_role_contrast_failure(white_text, {}),
+         "white Buttons text clears FLTK's own floors");
+  if (!expect(seed(0x101010U), "seed a dark retained Buttons hover")) return;
+  expect(!editor::shared_appearance_failure(white_text),
+         "white text reads on the dark hover the Win32 editor paints");
+  if (!expect(seed(0xFFFFFFU), "seed a white retained Buttons hover")) return;
+  const std::string refusal =
+      "Buttons: Text / Hover contrast is 1.0:1; at least 4.5:1 is required.";
+  const auto failure = editor::shared_appearance_failure(white_text);
+  expect(failure && failure->role == editor::EditorRole::button &&
+             failure->pair == editor::ContrastPairKind::text_hover && !failure->ground &&
+             editor::role_contrast_failure_text(*failure) == refusal,
+         "white text on the retained white hover refuses in the Win32 editor's words");
+
+  Fl_Double_Window root(220, 100, "Appearance shared record fixture");
+  root.end();
+  root.show();
+  bool delivered{}, warned{}, described{}, refused{};
+  const auto refused_result = drive_appearance(root, [&](Fl_Window &modal) {
+    auto *role = dynamic_cast<Fl_Choice *>(child(modal, "Role"));
+    auto *text = dynamic_cast<Fl_Input *>(child(modal, "Role text"));
+    auto *apply = child(modal, "Apply");
+    if (!role || !text || !apply) return;
+    role->value(static_cast<int>(buttons));
+    role->do_callback();
+    text->value("#FFFFFF");
+    text->do_callback();
+    const auto [line, warning] = appearance_line(modal);
+    warned = line == refusal && warning;
+    described = editor::accessibility::accessible_description(*text) == refusal;
+    role->value(0);
+    role->do_callback();
+    apply->do_callback();
+    refused = modal.shown() && role->value() == static_cast<int>(buttons) &&
+              Fl::focus() == text && appearance_line(modal).first == refusal;
+  }, delivered);
+  expect(delivered && warned, "the dialog warns with the shared record's refusal");
+  expect(described, "the role text field is described by the warning line");
+  expect(refused && !refused_result,
+         "Apply refuses, selects Buttons and focuses its text; the dialog is cancelled");
+  const auto kept = platform::read_editor_appearance();
+  expect(kept.value && kept.value->overrides[buttons].fields == platform::editor_hover &&
+             kept.value->overrides[buttons].hover == 0xFFFFFFU,
+         "the refused draft leaves the shared record unchanged");
+
+  // A contrast theme sets every floor aside, the shared record's included.
+  platform::set_native_high_contrast_override(true);
+  bool quiet{};
+  const auto contrast_result = drive_appearance(root, [&](Fl_Window &modal) {
+    auto *role = dynamic_cast<Fl_Choice *>(child(modal, "Role"));
+    auto *text = dynamic_cast<Fl_Input *>(child(modal, "Role text"));
+    auto *apply = child(modal, "Apply");
+    if (!role || !text || !apply) return;
+    role->value(static_cast<int>(buttons));
+    role->do_callback();
+    text->value("#FFFFFF");
+    text->do_callback();
+    const auto [line, warning] = appearance_line(modal);
+    quiet = !warning && line == "A contrast theme is on, so Windows colors are in use.";
+    apply->do_callback();
+  }, delivered);
+  expect(delivered && quiet, "a contrast theme shows its notice instead of the shared refusal");
+  expect(contrast_result && contrast_result->overrides[buttons].text == 0xFFFFFFU,
+         "Apply keeps the draft while a contrast theme is on");
+  platform::set_native_high_contrast_override(false);
+  editor::apply_editor_appearance({}, root);
+}
+
 void caption_decoration_and_pruning() {
   const SettingsFixture fixture;
   if (!expect(fixture.ready(), "isolate registry and profile store")) return;
@@ -624,6 +745,7 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(text_scale_startup_and_keys),
       LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
       LAYERC_TEST_CASE(appearance_contrast_theme_sets_floors_aside),
+      LAYERC_TEST_CASE(appearance_shared_record_floors),
       LAYERC_TEST_CASE(caption_decoration_and_pruning),
       LAYERC_TEST_CASE(dpi_changes_keep_text_scale),
       LAYERC_TEST_CASE(editor_tooltips_keys_and_menu),
