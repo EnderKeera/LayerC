@@ -5,6 +5,7 @@
 #include "linux_editor_test_access.hpp"
 #include "options_window.hpp"
 #include "platform/contrast.hpp"
+#include "platform/win32/daemon_hub.hpp"
 #include "platform/win32/desktop_listener.hpp"
 #include "platform/win32/settings_store.hpp"
 #include "platform/win32/startup.hpp"
@@ -27,6 +28,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -36,6 +38,19 @@
 void editor_tooltips_keys_and_menu();
 void stepped_fields_and_preview_nudge();
 void show_evidence_tooltip(void *);
+
+namespace layerc::editor {
+DaemonHub &product_daemon_hub() {
+  static DaemonHub hub(DaemonHubEnvironment{
+      .pipe_name = L"\\\\.\\pipe\\LayerC.FltkSettingsTests." + std::to_wstring(GetCurrentProcessId()) +
+                   L"." + std::to_wstring(GetTickCount64()),
+      .expected_server_process_id = GetCurrentProcessId(),
+      .start_daemon = {},
+      .signal_reload = {},
+  });
+  return hub;
+}
+} // namespace layerc::editor
 
 namespace {
 namespace editor = layerc::editor;
@@ -105,7 +120,7 @@ void shared_appearance_record() {
   editor::EditorAppearance choice;
   choice.theme = editor::EditorTheme::plum;
   choice.overrides.front().selection = 0;
-  expect(!editor::save_platform_appearance(choice), "save through the FLTK appearance store");
+  expect(!editor::save_platform_appearance(choice, false), "save through the FLTK appearance store");
   const auto saved = platform::read_editor_appearance();
   if (!expect(saved.value.has_value(), "Win32 reads FLTK's save")) return;
   for (std::size_t i = 0; i < saved.value->overrides.size(); ++i) {
@@ -116,19 +131,55 @@ void shared_appearance_record() {
            "Win32-only fields and values survive and stale FLTK fields are replaced");
   }
   expect(editor::load_platform_appearance().appearance == choice, "FLTK reads its saved choice");
+}
 
-  constexpr std::array invalid{std::byte{0}};
-  expect(static_cast<bool>(platform::write_layerc_registry_binary(L"EditorAppearance", invalid)),
-         "seed an invalid structured record");
+constexpr std::array invalid_appearance{std::byte{0}};
+constexpr auto unreadable_appearance_text =
+    "Appearance not saved: the saved appearance settings could not be read.";
+
+bool invalidate_appearance() {
+  return static_cast<bool>(platform::write_layerc_registry_binary(L"EditorAppearance", invalid_appearance));
+}
+
+void unreadable_appearance_record_requires_consent() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  constexpr auto buttons = static_cast<std::size_t>(editor::EditorRole::button);
+  platform::EditorAppearanceSettings native;
+  native.overrides[buttons].fields = platform::editor_hover;
+  native.overrides[buttons].hover = 0x101010U;
+  if (!expect(static_cast<bool>(platform::write_editor_appearance(native)) &&
+                  platform::read_editor_appearance().value.has_value(),
+              "the retained hover starts in a readable record")) return;
+  if (!expect(invalidate_appearance(), "seed an invalid structured record")) return;
   for (const auto &loaded : {editor::load_platform_appearance(), editor::load_startup_appearance().editor})
     expect(loaded.appearance == editor::EditorAppearance{} &&
                loaded.error == "The editor appearance settings could not be read; defaults are in use.",
            "invalid record or failed migration reports defaults");
-  expect(!editor::save_platform_appearance(choice), "a save can replace the invalid record");
+
+  editor::EditorAppearance choice;
+  choice.theme = editor::EditorTheme::plum;
+  const auto before = platform::read_layerc_registry_binary(L"EditorAppearance", 1024);
+  const auto refused = editor::save_platform_appearance(choice, false);
+  const auto after = platform::read_layerc_registry_binary(L"EditorAppearance", 1024);
+  expect(refused && refused->unreadable && refused->text == unreadable_appearance_text,
+         "a failed merge read is refused without consent");
+  expect(before.value && before.value == after.value, "refusing an unreadable merge writes no bytes");
+
+  if (!expect(static_cast<bool>(platform::write_editor_appearance(native)), "restore a readable record")) return;
+  expect(!editor::save_platform_appearance(choice, false), "retry merges the readable record without consent");
+  const auto merged = platform::read_editor_appearance();
+  expect(merged.value && merged.value->overrides[buttons].fields == platform::editor_hover &&
+             merged.value->overrides[buttons].hover == native.overrides[buttons].hover &&
+             editor::to_editor_appearance(*merged.value) == choice,
+         "the saved choice keeps the retained hover from the fresh merge read");
+
+  if (!expect(invalidate_appearance(), "the merge read fails again")) return;
+  expect(!editor::save_platform_appearance(choice, true), "consent replaces the unreadable record");
   const auto replaced = platform::read_editor_appearance();
-  expect(replaced.value && replaced.value->overrides.front().fields == platform::editor_selection &&
+  expect(replaced.value && replaced.value->overrides[buttons].fields == 0 &&
              editor::to_editor_appearance(*replaced.value) == choice,
-         "replacement starts from defaults");
+         "replacement writes a valid record starting from defaults");
 }
 
 void startup_migrates_legacy_appearance() {
@@ -610,29 +661,83 @@ void appearance_contrast_theme_sets_floors_aside() {
   editor::apply_editor_appearance({}, root);
 }
 
-// Runs `action` on the Appearance dialog once FLTK has mapped it.
-std::optional<editor::EditorAppearance>
-drive_appearance(Fl_Window &root, std::function<void(Fl_Window &)> action, bool &delivered) {
+using ModalAction = std::function<void(Fl_Window &)>;
+
+bool drive_appearance_dialogs(const std::function<void()> &run,
+                              const std::initializer_list<ModalAction> actions) {
   struct Drive {
-    std::function<void(Fl_Window &)> action;
-    bool *delivered{};
+    const ModalAction *next, *end;
     int attempts{};
     static void tick(void *data) {
       auto &self = *static_cast<Drive *>(data);
       if (auto *modal = Fl::modal()) {
-        *self.delivered = true;
-        self.action(*modal);
+        (*self.next++)(*modal);
         if (modal->shown()) modal->hide();
-        return;
       }
-      if (++self.attempts < 200) Fl::repeat_timeout(0.01, &Drive::tick, data);
+      if (self.next != self.end && ++self.attempts < 200)
+        Fl::repeat_timeout(0.01, &Drive::tick, data);
     }
-  } drive{std::move(action), &delivered};
-  delivered = false;
-  Fl::add_timeout(0.01, &Drive::tick, &drive);
-  auto result = editor::edit_editor_appearance({}, root, nullptr, nullptr);
-  Fl::remove_timeout(&Drive::tick, &drive);
+    ~Drive() { Fl::remove_timeout(&Drive::tick, this); }
+  } drive{actions.begin(), actions.end()};
+  if (drive.next != drive.end) Fl::add_timeout(0.01, &Drive::tick, &drive);
+  run();
+  return drive.next == drive.end;
+}
+
+// Runs `action` on the Appearance dialog once FLTK has mapped it.
+std::optional<editor::EditorAppearance>
+drive_appearance(Fl_Window &root, ModalAction action, bool &delivered) {
+  std::optional<editor::EditorAppearance> result;
+  delivered = drive_appearance_dialogs([&] {
+    result = editor::edit_editor_appearance({}, root, nullptr, nullptr);
+  }, {std::move(action)});
   return result;
+}
+
+void appearance_command_retries_after_failed_merge_read() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  platform::EditorAppearanceSettings saved;
+  saved.theme = platform::EditorTheme::plum;
+  if (!expect(static_cast<bool>(platform::write_editor_appearance(saved)), "seed a readable startup appearance")) return;
+  editor::EditorApp app;
+  app.build();
+  app.show();
+  expect(app.appearance().theme == editor::EditorTheme::plum, "the editor loads the readable startup record");
+  const auto run = [&] { app.command(editor::EditorCommand::appearance); };
+  expect(drive_appearance_dialogs(run, {[](Fl_Window &modal) {
+    auto *theme = dynamic_cast<Fl_Choice *>(child(modal, "Theme"));
+    auto *apply = child(modal, "Apply");
+    if (!expect(theme && apply, "a readable startup opens Appearance without a replacement prompt")) return;
+    theme->value(static_cast<int>(editor::EditorTheme::teal));
+    theme->do_callback();
+    if (expect(invalidate_appearance(), "the saved record becomes unreadable before Apply"))
+      apply->do_callback();
+  }}), "the first Appearance dialog ran");
+  using Access = editor::EditorAppTestAccess;
+  const auto *status = Access::status(app);
+  expect(status && Access::status_kind(app) == editor::StatusKind::warning &&
+             std::string_view(status->value()) == std::string(unreadable_appearance_text) +
+                 " The choice applies until LayerE closes." &&
+             app.appearance().theme == editor::EditorTheme::teal && platform::read_editor_appearance().failed(),
+         "the command keeps the in-memory choice, warns, and does not replace the unreadable record");
+
+  expect(drive_appearance_dialogs(run, {[](Fl_Window &modal) {
+    auto *proceed = child(modal, "Continue");
+    if (expect(proceed && child(modal, std::string(unreadable_appearance_text) +
+                 "\nApplying a new choice replaces the saved settings."),
+               "reopening Appearance explains the failure and asks for replacement consent"))
+      proceed->do_callback();
+  }, [](Fl_Window &modal) {
+    if (auto *apply = child(modal, "Apply")) apply->do_callback();
+    else expect(false, "consent opens the Appearance dialog");
+  }}), "the consent prompt and Appearance dialog both ran");
+  const auto replaced = platform::read_editor_appearance();
+  expect(Access::status_kind(app) == editor::StatusKind::success &&
+             replaced.value && editor::to_editor_appearance(*replaced.value) == app.appearance(),
+         "after consent the command saves a valid replacement");
 }
 
 // The warning line after the dialog's status mark, and whether it warns.
@@ -816,7 +921,7 @@ void appearance_primary_button_and_system_floors() {
              native_accent->pair == editor::ContrastPairKind::text_fill,
          "an explicit System accent checks the same native primary pair");
   system.accent.reset();
-  expect(!editor::save_platform_appearance(system), "save the untouched System palette");
+  expect(!editor::save_platform_appearance(system, false), "save the untouched System palette");
 
   constexpr auto buttons = static_cast<std::size_t>(editor::EditorRole::button);
   platform::EditorAppearanceSettings later;
@@ -831,9 +936,10 @@ void appearance_primary_button_and_system_floors() {
   expect(hover && hover->role == editor::EditorRole::button &&
              hover->pair == editor::ContrastPairKind::text_hover && !hover->primary_button,
          "a retained System hover checks its pair even with an unrelated border override");
-  const auto refused = editor::save_platform_appearance(system);
+  const auto refused = editor::save_platform_appearance(system, false);
   const auto kept = platform::read_editor_appearance();
-  expect(refused && refused->find("Buttons: Text / Hover contrast is 1.0:1") != std::string::npos &&
+  expect(refused && !refused->unreadable &&
+             refused->text.find("Buttons: Text / Hover contrast is 1.0:1") != std::string::npos &&
              kept.value && kept.value->accent == later.accent &&
              kept.value->overrides[buttons].hover == 0xF3F3F3U,
          "persistence rechecks the merged record without replacing it on refusal");
@@ -986,6 +1092,8 @@ int main(const int argc, char **argv) {
   return layerc::test::run({
       LAYERC_TEST_CASE(appearance_mapping),
       LAYERC_TEST_CASE(shared_appearance_record),
+      LAYERC_TEST_CASE(unreadable_appearance_record_requires_consent),
+      LAYERC_TEST_CASE(appearance_command_retries_after_failed_merge_read),
       LAYERC_TEST_CASE(startup_migrates_legacy_appearance),
       LAYERC_TEST_CASE(options_store),
       LAYERC_TEST_CASE(options_dialog_actions_and_descriptions),

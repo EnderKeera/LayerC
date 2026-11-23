@@ -35,8 +35,11 @@ AppearanceLoad load_platform_appearance() {
   return load_editor_appearance(editor_appearance_path());
 }
 
-std::optional<std::string> save_platform_appearance(const EditorAppearance &appearance) {
-  return save_editor_appearance(editor_appearance_path(), appearance);
+std::optional<AppearanceSaveFailure>
+save_platform_appearance(const EditorAppearance &appearance, bool) {
+  if (const auto error = save_editor_appearance(editor_appearance_path(), appearance))
+    return AppearanceSaveFailure{*error};
+  return std::nullopt;
 }
 
 const char *appearance_replacement_prompt() noexcept {

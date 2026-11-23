@@ -4,8 +4,16 @@
 
 namespace layerc::editor {
 
+struct AppearanceSaveFailure {
+  std::string text;
+  bool unreadable{};
+};
+
 [[nodiscard]] AppearanceLoad load_platform_appearance();
-[[nodiscard]] std::optional<std::string> save_platform_appearance(const EditorAppearance &appearance);
+// On Windows, replacing an unreadable saved record requires consent.
+// A missing record is not a failure.
+[[nodiscard]] std::optional<AppearanceSaveFailure>
+save_platform_appearance(const EditorAppearance &appearance, bool replace_unreadable);
 [[nodiscard]] const char *appearance_replacement_prompt() noexcept;
 // Windows: the first floor the Win32 editor would refuse once `appearance`
 // is merged into the shared record it also paints, with the border, hover

@@ -68,15 +68,20 @@ AppearanceLoad load_platform_appearance() {
   return decode_appearance(platform::read_editor_appearance());
 }
 
-std::optional<std::string> save_platform_appearance(const EditorAppearance &appearance) {
+std::optional<AppearanceSaveFailure>
+save_platform_appearance(const EditorAppearance &appearance, const bool replace_unreadable) {
   const auto read = platform::read_editor_appearance();
+  if (read.failed() && !replace_unreadable)
+    return AppearanceSaveFailure{
+        "Appearance not saved: the saved appearance settings could not be read.", true};
   const auto merged = merge_editor_appearance(
       appearance, read.value.value_or(platform::EditorAppearanceSettings{}));
   if (!platform::native_high_contrast())
     if (const auto failure = first_contrast_failure(merged))
-      return "Appearance not saved: " + platform::wide_to_utf8(contrast_failure_text(*failure));
+      return AppearanceSaveFailure{
+          "Appearance not saved: " + platform::wide_to_utf8(contrast_failure_text(*failure))};
   if (!platform::write_editor_appearance(merged))
-    return "Appearance not saved: Windows refused the setting.";
+    return AppearanceSaveFailure{"Appearance not saved: Windows refused the setting."};
   return std::nullopt;
 }
 

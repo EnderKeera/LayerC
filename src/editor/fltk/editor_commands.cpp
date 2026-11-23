@@ -563,7 +563,8 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
       {EditorCommand::appearance, "&Tools/A&ppearance...", "A&ppearance...", 0, 0,
        FL_MENU_DIVIDER, 0, 0, +[](const EditorApp &) { return true; },
        +[](EditorApp &app) {
-         if (!app.appearance_error_.empty()) {
+         const bool replace = !app.appearance_error_.empty();
+         if (replace) {
            fl_message_title("Editor appearance");
            if (fl_choice("%s\n%s", "Cancel", "Continue", nullptr,
                          app.appearance_error_.c_str(), appearance_replacement_prompt()) != 1)
@@ -576,9 +577,9 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
            return;
          }
          app.appearance_ = *chosen;
-         if (const auto error =
-                 save_platform_appearance(app.appearance_)) {
-           app.report(StatusKind::warning, *error + " The choice applies until LayerE closes.");
+         if (const auto failure = save_platform_appearance(app.appearance_, replace)) {
+           if (failure->unreadable) app.appearance_error_ = failure->text;
+           app.report(StatusKind::warning, failure->text + " The choice applies until LayerE closes.");
          } else {
            app.appearance_error_.clear();
            app.report(StatusKind::success, "Appearance saved: " +
