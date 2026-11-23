@@ -165,7 +165,7 @@ struct CooldownState {
   Milliseconds recharge_duration{};
   // The public ID's own active window: armed by each accepted trigger, never
   // shared through a pool and never persisted. Absent once expired.
-  std::optional<TimePoint> active_until;
+  std::optional<TimePoint> active_until{};
   Milliseconds active_duration{};
 };
 
@@ -330,7 +330,7 @@ struct Panel {
   std::string name;
   PanelLayout layout{PanelLayout::row};
   PanelStyle style{PanelStyle::card};
-  BarAppearance bar;
+  BarAppearance bar{};
   double anchor_x{0.5};
   double anchor_y{0.5};
   std::vector<std::string> cooldown_ids;

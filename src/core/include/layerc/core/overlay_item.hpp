@@ -66,7 +66,7 @@ using OverlayItemContent = std::variant<CooldownItem, AutomationTimerItem,
     CooldownActiveTimerItem, CounterItem, IndicatorItem, OpaqueOverlayItem>;
 struct OverlayItem {
   std::string id;
-  std::optional<std::string> label;
+  std::optional<std::string> label{};
   OverlayItemContent content{CooldownItem{}};
   json::Value::Object extra_fields{};
   bool operator==(const OverlayItem &) const = default;

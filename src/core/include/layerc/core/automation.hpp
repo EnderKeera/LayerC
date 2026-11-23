@@ -645,7 +645,7 @@ struct OverlayPropertyOverride {
   std::string item_id{};
   std::string property;
   AutomationValue value;
-  std::optional<TimePoint> expires_at;
+  std::optional<TimePoint> expires_at{};
   EffectOrder order{};
 
   bool operator==(const OverlayPropertyOverride &) const = default;

@@ -46,15 +46,15 @@ enum class ItemUnavailableReason : std::uint8_t {
 
 struct ItemPresentation {
   // Explicit typed ID, or "@legacy:<cooldowns index>".
-  std::string item_id;
+  std::string item_id{};
   // Cooldown and cooldown-active timer sources only.
-  std::string cooldown_id;
+  std::string cooldown_id{};
   // Explicit label (possibly empty), else the source name or ID.
-  std::string name;
+  std::string name{};
   // The full row text, or the winning text override.
-  std::string label;
+  std::string label{};
   // The value part alone: "READY", "3.0s", "5/8", "Unavailable", or empty.
-  std::string value_text;
+  std::string value_text{};
   OverlayItemKind kind{OverlayItemKind::cooldown};
   // Native bars show the remaining fraction: 1.0 when a cooldown is ready.
   double remaining{1.0};
