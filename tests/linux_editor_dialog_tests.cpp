@@ -28,6 +28,9 @@
 #include <FL/Fl_Window.H>
 #ifdef _WIN32
 #include <FL/platform.H>
+
+#include <array>
+#include <iostream>
 #endif
 
 #include <algorithm>
@@ -700,6 +703,19 @@ void task_at_screen_point_maps_fixture_window() {
 
 void tasks_picker_restores_capture() {
   Fixture fixture;
+  constexpr int width = 200, height = 120;
+  RECT work{};
+  const bool fits = SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0) != FALSE &&
+                    work.right - work.left >= width && work.bottom - work.top >= height;
+  struct PointerTarget {
+    HWND window;
+    ~PointerTarget() { if (window) DestroyWindow(window); }
+  } target{fits ? CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC",
+                                L"LayerC picker pointer target", WS_POPUP | WS_VISIBLE | SS_NOTIFY,
+                                work.left, work.top, width, height, nullptr, nullptr,
+                                GetModuleHandleW(nullptr), nullptr) : nullptr};
+  if (fits && !expect(target.window != nullptr, "create the disposable picker pointer target")) return;
+
   const auto before_editor = Fl::event_dispatch();
   for (const bool close_owner : {false, true}) {
     {
@@ -707,6 +723,39 @@ void tasks_picker_restores_capture() {
       app.build();
       auto *owner = app.main_window();
       owner->show();
+
+      std::optional<POINT> centre;
+      RECT owner_rect{};
+      if (target.window && GetWindowRect(fl_xid(owner), &owner_rect)) {
+        for (const POINT corner : std::array<POINT, 4>{{
+                 {work.left, work.top}, {work.right - width, work.top},
+                 {work.left, work.bottom - height}, {work.right - width, work.bottom - height}}}) {
+          const RECT bounds{corner.x, corner.y, corner.x + width, corner.y + height};
+          RECT overlap{};
+          if (IntersectRect(&overlap, &bounds, &owner_rect)) continue;
+          if (!expect(SetWindowPos(target.window, HWND_TOPMOST, corner.x, corner.y, width, height,
+                                  SWP_NOACTIVATE | SWP_SHOWWINDOW) != FALSE,
+                      "place the disposable target without activation")) return;
+          centre = POINT{corner.x + width / 2, corner.y + height / 2};
+          break;
+        }
+      }
+      if (!centre) {
+        if (target.window) ShowWindow(target.window, SW_HIDE);
+        std::cerr << "[skip] picker pointer probe: no primary work-area corner outside the editor\n";
+      }
+      const auto expect_pointer_restored = [&](const std::string &path) {
+        const HWND capture = GetCapture();
+        if (!expect(capture == nullptr, path + " leaves no native mouse capture"))
+          std::cerr << "  capture=" << capture << '\n';
+        if (!centre) return;
+        const HWND hit = WindowFromPoint(*centre);
+        if (!expect(hit == target.window, path + " gives the pointer back to the target")) {
+          std::cerr << "  point=(" << centre->x << ", " << centre->y << "), hit=" << hit
+                    << ", target=" << target.window << '\n';
+        }
+      };
+
       app.command(editor::EditorCommand::tasks);
       auto *tasks = editor::EditorAppTestAccess::tasks_window(app);
       auto *window = detected_tasks_window();
@@ -729,6 +778,7 @@ void tasks_picker_restores_capture() {
       expect(!Fl::grab(), "Escape clears the FLTK grab");
       expect(Fl::event_dispatch() == prior, "Escape restores the previous dispatcher");
       expect(GetCapture() != fl_xid(owner), "Escape releases the editor's native capture");
+      expect_pointer_restored("Escape");
 
       pick->do_callback();
       {
@@ -745,6 +795,7 @@ void tasks_picker_restores_capture() {
                    Fl::event_dispatch() == prior && !tasks->shown(),
                "a left release finishes the pick and restores the dispatcher and grab");
       }
+      expect_pointer_restored("Left release");
 
       tasks->show();
       pick->do_callback();
@@ -760,6 +811,7 @@ void tasks_picker_restores_capture() {
              "capture loss re-shows Detected Tasks and restores the dispatcher and grab");
       expect(std::string_view(editor::EditorAppTestAccess::status(app)->value()) == "Window picking cancelled.",
              "capture loss reports the same cancellation as Escape");
+      expect_pointer_restored("Capture loss");
 
       pick->do_callback();
       if (close_owner) {
@@ -767,6 +819,7 @@ void tasks_picker_restores_capture() {
         expect(!owner->shown(), "closing the main window hides it");
         expect(!Fl::grab(), "closing the main window clears the FLTK grab before teardown");
         expect(Fl::event_dispatch() == prior, "closing the main window restores the previous dispatcher");
+        expect_pointer_restored("Closing the main window");
       } else {
         SendMessageW(hwnd, WM_CAPTURECHANGED, 0, 0);
         expect(Fl::grab() == owner, "the pick and queued cancellation are still armed at teardown");

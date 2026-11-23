@@ -309,6 +309,33 @@ void attached_overlay_follows_target() {
          "target move and resize");
 }
 
+std::optional<POINT> overlay_pointer_point(const OverlayFixture &fixture) {
+  RECT overlay{};
+  if (IsWindowVisible(fixture.overlay_window) && IsWindowVisible(fixture.target_window) &&
+      !IsIconic(fixture.target_window) && GetWindowRect(fixture.overlay_window, &overlay)) {
+    const POINT centre{overlay.left + (overlay.right - overlay.left) / 2,
+                       overlay.top + (overlay.bottom - overlay.top) / 2};
+    if (PtInRect(&overlay, centre) && PtInRect(&fixture.target_rect, centre) &&
+        MonitorFromPoint(centre, MONITOR_DEFAULTTONULL))
+      return centre;
+  }
+  std::cerr << "[skip] overlay pointer probe: no visible overlay centre inside the target client area\n";
+  return std::nullopt;
+}
+
+void expect_overlay_pointer_target(const OverlayFixture &fixture, const POINT point,
+                                   const bool direct_drag, const std::string_view message) {
+  const HWND hit = WindowFromPoint(point);
+  const HWND root = hit ? GetAncestor(hit, GA_ROOT) : nullptr;
+  if (!expect(direct_drag ? hit == fixture.overlay_window
+                          : hit != fixture.overlay_window && root == fixture.target_window,
+              message)) {
+    std::cerr << "  point=(" << point.x << ", " << point.y << "), hit=" << hit
+              << ", root=" << root << ", overlay=" << fixture.overlay_window
+              << ", target=" << fixture.target_window << '\n';
+  }
+}
+
 void direct_edit_restores_click_through() {
   OverlayFixture fixture;
   if (!fixture.show_overlay()) return;
@@ -375,7 +402,14 @@ void direct_edit_restores_click_through() {
     ReleaseCapture();
   expect(drag_reported && drag_final,
          "capture loss should finalize an in-progress direct drag");
+  const auto pointer_point = overlay_pointer_point(fixture);
+  if (pointer_point)
+    expect_overlay_pointer_target(fixture, *pointer_point, true,
+                                  "direct drag makes the overlay the pointer target");
   fixture.overlay->set_edit_mode(false, false, false);
+  if (pointer_point)
+    expect_overlay_pointer_target(fixture, *pointer_point, false,
+                                  "ending direct drag gives the same point back to the target");
   expect((GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE) &
           WS_EX_TRANSPARENT) != 0,
          "ending direct edit should restore click-through behavior");
@@ -389,6 +423,22 @@ void direct_edit_restores_click_through() {
                    MAKELPARAM(overlay_center.x, overlay_center.y));
   expect(hit_result == HTTRANSPARENT,
          "overlay should remain hit-test transparent");
+}
+
+void edit_mode_without_direct_drag_stays_click_through() {
+  OverlayFixture fixture;
+  if (!fixture.show_overlay()) return;
+  fixture.overlay->show_for(fixture.target_window);
+  fixture.overlay->set_edit_mode(true, false, true, [](std::string_view, double, double, bool) {});
+  expect((GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0,
+         "edit mode without direct drag retains the click-through style");
+  if (const auto point = overlay_pointer_point(fixture)) {
+    expect(SendMessageW(fixture.overlay_window, WM_NCHITTEST, 0,
+                        MAKELPARAM(point->x, point->y)) == HTTRANSPARENT,
+           "edit mode without direct drag is hit-test transparent");
+    expect_overlay_pointer_target(fixture, *point, false,
+                                  "edit mode without direct drag leaves the pointer with the target");
+  }
 }
 
 void background_overlay_tracks_target() {
@@ -668,6 +718,7 @@ int wmain(const int argc, wchar_t *argv[]) {
   return layerc::test::run({LAYERC_TEST_CASE(overlay_initial_geometry_and_privacy),
                             LAYERC_TEST_CASE(attached_overlay_follows_target),
                             LAYERC_TEST_CASE(direct_edit_restores_click_through),
+                            LAYERC_TEST_CASE(edit_mode_without_direct_drag_stays_click_through),
                             LAYERC_TEST_CASE(background_overlay_tracks_target),
                             LAYERC_TEST_CASE(target_window_matching),
                             LAYERC_TEST_CASE(collection_overrides_survive_recreation),
