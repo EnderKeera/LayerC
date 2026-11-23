@@ -1,3 +1,9 @@
+#include "platform/calibration_service.hpp"
+
+#if defined(Fl_H) || defined(Fl_Window_H) || defined(_WINDOWS_)
+#error "The shared calibration service must not include FLTK or Win32 headers."
+#endif
+
 #include "calibration_run_internal.hpp"
 #include "editor_session.hpp"
 #include "platform/win32/calibration_service_internal.hpp"
@@ -25,6 +31,10 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+
+namespace layerc::editor::detail {
+[[nodiscard]] decltype(CalibrationHost::wait) fltk_calibration_pump(Fl_Window &owner);
+} // namespace layerc::editor::detail
 
 namespace {
 
@@ -158,6 +168,13 @@ core::CalibrationRequest request_for(HWND window, const core::GameProfile &profi
           .profile_json = core::serialize_profile_json(profile), .visual_json = {}};
 }
 
+editor::CalibrationPump fltk_session_pump(Fl_Window &owner) {
+  return [wait = editor::detail::fltk_calibration_pump(owner)](
+             HANDLE, const DWORD milliseconds) -> editor::CalibrationWait {
+    return {.cancel = wait(std::chrono::milliseconds{milliseconds}), .quit_code = std::nullopt};
+  };
+}
+
 void fltk_pump_runs_timeouts_and_restores_owner() {
   const ScopedEnvironment mode(fake_mode_key, std::filesystem::path(L"applied"));
   const ScopedEnvironment no_launch_probe(launch_event_key, std::nullopt);
@@ -175,7 +192,7 @@ void fltk_pump_runs_timeouts_and_restores_owner() {
   TimerProbe probe{.owner = window, .ready = ready.get()};
   Fl::add_timeout(0.01, probe_owner, &probe);
   const auto result = editor::detail::run_calibration_session_with_image(
-      window, request, fake_image(), editor::detail::fltk_calibration_pump(owner));
+      window, request, fake_image(), fltk_session_pump(owner));
   Fl::remove_timeout(probe_owner, &probe);
   expect(probe.ticks > 0 && probe.owner_disabled, "an FLTK timeout runs while the owner is disabled");
   expect(IsWindowEnabled(window) != FALSE, "the owner is re-enabled after calibration");
@@ -200,7 +217,7 @@ void hiding_owner_terminates_helper_without_quit() {
 
   platform::OwnedHandle child;
   bool wait_started = false;
-  const auto pump = editor::detail::fltk_calibration_pump(owner);
+  const auto pump = fltk_session_pump(owner);
   const auto start = std::chrono::steady_clock::now();
   const auto result = editor::detail::run_calibration_session_with_image(
       window, request_for(window, fixture_profile()), fake_image(),
@@ -306,10 +323,12 @@ void platform_service_accepts_and_reports() {
   candidate.window = reinterpret_cast<std::uintptr_t>(window);
   std::optional<editor::TaskCandidate> resolved = candidate;
   std::optional<std::pair<editor::StatusKind, std::string>> report;
+  unsigned resolve_calls{};
   const editor::CalibrationHost host{
       .report = [&](editor::StatusKind status, const std::string &text) { report.emplace(status, text); },
-      .resolve_target = [&] { return resolved; },
-      .owner = reinterpret_cast<std::uintptr_t>(&owner),
+      .resolve_target = [&] { ++resolve_calls; return resolved; },
+      .owner_window = reinterpret_cast<std::uintptr_t>(fl_xid(&owner)),
+      .wait = editor::detail::fltk_calibration_pump(owner),
   };
   unsigned accept_calls{};
   const editor::CalibrationAccept accept = [&](const editor::CalibrationDraft &draft) {
@@ -318,12 +337,12 @@ void platform_service_accepts_and_reports() {
     return session.prepare_calibration(cooldown, draft.visual, draft.images,
                                        [] { return editor::SharedObservationChoice::cancel; });
   };
-  const auto run = [&](const wchar_t *mode) {
+  const auto run = [&](const editor::CalibrationHost &run_host, const wchar_t *mode) {
     const ScopedEnvironment fake(fake_mode_key, std::filesystem::path(mode));
     expect(fake.applied(), "set the fake helper response mode");
     report.reset();
     (void)ResetEvent(launched.get());
-    return editor::detail::run_platform_calibration_with_image(host, session.document(), cooldown,
+    return editor::detail::run_platform_calibration_with_image(run_host, session.document(), cooldown,
                                                                accept, fake_image());
   };
   const auto reported = [](const editor::CalibrationRunResult &result) {
@@ -331,7 +350,24 @@ void platform_service_accepts_and_reports() {
     return end && *end == editor::CalibrationEnd::reported;
   };
 
-  auto applied = run(L"applied");
+  const auto check_owner_refusal = [&](const editor::CalibrationHost &bad_host) {
+    const auto result = run(bad_host, L"applied");
+    expect(reported(result) && report && report->first == editor::StatusKind::failure &&
+               report->second == "Calibration is unavailable: the editor window is not open.",
+           "a missing or invalid owner or wait callback reports the editor window fault");
+    expect(resolve_calls == 0 && WaitForSingleObject(launched.get(), 0) == WAIT_TIMEOUT,
+           "owner validation precedes target resolution and helper launch");
+  };
+  auto bad_host = host;
+  bad_host.owner_window = 0;
+  check_owner_refusal(bad_host);
+  bad_host.owner_window = reinterpret_cast<std::uintptr_t>(HWND_MESSAGE);
+  check_owner_refusal(bad_host);
+  bad_host.owner_window = host.owner_window;
+  bad_host.wait = {};
+  check_owner_refusal(bad_host);
+
+  auto applied = run(host, L"applied");
   auto *accepted = std::get_if<editor::AcceptedCalibration>(&applied);
   if (!expect(accepted && !report && WaitForSingleObject(launched.get(), 0) == WAIT_OBJECT_0,
               "the service launches the helper and returns a typed acceptance")) return;
@@ -340,17 +376,17 @@ void platform_service_accepts_and_reports() {
              session.document().visual()->triggers.front().cooldown_id == cooldown,
          "the editor session accepts and installs the requested cooldown assignment");
 
-  auto cancelled = run(L"cancelled");
+  auto cancelled = run(host, L"cancelled");
   expect(reported(cancelled) && report && report->first == editor::StatusKind::information &&
              report->second == "Visual calibration cancelled; no changes were made.",
          "the helper's unapplied result is reported as cancellation information");
-  auto invalid = run(L"invalid");
+  auto invalid = run(host, L"invalid");
   expect(reported(invalid) && report && report->first == editor::StatusKind::failure &&
              report->second == "LayerC Calibration returned an invalid result. No profile data was changed.",
          "a protocol-valid but invalid visual result is reported as a failure");
 
   resolved.reset();
-  auto no_target = run(L"applied");
+  auto no_target = run(host, L"applied");
   expect(reported(no_target) && !report && WaitForSingleObject(launched.get(), 0) == WAIT_TIMEOUT,
          "a resolver that already reported no match does not start the fake helper");
   expect(accept_calls == 1, "only the applied valid result reaches acceptance");

@@ -12,9 +12,11 @@
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/fl_ask.H>
+#include <FL/platform.H>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <string>
 #include <utility>
 
@@ -23,6 +25,18 @@
 namespace layerc::editor {
 namespace core = layerc::core;
 namespace platform = layerc::platform;
+
+namespace detail {
+
+decltype(CalibrationHost::wait) fltk_calibration_pump(Fl_Window &owner) {
+  return [&owner](const std::chrono::milliseconds timeout) {
+    Fl::wait(std::chrono::duration<double>(timeout).count());
+    return !owner.shown();
+  };
+}
+
+} // namespace detail
+
 struct LinuxVisualEditor::Impl {
   EditorApp &app;
   Fl_Choice *target{};
@@ -203,6 +217,7 @@ struct LinuxVisualEditor::Impl {
         return std::string("The active document or cooldown changed during calibration.");
       return accepted;
     };
+    auto &owner = *app.main_window();
     const CalibrationHost host{
         .report = [&](const StatusKind kind, const std::string &text) { app.report(kind, text); },
         .resolve_target = [&]() -> std::optional<TaskCandidate> {
@@ -212,7 +227,8 @@ struct LinuxVisualEditor::Impl {
             return app.placement();
           return app.window_target(TaskRequest::calibrate);
         },
-        .owner = reinterpret_cast<std::uintptr_t>(app.main_window()),
+        .owner_window = owner.shown() ? std::bit_cast<std::uintptr_t>(fl_xid(&owner)) : 0,
+        .wait = detail::fltk_calibration_pump(owner),
     };
     auto result = run_platform_calibration(host, session.document(), cooldown,
                                            std::move(*seed), accept, session.owned_template_assets());

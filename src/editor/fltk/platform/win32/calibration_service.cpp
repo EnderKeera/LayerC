@@ -7,10 +7,7 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/settings_store.hpp"
 
-#include <FL/Fl.H>
-#include <FL/Fl_Window.H>
 #include <FL/fl_ask.H>
-#include <FL/platform.H>
 
 #include <cstdint>
 #include <utility>
@@ -22,6 +19,12 @@ CalibrationRunResult run_calibration(
     const CalibrationHost &host, const ProfileDocument &document,
     const std::string &cooldown_id, const CalibrationAccept &accept,
     const std::filesystem::path *image) {
+  const auto owner = reinterpret_cast<HWND>(host.owner_window);
+  if (!owner || IsWindow(owner) == FALSE || !host.wait) {
+    host.report(StatusKind::failure, "Calibration is unavailable: the editor window is not open.");
+    return CalibrationEnd::reported;
+  }
+
   const auto target = host.resolve_target();
   if (!target) return CalibrationEnd::reported;
   const auto window = reinterpret_cast<HWND>(target->window);
@@ -57,11 +60,11 @@ CalibrationRunResult run_calibration(
                          ? core::serialize_visual_profile_json(*document.visual())
                          : std::string{},
   };
-  auto *const owner = reinterpret_cast<Fl_Window *>(host.owner);
-  const auto pump = detail::fltk_calibration_pump(*owner);
-  auto session = image ? detail::run_calibration_session_with_image(
-                             fl_xid(owner), request, *image, pump)
-                       : run_calibration_session(fl_xid(owner), request, pump);
+  const CalibrationPump pump = [&](HANDLE, const DWORD milliseconds) -> CalibrationWait {
+    return {.cancel = host.wait(std::chrono::milliseconds{milliseconds}), .quit_code = std::nullopt};
+  };
+  auto session = image ? detail::run_calibration_session_with_image(owner, request, *image, pump)
+                       : run_calibration_session(owner, request, pump);
   if (const auto *failure = std::get_if<CalibrationFailure>(&session)) {
     if (const auto text = calibration_failure_text(*failure))
       host.report(StatusKind::failure, text->title + ": " + text->message);
@@ -89,13 +92,6 @@ CalibrationRunResult run_calibration(
 }
 
 } // namespace
-
-CalibrationPump detail::fltk_calibration_pump(Fl_Window &owner) {
-  return [&owner](HANDLE, const DWORD milliseconds) -> CalibrationWait {
-    Fl::wait(milliseconds / 1000.0);
-    return {.cancel = !owner.shown(), .quit_code = std::nullopt};
-  };
-}
 
 CalibrationRunResult detail::run_platform_calibration_with_image(
     const CalibrationHost &host, const ProfileDocument &document,

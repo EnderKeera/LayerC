@@ -147,6 +147,44 @@ void editor_shortcut_contracts();
 void editor_main_layout_contracts();
 void editor_accessibility_contracts();
 
+namespace {
+
+void ime_desktop_identity_contracts() {
+  using layerc::test::DesktopIdentityProbe;
+  using layerc::test::decide_ime_for_desktop;
+  const DesktopIdentityProbe mismatch{
+      .input_opened = true, .station = "wINsTA0", .input_name = "Default", .thread_name = "Private"};
+  const auto disabled = decide_ime_for_desktop(mismatch);
+  expect(disabled.disable && disabled.reason == "Private vs Default",
+         "only distinct known desktops on the interactive station disable IME");
+
+  const auto must_keep_enabled = [](const DesktopIdentityProbe &probe, std::string_view reason) {
+    const auto decision = decide_ime_for_desktop(probe);
+    expect(!decision.disable && std::string_view(decision.reason).find(reason) != std::string_view::npos,
+           reason);
+  };
+  auto probe = mismatch;
+  probe.thread_name = probe.input_name;
+  must_keep_enabled(probe, "thread is on the input desktop");
+  probe = mismatch;
+  probe.input_opened = false;
+  probe.open_error = 5;
+  must_keep_enabled(probe, "OpenInputDesktop failed, error 5");
+  probe = mismatch;
+  probe.input_name.reset();
+  must_keep_enabled(probe, "could not read the input desktop name");
+  probe = mismatch;
+  probe.thread_name.reset();
+  must_keep_enabled(probe, "could not read the thread desktop name");
+  probe = mismatch;
+  probe.station.reset();
+  must_keep_enabled(probe, "could not read the window station name");
+  probe.station = "Service-0x0-3e7$";
+  must_keep_enabled(probe, "window station is not WinSta0");
+}
+
+} // namespace
+
 int main(const int argc, char **argv) {
   layerc::test::disable_ime_off_input_desktop();
   if (argc == 5 && std::string_view(argv[1]) == "--request-pipe" &&
@@ -158,6 +196,7 @@ int main(const int argc, char **argv) {
   }
   return layerc::test::run(
       {{"editor_dialog_contracts", editor_dialog_contracts},
+       LAYERC_TEST_CASE(ime_desktop_identity_contracts),
        {"automation_palette_contracts", automation_palette_contracts},
        {"editor_draft_leave_contracts", editor_draft_leave_contracts},
        {"editor_dialog_font_contracts", editor_dialog_font_contracts},

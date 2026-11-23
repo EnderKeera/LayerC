@@ -19,10 +19,9 @@ private:
   static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   static void refresh(void *data);
 
-  HINSTANCE instance_;
-  ATOM window_class_{};
   HWND window_{};
   std::function<void()> reapply_;
+  bool registered_{};
   bool pending_{};
 };
 

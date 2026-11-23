@@ -32,7 +32,9 @@
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Window.H>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <FL/platform.H>
+#else
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -712,7 +714,11 @@ void visual_page_history_and_cancel() {
   const editor::CalibrationHost host{
       .report = [&](editor::StatusKind kind, const std::string &text) { app.report(kind, text); },
       .resolve_target = [] { return std::optional<editor::TaskCandidate>{}; },
-      .owner = reinterpret_cast<std::uintptr_t>(app.main_window()),
+      .owner_window = reinterpret_cast<std::uintptr_t>(fl_xid(app.main_window())),
+      .wait = [](std::chrono::milliseconds) {
+        expect(false, "declining the target does not start the calibration pump");
+        return true;
+      },
   };
   const auto declined = editor::run_platform_calibration(
       host, app.session.document(), id, std::move(seed_for_cancel),

@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -59,6 +60,22 @@ read_environment(const std::string &name) {
 bool write_environment(const std::string &name, const wchar_t *value) {
   return SetEnvironmentVariableW(wide_name(name).c_str(), value) != FALSE;
 }
+
+[[nodiscard]] std::optional<std::string> user_object_name(HANDLE object) {
+  wchar_t buffer[256]{};
+  DWORD needed{};
+  if (!object || !GetUserObjectInformationW(object, UOI_NAME, buffer, sizeof buffer, &needed))
+    return std::nullopt;
+  const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, buffer, -1,
+                                       nullptr, 0, nullptr, nullptr);
+  if (size <= 1) return std::nullopt;
+  std::string name(static_cast<std::size_t>(size), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, buffer, -1, name.data(),
+                          size, nullptr, nullptr) != size)
+    return std::nullopt;
+  name.pop_back();
+  return name;
+}
 #else
 [[nodiscard]] std::optional<std::string>
 read_environment(const std::string &name) {
@@ -75,24 +92,65 @@ bool write_environment(const std::string &name, const char *value) {
 
 } // namespace
 
+ImeDecision decide_ime_for_desktop(const DesktopIdentityProbe &probe) {
+  if (!probe.input_opened)
+    return {false, "OpenInputDesktop failed, error " + std::to_string(probe.open_error)};
+  if (!probe.station || probe.station->empty())
+    return {false, "could not read the window station name"};
+  constexpr std::string_view interactive_station = "winsta0";
+  const auto lower_ascii = [](const char c) {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+  };
+  if (!std::ranges::equal(*probe.station, interactive_station, {}, lower_ascii))
+    return {false, "window station is not WinSta0: " + *probe.station};
+  if (!probe.input_name || probe.input_name->empty())
+    return {false, "could not read the input desktop name"};
+  if (!probe.thread_name || probe.thread_name->empty())
+    return {false, "could not read the thread desktop name"};
+  if (*probe.input_name == *probe.thread_name)
+    return {false, "thread is on the input desktop: " + *probe.input_name};
+  return {true, *probe.thread_name + " vs " + *probe.input_name};
+}
+
 void disable_ime_off_input_desktop() {
 #ifdef _WIN32
-  const auto name = [](HDESK desktop) {
-    wchar_t buffer[256]{};
-    DWORD needed{};
-    if (!GetUserObjectInformationW(desktop, UOI_NAME, buffer, sizeof buffer, &needed))
-      return std::wstring{};
-    return std::wstring(buffer);
-  };
+  DesktopIdentityProbe probe;
   const HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-  const bool off_input = !input || name(input) != name(GetThreadDesktop(GetCurrentThreadId()));
-  if (input) CloseDesktop(input);
-  if (!off_input) return;
+  if (input) {
+    probe.input_opened = true;
+    probe.station = user_object_name(GetProcessWindowStation());
+    probe.input_name = user_object_name(input);
+    probe.thread_name = user_object_name(GetThreadDesktop(GetCurrentThreadId()));
+    CloseDesktop(input);
+  } else {
+    probe.open_error = GetLastError();
+  }
+  const auto decision = decide_ime_for_desktop(probe);
+  if (!decision.disable) {
+    std::cerr << "IME: left enabled: " << decision.reason << '\n';
+    return;
+  }
+
   const HMODULE imm = LoadLibraryExW(L"imm32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-  if (!imm) return;
+  if (!imm) {
+    const DWORD error = GetLastError();
+    std::cerr << "IME: left enabled: LoadLibraryExW failed, error " << error << '\n';
+    return;
+  }
   using DisableIme = BOOL (WINAPI *)(DWORD);
-  const auto disable = std::bit_cast<DisableIme>(GetProcAddress(imm, "ImmDisableIME"));
-  if (disable) disable(static_cast<DWORD>(-1));
+  const auto proc = GetProcAddress(imm, "ImmDisableIME");
+  if (!proc) {
+    const DWORD error = GetLastError();
+    std::cerr << "IME: left enabled: GetProcAddress failed, error " << error << '\n';
+  } else {
+    const auto disable = std::bit_cast<DisableIme>(proc);
+    SetLastError(ERROR_SUCCESS);
+    const bool disabled = disable(static_cast<DWORD>(-1)) != FALSE;
+    const DWORD error = disabled ? ERROR_SUCCESS : GetLastError();
+    std::cerr << "IME: disabled off the input desktop (" << decision.reason << "); ImmDisableIME ";
+    if (disabled) std::cerr << "succeeded\n";
+    else std::cerr << "failed, error " << error << '\n';
+  }
   FreeLibrary(imm);
 #endif
 }

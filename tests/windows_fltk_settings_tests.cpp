@@ -25,6 +25,7 @@
 #include <cmath>
 #include <filesystem>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -369,14 +370,17 @@ void contrast_mapping_and_desktop_listener() {
   editor::apply_editor_appearance(appearance, window);
   const auto normal_tokens = editor::current_editor_tokens();
   unsigned reapplies{};
-  const editor::WindowsDesktopListener listener(GetModuleHandleW(nullptr), [&] {
+  const HINSTANCE instance = GetModuleHandleW(nullptr);
+  const auto reapply = [&] {
     ++reapplies;
     editor::reapply_editor_desktop_appearance(window);
-  });
-  const editor::WindowsDesktopListener second(GetModuleHandleW(nullptr), [] {});
-  const HWND target = listener.native_handle();
-  expect(second.native_handle() && second.native_handle() != target,
-         "another listener creates a separate window using the same class");
+  };
+  std::optional<editor::WindowsDesktopListener> registrar(std::in_place, instance, reapply);
+  std::optional<editor::WindowsDesktopListener> second(std::in_place, instance, reapply);
+  const HWND target = registrar->native_handle();
+  const HWND surviving = second->native_handle();
+  if (!expect(surviving && surviving != target,
+              "another listener creates a separate window using the same class")) return;
   if (!expect(target && !IsWindowVisible(target) && !GetWindow(target, GW_OWNER) &&
                   (GetWindowLongPtrW(target, GWL_STYLE) & WS_POPUP) &&
                   (GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOOLWINDOW),
@@ -420,6 +424,23 @@ void contrast_mapping_and_desktop_listener() {
   expect(wait_for([&] { return reapplies == 2; }) && editor::current_editor_tokens() == normal_tokens &&
              appearance == saved && Fl::get_color(window.color()) == (*saved.overrides[role].fill << 8U),
          "disabling contrast restores the preset and retained override");
+
+  constexpr wchar_t listener_class[] = L"LayerC.LayerE.FLTK.Desktop";
+  WNDCLASSW definition{};
+  registrar.reset();
+  expect(IsWindow(target) == FALSE && IsWindow(surviving) != FALSE &&
+             GetClassInfoW(instance, listener_class, &definition) != FALSE,
+         "destroying the registrar leaves the other listener and its class alive");
+  const auto before = reapplies;
+  SendMessageW(surviving, WM_SYSCOLORCHANGE, 0, 0);
+  expect(wait_for([&] { return reapplies == before + 1; }),
+         "the last surviving listener still reapplies on a system color change");
+  second.reset();
+  expect(GetClassInfoW(instance, listener_class, &definition) == FALSE,
+         "destroying the last listener unregisters the class");
+  const editor::WindowsDesktopListener fresh(instance, [] {});
+  expect(fresh.native_handle() && IsWindow(fresh.native_handle()) != FALSE,
+         "a new listener registers the class and creates a window again");
 }
 
 // DesignSystem.md, Roles: a contrast theme sets the overrides aside, so an

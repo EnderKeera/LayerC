@@ -94,6 +94,18 @@ bool write_file(const std::filesystem::path &path, std::string_view contents);
 [[nodiscard]] std::optional<std::string>
 read_file(const std::filesystem::path &path);
 
+struct DesktopIdentityProbe {
+  bool input_opened{};
+  unsigned long open_error{};
+  std::optional<std::string> station, input_name, thread_name;
+};
+
+struct ImeDecision {
+  bool disable{};
+  std::string reason;
+};
+
+[[nodiscard]] ImeDecision decide_ime_for_desktop(const DesktopIdentityProbe &probe);
 void disable_ime_off_input_desktop();
 
 [[nodiscard]] int run(std::initializer_list<Case> cases);
