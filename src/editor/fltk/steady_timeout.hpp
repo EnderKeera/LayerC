@@ -1,6 +1,6 @@
 #pragma once
 
-#include <FL/Fl.H>
+#include "steady_wake.hpp"
 
 #include <chrono>
 #include <functional>
@@ -9,11 +9,9 @@ namespace layerc::editor {
 
 // A one-shot FLTK timeout whose due time is a steady_clock deadline.
 //
-// FLTK measures its timer queue with Fl::now (the wall clock on Win32 and
-// X11), so a forward clock step can run a timeout early. The handler compares
-// the steady clock with the deadline: an early call re-arms for the steady
-// remainder without firing; a due call clears pending, then fires once. Only a
-// pending timeout is queued, so the event loop still blocks while idle.
+// The default scheduler waits on the OS monotonic clock and defers delivery
+// to FLTK. An early call re-arms for the steady remainder without firing; a due
+// call clears pending, then fires once. Nothing is armed while idle.
 class SteadyTimeout final {
 public:
   using Clock = std::chrono::steady_clock;
@@ -25,7 +23,7 @@ public:
 
   explicit SteadyTimeout(
       std::function<void()> fire, Now now = &Clock::now,
-      Scheduler scheduler = {Fl::add_timeout, Fl::remove_timeout});
+      Scheduler scheduler = {steady_wake_add, steady_wake_remove});
   ~SteadyTimeout(); // cancels
   SteadyTimeout(const SteadyTimeout &) = delete;
   SteadyTimeout &operator=(const SteadyTimeout &) = delete;
@@ -36,6 +34,7 @@ public:
   [[nodiscard]] bool pending() const noexcept { return pending_; }
 
 private:
+  friend struct EditorAppTestAccess;
   static void handle(void *data);
   void arm(Clock::duration delay);
 

@@ -32,9 +32,8 @@ void SteadyTimeout::cancel() {
 void SteadyTimeout::handle(void *data) {
   auto &self = *static_cast<SteadyTimeout *>(data);
   if (!self.pending_) return;
-  // FLTK has already dequeued this call. Early for any reason (a forward
-  // wall-clock step, or a steady clock that has not reached the deadline):
-  // wait out the steady remainder instead of firing.
+  // FLTK has dequeued this call. If the deadline is still ahead, wait out
+  // the steady remainder instead of firing.
   const auto remaining = self.deadline_ - self.now_();
   if (remaining > Clock::duration::zero()) {
     self.arm(remaining);

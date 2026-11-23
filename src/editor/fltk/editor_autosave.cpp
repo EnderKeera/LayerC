@@ -12,7 +12,7 @@ namespace core = layerc::core;
 using namespace std::chrono_literals;
 
 EditorApp::EditorApp()
-    : EditorApp(&SteadyTimeout::Clock::now, {Fl::add_timeout, Fl::remove_timeout}) {}
+    : EditorApp(&SteadyTimeout::Clock::now, {steady_wake_add, steady_wake_remove}) {}
 
 EditorApp::EditorApp(const SteadyTimeout::Now now, const SteadyTimeout::Scheduler scheduler)
     : timer_now_(now), timer_scheduler_(scheduler),

@@ -5,6 +5,7 @@
 #include "a11y/fltk_actions.hpp"
 #include "a11y/fltk_tree.hpp"
 #include "context.hpp"
+#include "steady_timeout.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
@@ -106,7 +107,7 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
   // Read from test threads while the FLTK thread hosts windows.
   std::atomic<std::size_t> hosted{};
   std::chrono::steady_clock::time_point next_refresh{};
-  bool refresh_armed{};
+  SteadyTimeout refresh_timer{[this] { on_timer(); }};
   // Set by a walk that ran from the refresh timer; the check that follows sees it
   // and stays quiet, so an idle loop performs no periodic walk at all.
   bool walked_in_check{};
@@ -121,8 +122,7 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
 
   void close() {
     Fl::remove_check(on_check, this);
-    Fl::remove_timeout(on_timer, this);
-    refresh_armed = false;
+    refresh_timer.cancel();
     cancel_deferred();
     set_changed_handler(nullptr, nullptr);
     for (auto &[handle, host] : hosts) {
@@ -142,20 +142,12 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
 
   static void on_check(void *data) { static_cast<Impl *>(data)->tick(); }
 
-  static void on_timer(void *data) {
-    auto *self = static_cast<Impl *>(data);
-    const auto now = std::chrono::steady_clock::now();
-    if (now < self->next_refresh) {
-      Fl::add_timeout(std::chrono::duration<double>(self->next_refresh - now).count(),
-                      on_timer, self);
-      return;
-    }
-    self->refresh_armed = false;
-    (void)self->refresh();
+  void on_timer() {
+    (void)refresh();
     // A walk from this timer is the loop's only activity in this pass: the next
     // check runs before anything else can have changed the tree, so it stays
     // quiet instead of re-arming and walking again.
-    self->walked_in_check = true;
+    walked_in_check = true;
   }
 
   void tick() {
@@ -169,12 +161,7 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
     if (!stale && now < next_refresh) {
       // Checks run once per loop iteration, so a change made inside the window
       // waits for unrelated input unless the remaining interval is armed.
-      if (!refresh_armed) {
-        const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(
-            next_refresh - now);
-        Fl::add_timeout(static_cast<double>(remaining.count()) / 1.0e6, on_timer, this);
-        refresh_armed = true;
-      }
+      if (!refresh_timer.pending()) refresh_timer.start(next_refresh - now);
       return;
     }
     (void)refresh();
@@ -299,10 +286,7 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
     ++walks;
     const auto now = std::chrono::steady_clock::now();
     next_refresh = now + kRefreshInterval;
-    if (refresh_armed) {
-      Fl::remove_timeout(on_timer, this);
-      refresh_armed = false;
-    }
+    refresh_timer.cancel();
     stale = false;
     // Scroll and caret geometry settle in FLTK's own draw pass.
     const Snapshot full = tree.snapshot();

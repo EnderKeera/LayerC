@@ -6,6 +6,7 @@
 #include "a11y/fltk_actions.hpp"
 #include "a11y/fltk_tree.hpp"
 #include "a11y/model.hpp"
+#include "steady_timeout.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Widget.H>
@@ -110,7 +111,7 @@ struct Adaptor::Impl {
   [[nodiscard]] NodeId announcement_node(const Snapshot &snapshot) const;
 
   static void on_check(void *data);
-  static void on_refresh_timer(void *data);
+  void on_refresh_timer();
   static void on_a11y_failed(void *data);
   static void on_bus_loss(void *data);
   static int on_embedded(sd_bus_message *message, void *data,
@@ -172,7 +173,7 @@ struct Adaptor::Impl {
   bool walking{};
   std::chrono::steady_clock::time_point next_refresh{};
   bool check_registered{};
-  bool refresh_armed{};
+  SteadyTimeout refresh_timer{[this] { on_refresh_timer(); }};
   // Set by a walk that ran from the refresh timer; the check that follows sees it
   // and stays quiet, so an idle loop performs no periodic walk at all.
   bool walked_in_check{};
@@ -374,10 +375,7 @@ void Adaptor::Impl::close_a11y() {
     Fl::remove_check(on_check, this);
     check_registered = false;
   }
-  if (refresh_armed) {
-    Fl::remove_timeout(on_refresh_timer, this);
-    refresh_armed = false;
-  }
+  refresh_timer.cancel();
   layerc::editor::a11y::set_changed_handler(nullptr, nullptr);
   if (bus_loss_armed) {
     Fl::remove_timeout(on_bus_loss, this);
@@ -462,35 +460,25 @@ void Adaptor::Impl::on_check(void *data) {
   if (now < impl->next_refresh) {
     // Checks run once per loop iteration, so a change made inside the window
     // waits for unrelated input unless the remaining interval is armed.
-    if (!impl->refresh_armed) {
-      const auto remaining =
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              impl->next_refresh - now);
-      Fl::add_timeout(static_cast<double>(remaining.count()) / 1.0e6,
-                      on_refresh_timer, impl);
-      impl->refresh_armed = true;
-    }
+    if (!impl->refresh_timer.pending()) impl->refresh_timer.start(impl->next_refresh - now);
     return;
   }
   impl->next_refresh = now + kRefreshInterval;
   impl->refresh();
 }
 
-void Adaptor::Impl::on_refresh_timer(void *data) {
-  auto *impl = static_cast<Impl *>(data);
+void Adaptor::Impl::on_refresh_timer() {
   const auto now = std::chrono::steady_clock::now();
-  if (now < impl->next_refresh) {
-    Fl::add_timeout(std::chrono::duration<double>(impl->next_refresh - now).count(),
-                    on_refresh_timer, impl);
+  if (now < next_refresh) {
+    refresh_timer.start(next_refresh - now);
     return;
   }
-  impl->refresh_armed = false;
-  impl->next_refresh = now + kRefreshInterval;
-  impl->refresh();
+  next_refresh = now + kRefreshInterval;
+  refresh();
   // A walk from this timer is the loop's only activity in this pass: the next
   // check runs before anything else can have changed the tree, so it stays
   // quiet instead of re-arming and walking again.
-  impl->walked_in_check = true;
+  walked_in_check = true;
 }
 
 // Called from inside LoopBus::dispatch: the connection that is dispatching
@@ -525,10 +513,7 @@ void Adaptor::Impl::refresh() {
   next_refresh = last_walk + kRefreshInterval;
   // A timer armed for the previous cadence would walk again on the heels of
   // this one; the next check re-arms it for the new deadline.
-  if (refresh_armed) {
-    Fl::remove_timeout(on_refresh_timer, this);
-    refresh_armed = false;
-  }
+  refresh_timer.cancel();
   actions_dirty = false;
   ++walks;
   // The previous generation moves into the diff; nothing is served until the

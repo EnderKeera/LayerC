@@ -92,6 +92,8 @@ endif()
 # it links neither the editor frontend nor its platform services.
 add_library(layerc_editor_fltk_a11y STATIC
     ${LAYERC_EDITOR_FLTK_A11Y_SOURCES}
+    src/editor/fltk/steady_timeout.cpp
+    src/editor/fltk/platform/linux/steady_wake.cpp
     src/editor/fltk/platform/linux/window_origin.cpp)
 if(LAYERC_EDITOR_SYSROOT)
     target_include_directories(layerc_editor_fltk_a11y SYSTEM PUBLIC

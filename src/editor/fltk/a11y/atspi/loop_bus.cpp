@@ -4,6 +4,7 @@
 
 #include <FL/Fl.H>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <ctime>
@@ -14,12 +15,9 @@ namespace layerc::editor::a11y::atspi {
 LoopBus::LoopBus(sd_bus *bus) : bus_(bus) {}
 
 LoopBus::~LoopBus() {
+  timeout_.cancel();
   if (!bus_) return;
   release_fd();
-  if (timeout_armed_) {
-    Fl::remove_timeout(on_timeout, this);
-    timeout_armed_ = false;
-  }
   if (continue_armed_) {
     Fl::remove_timeout(on_continue, this);
     continue_armed_ = false;
@@ -64,10 +62,7 @@ bool LoopBus::watch_fd() {
 void LoopBus::fail(std::string why) {
   if (failure_.empty()) failure_ = std::move(why);
   release_fd();
-  if (timeout_armed_) {
-    Fl::remove_timeout(on_timeout, this);
-    timeout_armed_ = false;
-  }
+  timeout_.cancel();
   if (continue_armed_) {
     Fl::remove_timeout(on_continue, this);
     continue_armed_ = false;
@@ -120,33 +115,26 @@ void LoopBus::schedule() {
     write_registered_ = writable;
   }
   std::uint64_t deadline = 0;
-  double delay = -1.0;
-  if (sd_bus_get_timeout(bus_, &deadline) >= 0 && deadline != UINT64_MAX) {
-    timespec now{};
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    const auto microseconds = static_cast<std::uint64_t>(now.tv_sec) * 1000000u +
-                              static_cast<std::uint64_t>(now.tv_nsec) / 1000u;
-    delay = deadline > microseconds
-                ? static_cast<double>(deadline - microseconds) / 1.0e6
-                : 0.0;
+  if (sd_bus_get_timeout(bus_, &deadline) < 0 || deadline == UINT64_MAX) {
+    timeout_.cancel();
+    return;
   }
-  if (timeout_armed_) {
-    Fl::remove_timeout(on_timeout, this);
-    timeout_armed_ = false;
-  }
-  if (delay >= 0.0) {
-    Fl::add_timeout(delay, on_timeout, this);
-    timeout_armed_ = true;
-  }
+  // sd-bus reports an absolute CLOCK_MONOTONIC deadline in microseconds; the
+  // steady_clock epoch is unspecified, so the remainder uses that clock itself.
+  timespec monotonic{};
+  clock_gettime(CLOCK_MONOTONIC, &monotonic);
+  const auto elapsed = static_cast<std::uint64_t>(monotonic.tv_sec) * 1000000u +
+                       static_cast<std::uint64_t>(monotonic.tv_nsec) / 1000u;
+  const auto remaining = deadline > elapsed ? deadline - elapsed : 0u;
+  using Clock = SteadyTimeout::Clock;
+  using namespace std::chrono;
+  // Bound the conversion and leave room for the clock reading in start().
+  const auto limit = static_cast<std::uint64_t>(
+      duration_cast<microseconds>((Clock::time_point::max() - Clock::now()) / 2).count());
+  timeout_.start(microseconds(std::min(remaining, limit)));
 }
 
 void LoopBus::on_fd(int, void *data) { static_cast<LoopBus *>(data)->dispatch(); }
-
-void LoopBus::on_timeout(void *data) {
-  auto *loop = static_cast<LoopBus *>(data);
-  loop->timeout_armed_ = false;
-  loop->dispatch();
-}
 
 void LoopBus::on_continue(void *data) {
   auto *loop = static_cast<LoopBus *>(data);

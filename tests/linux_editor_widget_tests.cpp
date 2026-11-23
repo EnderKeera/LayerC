@@ -88,6 +88,8 @@ void linux_editor_main_window_text_and_tab_labels();
 void linux_editor_text_views_fit_content();
 void linux_editor_empty_automation_simulator_ready();
 void linux_editor_steady_timeout();
+void steady_wake_delivers_on_monotonic_deadline();
+void steady_timeout_default_uses_monotonic_wake();
 void linux_editor_autosave_steady_deadline();
 void linux_editor_playback_steady_deadline();
 void linux_editor_empty_template_apply_is_not_an_edit();
@@ -164,6 +166,14 @@ private:
   Reply choice_;
 };
 void show(editor::EditorApp &app) { app.build(); editor::EditorAppTestAccess::window(app).show(); Fl::check(); }
+// Lets a due autosave finish before a modal that an FLTK timer answers. The
+// autosave waits on the OS clock, so the two would otherwise race: a reply that
+// closes the modal first lets the save run before the confirmation's guard.
+void drain_autosave(editor::EditorApp &app) {
+  for (int spin = 0; spin < 500 && editor::EditorAppTestAccess::autosave_pending(app); ++spin)
+    Fl::wait(0.01);
+  expect(!editor::EditorAppTestAccess::autosave_pending(app), "the pending autosave completes");
+}
 void tab(editor::EditorApp &app, Fl_Group *group) {
   editor::EditorAppTestAccess::tabs(app)->value(group); app.tab_changed();
 }
@@ -693,6 +703,7 @@ void visual_page_history_and_cancel() {
   app.command(editor::EditorCommand::undo);
   expect(editor::find_visual_trigger(*app.session.document().visual(), id)->enabled,
          "document Undo restores the trigger");
+  drain_autosave(app);
   {
     Answer remove("Remove assignment");
     visual_control<Fl_Button>(app, "Remove visual assignment").do_callback();
@@ -1121,6 +1132,8 @@ int main() {
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
   LAYERC_TEST_CASE(linux_editor_empty_automation_simulator_ready),
   LAYERC_TEST_CASE(linux_editor_steady_timeout),
+  LAYERC_TEST_CASE(steady_wake_delivers_on_monotonic_deadline),
+  LAYERC_TEST_CASE(steady_timeout_default_uses_monotonic_wake),
   LAYERC_TEST_CASE(linux_editor_autosave_steady_deadline),
   LAYERC_TEST_CASE(linux_editor_playback_steady_deadline),
   LAYERC_TEST_CASE(linux_editor_empty_template_apply_is_not_an_edit),

@@ -4,6 +4,7 @@
 #include "editor_app.hpp"
 #include "editor_style.hpp"
 #include "settings_store.hpp"
+#include "steady_timeout.hpp"
 #include "window_chrome.hpp"
 #include "window_settings.hpp"
 #include "layerc/platform/editor_instance.hpp"
@@ -18,6 +19,7 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <utility>
 
@@ -72,10 +74,6 @@ void fit_initial_window(const HWND window) {
   const int x = static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int y = static_cast<int>(work.top) + std::max(0, (work_height - height) / 2);
   SetWindowPos(window, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-void close_smoke_window(void *data) {
-  static_cast<Fl_Window *>(data)->do_callback();
 }
 
 bool smoke_store_overridden() {
@@ -151,10 +149,9 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
   if (settings.capture_exclusion_read_failed)
     app.report(StatusKind::warning, "Could not read the editor capture-exclusion setting.");
 
-  if (smoke) Fl::add_timeout(0.2, close_smoke_window, window);
-  const int result = Fl::run();
-  if (smoke) Fl::remove_timeout(close_smoke_window, window);
-  return result;
+  SteadyTimeout smoke_close([window] { window->do_callback(); });
+  if (smoke) smoke_close.start(std::chrono::milliseconds(200));
+  return Fl::run();
 }
 
 } // namespace layerc::editor

@@ -4,6 +4,8 @@ include(cmake/LayerCFLTKVendor.cmake)
 # The toolkit-side accessibility layer the Linux AT-SPI adaptor also uses.
 add_library(layerc_editor_fltk_a11y STATIC
     ${LAYERC_EDITOR_FLTK_A11Y_SOURCES}
+    src/editor/fltk/steady_timeout.cpp
+    src/editor/fltk/platform/win32/steady_wake.cpp
     src/editor/fltk/platform/win32/window_origin.cpp)
 target_link_libraries(layerc_editor_fltk_a11y PUBLIC
     layerc_editor_accessibility layerc_fltk_vendor)

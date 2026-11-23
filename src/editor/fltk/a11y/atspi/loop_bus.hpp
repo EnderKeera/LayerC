@@ -1,5 +1,7 @@
 #pragma once
 
+#include "steady_timeout.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -13,7 +15,7 @@ using ReplyHandler = int (*)(sd_bus_message *message, void *userdata,
                              sd_bus_error *error);
 
 // One sd-bus connection driven by the FLTK event loop: the socket joins
-// Fl::add_fd and sd-bus' own dispatch timeout joins Fl::add_timeout, so every
+// Fl::add_fd and sd-bus' own dispatch deadline uses SteadyTimeout, so every
 // message and every timer fires on the FLTK thread and nothing blocks it.
 class LoopBus {
 public:
@@ -49,7 +51,6 @@ private:
   static constexpr int kMaxMessagesPerDispatch = 64;
 
   static void on_fd(int fd, void *data);
-  static void on_timeout(void *data);
   // Continues a bounded drain on the next loop iteration, so the loop yields
   // between batches. It has its own callback so schedule() cannot cancel it.
   static void on_continue(void *data);
@@ -67,7 +68,7 @@ private:
   int fd_{-1};
   bool read_registered_{false};
   bool write_registered_{false};
-  bool timeout_armed_{false};
+  SteadyTimeout timeout_{[this] { dispatch(); }};
   bool continue_armed_{false};
   std::string failure_;
   FailureHandler failure_handler_{};

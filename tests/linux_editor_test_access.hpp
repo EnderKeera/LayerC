@@ -22,6 +22,8 @@
 namespace layerc::editor {
 
 struct EditorAppTestAccess {
+  static Fl_Timeout_Handler steady_timeout_handler() { return &SteadyTimeout::handle; }
+
   // Autosave timing seam.
   static EditorApp with_timer_scheduler(SteadyTimeout::Now now,
                                         SteadyTimeout::Scheduler scheduler) {

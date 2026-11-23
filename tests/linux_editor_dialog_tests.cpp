@@ -15,6 +15,7 @@
 #include "profile_edit.hpp"
 #include "editor_test_environment.hpp"
 #include "platform/services.hpp"
+#include "steady_wake.hpp"
 #include "tasks_window.hpp"
 
 #include <FL/Fl.H>
@@ -185,6 +186,85 @@ void linux_editor_steady_timeout() {
     timer.start(10ms);
   }
   expect(fired == 2 && !queue.pending(), "destruction cancels a pending callback");
+}
+
+void steady_wake_delivers_on_monotonic_deadline() {
+  struct State {
+    int calls{};
+    Timer::Clock::time_point fired_at{};
+  } state;
+  const Fl_Timeout_Handler handler = [](void *data) {
+    auto &s = *static_cast<State *>(data);
+    if (++s.calls == 1) s.fired_at = Timer::Clock::now();
+  };
+  const auto wait_until = [](auto deadline, auto done) {
+    while (!done() && Timer::Clock::now() < deadline) Fl::wait(0.05);
+  };
+  const auto started = Timer::Clock::now();
+  editor::steady_wake_add(0.08, handler, &state);
+  expect(editor::steady_wake_armed(handler, &state), "positive delay armed an OS wake");
+  expect(!Fl::has_timeout(handler, &state), "no wall-clock FLTK timeout while waiting");
+  wait_until(started + 3s, [&] { return state.calls != 0; });
+  expect(state.calls == 1 && state.fired_at - started >= 64ms &&
+             state.fired_at - started <= 1080ms,
+         "the 80 ms wake fired once within one tick early and one second late");
+  expect(!editor::steady_wake_armed(handler, &state) && !Fl::has_timeout(handler, &state),
+         "delivery leaves neither an OS wake nor a posted deferral");
+
+  editor::steady_wake_add(0.08, handler, &state);
+  editor::steady_wake_remove(handler, &state);
+  wait_until(Timer::Clock::now() + 250ms, [] { return false; });
+  expect(state.calls == 1 && !editor::steady_wake_armed(handler, &state) &&
+             !Fl::has_timeout(handler, &state), "remove cancels a waiting OS wake");
+
+  editor::steady_wake_add(0.15, handler, &state);
+  editor::steady_wake_add(0.05, handler, &state);
+  expect(editor::steady_wake_armed(handler, &state) && !Fl::has_timeout(handler, &state),
+         "replacement waits outside the wall-clock queue");
+  wait_until(Timer::Clock::now() + 250ms, [] { return false; });
+  expect(state.calls == 2 && !editor::steady_wake_armed(handler, &state) &&
+             !Fl::has_timeout(handler, &state), "only the replacement wakes the handler");
+
+  editor::steady_wake_add(0.0, handler, &state);
+  expect(!editor::steady_wake_armed(handler, &state) && Fl::has_timeout(handler, &state) &&
+             state.calls == 2, "zero delay posts to FLTK without an OS wait");
+  Fl::wait(0.05);
+  expect(state.calls == 3 && !Fl::has_timeout(handler, &state), "zero delay runs on the next FLTK wait");
+  editor::steady_wake_add(0.0, handler, &state);
+  editor::steady_wake_remove(handler, &state);
+  Fl::wait(0.05);
+  expect(state.calls == 3 && !Fl::has_timeout(handler, &state), "remove cancels a posted deferral");
+}
+
+void steady_timeout_default_uses_monotonic_wake() {
+  int fired{};
+  Timer::Clock::time_point fired_at{};
+  std::optional<Timer> timer(std::in_place, [&] {
+    ++fired;
+    fired_at = Timer::Clock::now();
+  });
+  const auto handler = editor::EditorAppTestAccess::steady_timeout_handler();
+  void *const data = &*timer;
+  const auto idle = [&] {
+    return !editor::steady_wake_armed(handler, data) && !Fl::has_timeout(handler, data);
+  };
+  const auto start = Timer::Clock::now();
+  timer->start(60ms);
+  expect(timer->pending() && editor::steady_wake_armed(handler, data) &&
+             !Fl::has_timeout(handler, data), "the default scheduler arms a monotonic OS wake");
+  while (fired == 0 && Timer::Clock::now() < start + 3s) Fl::wait(0.05);
+  expect(fired == 1 && fired_at >= start + 60ms && !timer->pending() && idle(),
+         "the default timeout fires only once at or after the steady deadline");
+
+  timer->start(5s);
+  expect(editor::steady_wake_armed(handler, data), "default timeout armed before cancel");
+  timer->cancel();
+  expect(!timer->pending() && idle(), "cancel leaves no wake or FLTK deferral");
+
+  timer->start(5s);
+  expect(editor::steady_wake_armed(handler, data), "default timeout armed before destruction");
+  timer.reset();
+  expect(idle(), "destruction leaves no wake or FLTK deferral");
 }
 
 void linux_editor_autosave_steady_deadline() {
