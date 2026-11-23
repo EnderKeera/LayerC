@@ -4,11 +4,13 @@
 // anchors. With Direct Drag the user drags the bars in game instead; LayerD's
 // final anchor commits once, locally, and is never echoed back.
 #include "editor_app.hpp"
+#include "layerc/core/live_edit.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
 #include <FL/fl_ask.H>
 #include <algorithm>
+#include <utility>
 
 namespace layerc::editor {
 namespace {
@@ -25,7 +27,9 @@ StatusKind end_kind(const Event::EndReason reason) noexcept {
   switch (reason) {
   case Event::EndReason::daemon_error:
   case Event::EndReason::unavailable: return StatusKind::failure;
-  case Event::EndReason::connection_lost: return StatusKind::warning;
+  case Event::EndReason::connection_lost:
+  case Event::EndReason::direct_drag_unsent:
+  case Event::EndReason::direct_drag_unconfirmed: return StatusKind::warning;
   case Event::EndReason::daemon_ended:
   case Event::EndReason::target_closed: return StatusKind::information;
   }
@@ -42,6 +46,12 @@ std::string end_text(const Event &event) {
     return "Live editor connection lost; normal overlays restored.";
   case Event::EndReason::target_closed: return "Edit target closed or minimized.";
   case Event::EndReason::unavailable: return "On-window editing is unavailable: " + event.text;
+  case Event::EndReason::direct_drag_unsent:
+    return "Direct drag could not reach LayerD, so on-window editing ended. LayerD makes "
+           "the bars click-through again within two seconds.";
+  case Event::EndReason::direct_drag_unconfirmed:
+    return "LayerD did not confirm that Direct drag turned off, so on-window editing "
+           "ended. LayerD makes the bars click-through again within two seconds.";
   }
   return "On-window editing ended.";
 }
@@ -72,6 +82,7 @@ bool EditorApp::begin_on_window(const TaskCandidate &task) {
       {.profile_key = platform::canonical_profile_key(session.document().path()),
        .panel_id = selected ? profile.panels[*selected].id : std::string{},
        .profile_json = core::serialize_profile_json(profile)});
+  forget_direct_drag();
   on_window_live_ = true;
   on_window_started_ = false;
   direct_drag_notice_shown_ = false;
@@ -130,13 +141,29 @@ void EditorApp::on_window_event(const OnWindowEditEvent &event) {
     return;
   }
   case Event::Kind::direct_drag_ended:
-    if (!on_window_started_ || !on_window_) return;
-    // Echo the end, so a toggle crossing it in flight cannot leave LayerD on.
+    // An off request already out is confirmed on its own; only Direct drag
+    // still shown as on needs the end echoed, so a toggle crossing it in
+    // flight cannot leave LayerD on.
+    if (!on_window_started_ || !on_window_ || !panel_page_ ||
+        !panel_page_->direct_drag_enabled())
+      return;
     on_window_->direct_drag(false);
-    if (panel_page_) panel_page_->show_direct_drag(true, false);
+    direct_drag_disarming_ = true;
+    direct_drag_lost_ = true;
+    panel_page_->show_direct_drag(true, false);
     report(StatusKind::warning,
-           "Direct drag ended: LayerD no longer has pointer capture. Mirrored "
-           "click-through editing restored.");
+           "Direct drag ended: LayerD no longer has pointer capture. Waiting for LayerD to "
+           "confirm click-through editing.",
+           StatusVoice::silent);
+    return;
+  case Event::Kind::direct_drag_off:
+    if (!on_window_started_ || !direct_drag_disarming_) return;
+    direct_drag_disarming_ = false;
+    if (std::exchange(direct_drag_lost_, false))
+      report(StatusKind::warning, "Direct drag ended: LayerD no longer has pointer capture. "
+                                  "Mirrored click-through editing restored.");
+    else
+      report(StatusKind::information, "Mirrored click-through editing restored.");
     return;
   case Event::Kind::protocol_error:
     report(StatusKind::failure, "Live channel error: " + event.text);
@@ -159,6 +186,7 @@ void EditorApp::end_on_window(const bool notify) {
   // Pick window ends with the edit it served, before its status is replaced.
   if (on_window_live_ && tasks_window) tasks_window->cancel_active_pick();
   if (on_window_live_ && on_window_) on_window_->end(notify);
+  forget_direct_drag();
   on_window_live_ = false;
   on_window_started_ = false;
   remote_anchor_.reset();
@@ -187,6 +215,12 @@ void EditorApp::direct_drag_changed(const bool enabled) {
     if (panel_page_) panel_page_->show_direct_drag(false, false);
     return;
   }
+  if (enabled && direct_drag_disarming_) {
+    if (panel_page_) panel_page_->show_direct_drag(true, false);
+    report(StatusKind::information,
+           "Direct drag is still turning off. Turn it on again once LayerD confirms.");
+    return;
+  }
   if (enabled && !direct_drag_notice_shown_) {
     fl_message_title("Enable direct drag");
     const int choice = confirm_direct_drag_for_test_ ? confirm_direct_drag_for_test_() :
@@ -206,8 +240,28 @@ void EditorApp::direct_drag_changed(const bool enabled) {
   }
   on_window_->direct_drag(enabled);
   if (panel_page_) panel_page_->show_direct_drag(true, enabled);
-  report(StatusKind::information, enabled ? "Direct drag enabled for this edit session."
-                                          : "Mirrored click-through editing restored.");
+  if (enabled) {
+    report(StatusKind::information, "Direct drag enabled for this edit session.");
+    return;
+  }
+  // Restored only once LayerD confirms every bar is click-through again.
+  direct_drag_disarming_ = true;
+  direct_drag_lost_ = false;
+  report(StatusKind::information, "Turning Direct drag off. Waiting for LayerD to confirm.",
+         StatusVoice::silent);
+}
+
+void EditorApp::forget_direct_drag() {
+  // Without LayerD's confirmation, its lease ends Direct drag within this bound.
+  if (direct_drag_disarming_ || (panel_page_ && panel_page_->direct_drag_enabled()))
+    direct_drag_release_by_ = std::chrono::steady_clock::now() + core::live_edit_lease_release;
+  direct_drag_disarming_ = false;
+  direct_drag_lost_ = false;
+}
+
+bool EditorApp::direct_drag_settled() const {
+  return !direct_drag_disarming_ && !(panel_page_ && panel_page_->direct_drag_enabled()) &&
+         std::chrono::steady_clock::now() >= direct_drag_release_by_;
 }
 
 bool EditorApp::cancel_direct_drag() {

@@ -60,6 +60,13 @@ bool LiveEditSession::send(const LiveMessage &message) {
 }
 
 void LiveEditSession::retire_session() noexcept {
+  // Without a confirmed off, LayerD keeps Direct drag until it sees the end or
+  // the lease expires; either is over by the lease release bound.
+  if (session_id_ != 0 && (armed_ || disarm_revision_ != 0))
+    release_by_ = clock_() + static_cast<ULONGLONG>(layerc::core::live_edit_lease_release.count());
+  armed_ = false;
+  disarm_revision_ = 0;
+  disarm_deadline_ = 0;
   session_id_ = 0;
   peer_revision_ = 0;
   target_ = nullptr;
@@ -84,10 +91,22 @@ void LiveEditSession::handle_message(
       step.authenticated_now = true;
       return;
     }
-    if (session_id_ != 0 && message.edit_session == session_id_)
-      step.session_acknowledged = true;
-    else
+    if (session_id_ == 0 || message.edit_session != session_id_) {
       step.forwarded.push_back(message);
+      return;
+    }
+    if (message.text == layerc::core::live_direct_drag_off_ack) {
+      // Only the newest off request's answer confirms: an on request may
+      // have followed an older one.
+      if (disarm_revision_ != 0 && message.revision == disarm_revision_) {
+        disarm_revision_ = 0;
+        disarm_deadline_ = 0;
+        armed_ = false;
+        step.direct_drag_off = true;
+      }
+      return;
+    }
+    step.session_acknowledged = true;
     return;
   }
   if (message.type == LiveMessageType::error) {
@@ -132,6 +151,9 @@ void LiveEditSession::handle_message(
         layerc::core::RevisionDecision::accept)
       return;
     peer_revision_ = message.revision;
+    // LayerD has disarmed every bar; an off request still out is answered
+    // separately and keeps its own confirmation.
+    armed_ = false;
     step.direct_drag_ended = true;
     return;
   }
@@ -163,6 +185,13 @@ LiveEditStep LiveEditSession::poll(
                   .revision = revision_,
                   .text = layerc::core::package_identity("LayerE")});
     }
+  }
+
+  // An off request LayerD never confirmed: stop the session, so no heartbeat
+  // keeps LayerD's lease alive while a bar may still take clicks.
+  if (session_id_ != 0 && disarm_revision_ != 0 && clock_() >= disarm_deadline_) {
+    step.ended = LiveEditEnd{LiveEditEndReason::direct_drag_unconfirmed, {}};
+    (void)end(true);
   }
 
   if (pending_target_ != nullptr) {
@@ -243,6 +272,7 @@ std::optional<ULONGLONG> LiveEditSession::next_due() const {
   if (authenticated_ && session_id_ != 0)
     consider(last_heartbeat_send_ + heartbeat_interval_ms);
   if (pending_live_profile_) consider(live_profile_due_);
+  if (session_id_ != 0 && disarm_revision_ != 0) consider(disarm_deadline_);
   return due;
 }
 
@@ -293,10 +323,26 @@ bool LiveEditSession::send_anchor(const std::string_view panel_id,
 bool LiveEditSession::send_direct_drag(const bool enabled) {
   if (session_id_ == 0) return false;
   advance_revision();
-  return send({.type = LiveMessageType::set_direct_drag,
-               .revision = revision_,
-               .edit_session = session_id_,
-               .direct_drag = enabled});
+  if (!send({.type = LiveMessageType::set_direct_drag,
+             .revision = revision_,
+             .edit_session = session_id_,
+             .direct_drag = enabled})) {
+    // A lost request could leave bars taking clicks while heartbeats keep
+    // LayerD's lease alive: stop the session instead. LayerD's state is now
+    // unknown, so the lease wait applies.
+    armed_ = true;
+    (void)end(true);
+    return false;
+  }
+  if (enabled) {
+    armed_ = true;
+    disarm_revision_ = 0;
+    disarm_deadline_ = 0;
+  } else {
+    disarm_revision_ = revision_;
+    disarm_deadline_ = clock_() + direct_drag_ack_ms;
+  }
+  return true;
 }
 
 bool LiveEditSession::publish_committed(std::string profile_key,

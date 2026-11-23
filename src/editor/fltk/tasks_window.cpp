@@ -225,18 +225,26 @@ void TasksWindow::begin_pick() {
                    ? actions_.watch_capture(owner, std::move(lost))
                    : watch_pick_capture(owner, {Fl::add_timeout, Fl::remove_timeout},
                                         std::move(lost));
-  if (!watch) {
+  const auto refuse = [&](const StatusKind kind, const std::string &reason) {
     if (previous_grab && previous_grab->shown()) {
       Fl::first_window(previous_grab);
       Fl::grab(previous_grab);
     }
-    const std::string reason = "Pick window is unavailable: the editor could not watch its "
-                               "pointer capture. Choose the window from the list instead.";
     set_message(reason);
-    if (actions_.report) actions_.report(StatusKind::failure, reason);
+    if (actions_.report) actions_.report(kind, reason);
+  };
+  if (!watch) {
+    refuse(StatusKind::failure, "Pick window is unavailable: the editor could not watch its "
+                                "pointer capture. Choose the window from the list instead.");
     return;
   }
-  if (actions_.pick_starting) actions_.pick_starting();
+  // The editor's other input mode ends first; Pick waits until it has.
+  if (actions_.pick_starting) {
+    if (const auto reason = actions_.pick_starting()) {
+      refuse(StatusKind::information, *reason);
+      return;
+    }
+  }
   pick_was_shown_ = shown();
   pick_request_ = std::exchange(request_, TaskRequest::none);
   previous_dispatch_ = Fl::event_dispatch();

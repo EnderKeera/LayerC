@@ -15,6 +15,8 @@ Event::EndReason end_reason(const LiveEditEndReason reason) noexcept {
   case LiveEditEndReason::daemon_error: return Event::EndReason::daemon_error;
   case LiveEditEndReason::daemon_ended: return Event::EndReason::daemon_ended;
   case LiveEditEndReason::target_closed: return Event::EndReason::target_closed;
+  case LiveEditEndReason::direct_drag_unconfirmed:
+    return Event::EndReason::direct_drag_unconfirmed;
   }
   return Event::EndReason::daemon_ended;
 }
@@ -105,7 +107,9 @@ void HubEditDriver::apply(HubEditCommand command, LiveEditSession *session,
       (void)session->send_anchor(command.panel_id, command.x, command.y, command.flag);
     return;
   case HubEditCommand::Kind::direct_drag:
-    if (editing_ && session != nullptr) (void)session->send_direct_drag(command.flag);
+    // A request that cannot be sent stops the session, never a silent loss.
+    if (editing_ && session != nullptr && !session->send_direct_drag(command.flag))
+      finish({.kind = Event::Kind::ended, .reason = Event::EndReason::direct_drag_unsent});
     return;
   case HubEditCommand::Kind::end:
     if (session != nullptr) (void)session->end(command.flag && editing_);
@@ -126,6 +130,7 @@ void HubEditDriver::apply_step(const LiveEditStep &step, LiveEditSession &sessio
       emit_(id_, {.kind = Event::Kind::anchor, .panel_id = anchor.panel_id,
                   .x = anchor.x, .y = anchor.y, .final = anchor.final});
     if (step.direct_drag_ended) emit_(id_, {.kind = Event::Kind::direct_drag_ended});
+    if (step.direct_drag_off) emit_(id_, {.kind = Event::Kind::direct_drag_off});
     if (step.ended) {
       finish({.kind = Event::Kind::ended, .reason = end_reason(step.ended->reason),
               .text = step.ended->text});

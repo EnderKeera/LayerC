@@ -186,4 +186,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(
         layerc::test::daemon_owner::live_owner_owns_control_resources_and_faults),
     LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::live_owner_confirms_direct_drag_off),
+    LAYERC_TEST_CASE(
         layerc::test::daemon_owner::companion_owner_timer_lifecycle))

@@ -72,11 +72,13 @@ public:
                AutomationRuntimeHost &automation,
                RuntimeNotifications &notifications,
                RuntimeDiagnosticsSource &diagnostics,
-               std::wstring pipe_name = layerc::platform::live_edit_pipe_name)
+               std::wstring pipe_name = layerc::platform::live_edit_pipe_name,
+               DWORD expected_editor_process_id = 0)
       : sessions_(sessions), control_(control), overlays_(overlays),
         captures_(captures), automation_(automation),
         notifications_(notifications), diagnostics_(diagnostics),
-        pipe_name_(std::move(pipe_name)) {}
+        pipe_name_(std::move(pipe_name)),
+        expected_editor_process_id_(expected_editor_process_id) {}
   ~LiveEditHost() override;
   LiveEditHost(const LiveEditHost &) = delete;
   LiveEditHost &operator=(const LiveEditHost &) = delete;
@@ -129,6 +131,9 @@ private:
   RuntimeNotifications &notifications_;
   RuntimeDiagnosticsSource &diagnostics_;
   std::wstring pipe_name_;
+  // Zero in LayerD, which trusts only its sibling editor image; tests name
+  // their own process instead.
+  DWORD expected_editor_process_id_{};
   std::unique_ptr<layerc::platform::NamedPipeEditorDaemonChannel> channel_;
   std::unique_ptr<EditSession> session_;
   bool authenticated_{};

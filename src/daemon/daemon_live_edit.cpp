@@ -17,7 +17,7 @@ LiveEditHost::reconcile(const layerc::runtime::CapabilityDemand &) {
   if (channel_ == nullptr) {
     channel_ = std::make_unique<layerc::platform::NamedPipeEditorDaemonChannel>(
         layerc::platform::NamedPipeEditorDaemonChannel::Role::server,
-        pipe_name_);
+        pipe_name_, expected_editor_process_id_);
     if (!channel_->last_error().empty()) {
       const auto reason = layerc::platform::wide_to_utf8(channel_->last_error());
       channel_.reset();
@@ -96,7 +96,7 @@ void LiveEditHost::poll() {
 
   if (session_ != nullptr &&
       layerc::core::MonotonicClock::now() - session_->last_heartbeat >
-          std::chrono::seconds(1)) {
+          layerc::core::live_edit_lease) {
     end_session("edit lease expired");
   }
   update_overlays();
@@ -209,6 +209,11 @@ void LiveEditHost::handle_message(const layerc::core::LiveMessage &message) {
     session_->revision = message.revision;
     session_->direct_drag = message.direct_drag;
     rebuild_overlays();
+    // An off request is answered only after every panel is click-through
+    // again, so the editor never treats a queued or lost request as done.
+    if (!message.direct_drag && session_ != nullptr)
+      send_reply(LiveMessageType::acknowledgement, message,
+                 std::string(layerc::core::live_direct_drag_off_ack));
     return;
   }
   if (message.type == LiveMessageType::anchor_changed) {

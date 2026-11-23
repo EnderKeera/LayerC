@@ -930,6 +930,7 @@ void tasks_pick_needs_capture_watch() {
     bool captured_;
   };
   bool watch_available = false, capture_available = false;
+  std::optional<std::string> refusal;
   int watches = 0, starts = 0;
   std::vector<std::pair<editor::StatusKind, std::string>> reports;
   editor::TasksWindow::Actions actions;
@@ -938,9 +939,10 @@ void tasks_pick_needs_capture_watch() {
   actions.report = [&](const editor::StatusKind kind, const std::string &text) {
     reports.emplace_back(kind, text);
   };
-  actions.pick_starting = [&] {
+  actions.pick_starting = [&]() -> std::optional<std::string> {
     expect(!Fl::grab(), "Direct drag ends before Pick window takes the pointer");
     ++starts;
+    return refusal;
   };
   actions.watch_capture = [&](const std::uintptr_t window, std::function<void()>)
       -> std::unique_ptr<editor::PickCaptureWatch> {
@@ -978,9 +980,20 @@ void tasks_pick_needs_capture_watch() {
                  "capture. Choose the window from the list instead.",
          "failed acquisition has its own reason and does not report active");
 
+  // Direct drag still turning off: Pick waits, takes nothing, keeps the list.
   capture_available = true;
+  refusal = "Pick window waits until LayerD has turned Direct drag off.";
   pick->do_callback();
-  expect(watches == 3 && starts == 2 && Fl::grab() == &owner && !tasks.shown(),
+  expect(watches == 3 && starts == 2 && !Fl::grab() && GetCapture() != fl_xid(&owner) &&
+             Fl::event_dispatch() == prior && tasks.shown(),
+         "Pick window does not start until Direct drag has settled");
+  expect(reports.size() == 3 && reports.back().first == editor::StatusKind::information &&
+             reports.back().second == *refusal,
+         "the wait is reported with the editor's reason");
+
+  refusal.reset();
+  pick->do_callback();
+  expect(watches == 4 && starts == 3 && Fl::grab() == &owner && !tasks.shown(),
          "with a watch and capture Pick window arms after ending Direct drag");
   {
     const FltkEventState event_restore;

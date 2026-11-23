@@ -322,6 +322,8 @@ private:
   TaskPicker task_picker_;
   PackDialogs pack_dialogs_;
   LiveEditSession live_edit_;
+  // The Direct drag off awaiting LayerD's confirmation echoes its capture loss.
+  bool direct_drag_lost_{};
   VisualEditor visual_editor_;
 
   std::unique_ptr<AutomationEditor> automation_editor_;

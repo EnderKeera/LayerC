@@ -63,6 +63,9 @@ enum class LiveEditEndReason : std::uint8_t {
   daemon_error,
   daemon_ended,
   target_closed,
+  // LayerD did not confirm a Direct drag off request in time; the session
+  // was stopped so LayerD's lease disarms the bars.
+  direct_drag_unconfirmed,
 };
 
 struct LiveEditEnd {
@@ -112,6 +115,9 @@ struct LiveEditStep {
   // LayerD ended Direct drag itself (another window took the pointer
   // capture); the session stays open with mirrored click-through editing.
   bool direct_drag_ended{};
+  // LayerD confirmed this editor's off request after making every bar
+  // click-through again.
+  bool direct_drag_off{};
   std::optional<LiveEditEnd> ended;
   bool live_profile_due{};
   // Present only when the poll cadence changed.
@@ -158,6 +164,16 @@ public:
   [[nodiscard]] bool direct_drag_notice_needed() const noexcept {
     return !direct_drag_notice_shown_;
   }
+  // An off request is waiting for LayerD's confirmation.
+  [[nodiscard]] bool direct_drag_disarming() const noexcept {
+    return disarm_revision_ != 0;
+  }
+  // No bar can still take clicks for Direct drag: it is not on, nothing awaits
+  // LayerD's confirmation, and the lease of a session that ended while it might
+  // have been on has run out.
+  [[nodiscard]] bool direct_drag_settled() const {
+    return !armed_ && disarm_revision_ == 0 && clock_() >= release_by_;
+  }
   [[nodiscard]] bool live_profile_pending() const noexcept {
     return pending_live_profile_;
   }
@@ -184,6 +200,8 @@ public:
   // False when a non-final anchor is throttled below one frame.
   [[nodiscard]] bool send_anchor(std::string_view panel_id, double x, double y,
                                  bool final);
+  // An off request awaits LayerD's confirmation. A send that fails stops the
+  // session (no heartbeat keeps LayerD's lease alive) and returns false.
   [[nodiscard]] bool send_direct_drag(bool enabled);
   void note_direct_drag_notice() noexcept { direct_drag_notice_shown_ = true; }
   // Always advances the revision; sends only over an authenticated connection.
@@ -195,6 +213,8 @@ public:
   static constexpr ULONGLONG heartbeat_interval_ms = 250;
   static constexpr ULONGLONG drag_throttle_ms = 16;
   static constexpr ULONGLONG live_profile_interval_ms = 33;
+  // How long LayerD has to confirm Direct drag is off before the session stops.
+  static constexpr ULONGLONG direct_drag_ack_ms = 1000;
 
 private:
   friend struct LiveEditSessionTestAccess;
@@ -204,6 +224,8 @@ private:
   void handle_message(const layerc::core::LiveMessage &message,
                       LiveEditStep &step,
                       const std::function<bool(std::string_view)> &panel_known);
+  // Ending a session while Direct drag might be on starts the lease wait
+  // that direct_drag_settled() observes.
   void retire_session() noexcept;
 
   std::unique_ptr<LiveEditTransport> transport_;
@@ -218,6 +240,13 @@ private:
   ULONGLONG last_drag_send_{};
   ULONGLONG last_heartbeat_send_{};
   ULONGLONG live_profile_due_{};
+  layerc::core::ProfileRevision disarm_revision_{};
+  ULONGLONG disarm_deadline_{};
+  // Survives the session: until then a bar may still take clicks.
+  ULONGLONG release_by_{};
+  // LayerD may have Direct drag on: an on request went out, and neither its
+  // off confirmation nor LayerD's own end has arrived.
+  bool armed_{};
   UINT timer_interval_{100};
   bool authenticated_{};
   bool direct_drag_notice_shown_{};

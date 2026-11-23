@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -273,6 +274,11 @@ private:
         edit_packets_.push_back({message, std::chrono::steady_clock::now()});
       }
       request_cv_.notify_all();
+      // Like LayerD, answer an applied Direct drag off; a silent LayerD never does.
+      if (message.type == core::LiveMessageType::set_direct_drag && !message.direct_drag &&
+          mode_ != ReplyMode::silent)
+        reply(channel, message, core::LiveMessageType::acknowledgement,
+              std::string(core::live_direct_drag_off_ack));
       if (message.type == core::LiveMessageType::begin_edit) {
         reply(channel, message, core::LiveMessageType::acknowledgement);
         (void)channel.send({.type = core::LiveMessageType::anchor_changed,
@@ -959,6 +965,49 @@ void hub_edit_heartbeats_and_multiplexes() {
          "idle link sends no heartbeats or edit notifications after end");
 }
 
+// layer57 L57-01: the hub reports LayerD's answer to a Direct drag off, and
+// ends the edit when LayerD never answers so no heartbeat keeps it alive.
+void hub_edit_direct_drag_off_needs_an_answer() {
+  using Type = core::LiveMessageType;
+  using Event = editor::OnWindowEditEvent;
+  using layerc::test::expect;
+  for (const auto mode : {ReplyMode::acknowledge, ReplyMode::silent}) {
+    const bool answers = mode == ReplyMode::acknowledge;
+    FakeLayerD server(mode);
+    if (!expect(server.start(), "private fake LayerD listens")) return;
+    std::atomic<unsigned> starts{}, signals{};
+    editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+    const auto id = begin_on_desktop(hub);
+    if (!expect(!wait_for_edit_event(hub, id, Event::Kind::anchor).empty(),
+                "the edit starts")) return;
+    hub.edit_direct_drag(id, true);
+    hub.edit_direct_drag(id, false);
+    if (!expect(server.wait_for_edit_packets(Type::set_direct_drag, 2, 1s),
+                "both Direct drag requests reach LayerD")) return;
+    if (answers) {
+      const auto events = wait_for_edit_event(hub, id, Event::Kind::direct_drag_off);
+      expect(!events.empty() && events.back().kind == Event::Kind::direct_drag_off &&
+                 std::ranges::none_of(events, [](const Event &event) {
+                   return event.kind == Event::Kind::ended;
+                 }),
+             "LayerD's answer confirms the off and keeps the edit");
+      hub.end_edit(id, true);
+      expect(server.wait_for_edit_packets(Type::end_edit, 1, 1s), "the edit then ends normally");
+      continue;
+    }
+    const auto events = wait_for_edit_event(hub, id, Event::Kind::ended, 3s);
+    if (!expect(!events.empty() && events.back().kind == Event::Kind::ended &&
+                    events.back().reason == Event::EndReason::direct_drag_unconfirmed,
+                "an unanswered off ends the edit as unconfirmed") ||
+        !expect(server.wait_for_edit_packets(Type::end_edit, 1, 1s),
+                "the hub tells LayerD the edit ended")) return;
+    const auto packets = server.edit_packets().size();
+    std::this_thread::sleep_for(350ms);
+    expect(server.edit_packets().size() == packets,
+           "no heartbeat follows, so LayerD's lease runs out");
+  }
+}
+
 void hub_edit_expires_without_server() {
   using Kind = editor::OnWindowEditEvent::Kind;
   using layerc::test::expect;
@@ -1074,6 +1123,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(shutdown_while_trace_is_held_reports_an_error),
     LAYERC_TEST_CASE(status_reload_and_trace_continue_on_one_held_connection),
     LAYERC_TEST_CASE(hub_edit_heartbeats_and_multiplexes),
+    LAYERC_TEST_CASE(hub_edit_direct_drag_off_needs_an_answer),
     LAYERC_TEST_CASE(hub_edit_expires_without_server),
     LAYERC_TEST_CASE(hub_edit_disconnect_and_shutdown),
     LAYERC_TEST_CASE(editor_image_allowlist_is_exact))

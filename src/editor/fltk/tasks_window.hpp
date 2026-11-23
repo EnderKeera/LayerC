@@ -46,8 +46,10 @@ public:
     std::function<void(StatusKind, const std::string &)> report;
     std::function<std::optional<core::GameMatch>()> game_match;
     std::function<std::vector<TaskCandidate>(std::string &)> scan;
-    // Runs once Pick window is about to take the pointer (ends Direct drag).
-    std::function<void()> pick_starting;
+    // Runs once the capture watch exists, before any grab (it ends Direct
+    // drag). A reason means Pick does not start: the watch is dropped and no
+    // grab is taken.
+    std::function<std::optional<std::string>()> pick_starting;
     // Test seam for the owner's capture watch; empty uses the platform's.
     std::function<std::unique_ptr<PickCaptureWatch>(std::uintptr_t owner,
                                                     std::function<void()> lost)>

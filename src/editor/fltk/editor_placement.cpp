@@ -26,7 +26,12 @@ void EditorApp::show_tasks(const std::string &reason, const TaskRequest request)
           return session.document().profile().game;
         },
         .scan = {},
-        .pick_starting = [this] { (void)cancel_direct_drag(); },
+        .pick_starting = [this]() -> std::optional<std::string> {
+          (void)cancel_direct_drag();
+          if (direct_drag_settled()) return std::nullopt;
+          return "Pick window waits until LayerD has turned Direct drag off. Choose Pick "
+                 "window again in a moment.";
+        },
         .watch_capture = {},
     });
   }

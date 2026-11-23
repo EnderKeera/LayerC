@@ -11,6 +11,8 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
 
 #include <commctrl.h>
@@ -25,6 +27,10 @@ bool live_publish_allowed(const ProfileDocument &document) {
   return (!document.legacy_base_schema() && !document.legacy_visual_schema()) ||
          document.upgrade_acknowledged();
 }
+
+constexpr std::wstring_view direct_drag_unsent_status =
+    L"Direct drag could not reach LayerD, so on-window editing ended. LayerD "
+    L"makes the bars click-through again within two seconds.";
 
 } // namespace
 
@@ -229,13 +235,26 @@ void EditorWindow::poll_live_channel() {
     // An incoming final applies once locally and is never echoed as final.
     if (anchor.final) (void)commit_pending_anchor(false);
   }
-  if (step.direct_drag_ended && live_edit_.editing()) {
+  // An off request already out is confirmed on its own; only Direct drag
+  // still shown as on needs the end echoed, so a toggle crossing it in flight
+  // cannot leave LayerD on.
+  if (step.direct_drag_ended && live_edit_.editing() &&
+      owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_DIRECT_DRAG))) {
     set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
-    // Echo the end, so a toggle crossing it in flight cannot leave LayerD on.
-    (void)live_edit_.send_direct_drag(false);
-    set_status(L"Direct drag ended: LayerD no longer has pointer capture. Mirrored "
-               L"click-through editing restored.");
+    if (live_edit_.send_direct_drag(false)) {
+      direct_drag_lost_ = true;
+      set_status(L"Direct drag ended: LayerD no longer has pointer capture. Waiting for "
+                 L"LayerD to confirm click-through editing.",
+                 StatusVoice::silent);
+    } else {
+      end_edit_on_window(direct_drag_unsent_status, false);
+    }
   }
+  if (step.direct_drag_off)
+    set_status(std::exchange(direct_drag_lost_, false)
+                   ? L"Direct drag ended: LayerD no longer has pointer capture. Mirrored "
+                     L"click-through editing restored."
+                   : L"Mirrored click-through editing restored.");
   if (step.ended) {
     switch (step.ended->reason) {
     case LiveEditEndReason::daemon_error:
@@ -255,6 +274,12 @@ void EditorWindow::poll_live_channel() {
       break;
     case LiveEditEndReason::target_closed:
       end_edit_on_window(L"Edit target closed or minimized.", false);
+      break;
+    case LiveEditEndReason::direct_drag_unconfirmed:
+      end_edit_on_window(L"LayerD did not confirm that Direct drag turned off, so "
+                         L"on-window editing ended. LayerD makes the bars "
+                         L"click-through again within two seconds.",
+                         false);
       break;
     }
   }
@@ -407,6 +432,7 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
   panel_preview_.finish_drag();
   if (GetCapture() == panel_preview_.window) ReleaseCapture();
   (void)live_edit_.end(notify_daemon);
+  direct_drag_lost_ = false;
   if (task_picker_.awaiting_live_edit())
     task_picker_.clear_request();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
@@ -419,6 +445,12 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
 
 void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   if (!live_edit_.editing()) return;
+  // Until LayerD confirms the last off, the next confirmation must answer it.
+  if (enabled && live_edit_.direct_drag_disarming()) {
+    set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
+    set_status(L"Direct drag is still turning off. Turn it on again once LayerD confirms.");
+    return;
+  }
   if (enabled && live_edit_.direct_drag_notice_needed() &&
       themed_message_box(shell_.window,
                   L"Direct drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
@@ -429,9 +461,16 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   }
   if (enabled) live_edit_.note_direct_drag_notice();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), enabled);
-  (void)live_edit_.send_direct_drag(enabled);
-  set_status(enabled ? L"Direct drag enabled for this edit session."
-                     : L"Mirrored click-through editing restored.");
+  if (!live_edit_.send_direct_drag(enabled)) {
+    end_edit_on_window(direct_drag_unsent_status, false);
+    return;
+  }
+  direct_drag_lost_ = false;
+  if (enabled)
+    set_status(L"Direct drag enabled for this edit session.");
+  else  // Restored only once LayerD confirms every bar is click-through again.
+    set_status(L"Turning Direct drag off. Waiting for LayerD to confirm.",
+               StatusVoice::silent);
 }
 
 void EditorWindow::undo() {

@@ -4,6 +4,7 @@
 #include "layerc/core/version.hpp"
 #include "layerc/core/frame.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -24,6 +25,15 @@ package_identity(const std::string_view component) {
   result.append(product_version);
   return result;
 }
+// LayerD ends an edit session after this long without a message in it.
+inline constexpr std::chrono::milliseconds live_edit_lease{1000};
+// When a silent session has surely ended: the lease, plus LayerD's 250 ms
+// check cadence, rounded up. Editors wait this long before treating Direct
+// drag as off after they stop a session they could not confirm.
+inline constexpr std::chrono::milliseconds live_edit_lease_release{2000};
+// LayerD's acknowledgement text for an editor's Direct drag off request, sent
+// with the request's session and revision once every bar is click-through.
+inline constexpr std::string_view live_direct_drag_off_ack = "direct drag off";
 inline constexpr std::size_t max_live_message_bytes = 512U * 1024U;
 inline constexpr std::size_t max_live_buffer_bytes =
     8U * max_live_message_bytes;

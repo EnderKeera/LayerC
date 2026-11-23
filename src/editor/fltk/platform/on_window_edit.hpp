@@ -35,6 +35,9 @@ struct OnWindowEditEvent {
     // LayerD ended Direct Drag after losing the pointer capture; the session
     // continues with mirrored click-through editing.
     direct_drag_ended,
+    // LayerD confirmed that every bar is click-through again after this
+    // editor asked to turn Direct Drag off.
+    direct_drag_off,
     ended,
     // LayerD never exposed its live-edit service before the deadline.
     expired,
@@ -47,6 +50,10 @@ struct OnWindowEditEvent {
     target_closed,
     // The session could not start; text names why.
     unavailable,
+    // A Direct Drag request could not be sent, or LayerD did not confirm it
+    // turned off in time; the session stopped so LayerD's lease ends it.
+    direct_drag_unsent,
+    direct_drag_unconfirmed,
   };
 
   Kind kind{Kind::ended};

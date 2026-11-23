@@ -287,8 +287,18 @@ void EditorWindow::begin_picker() {
     cancel_picker();
     return;
   }
+  const bool was_editing = live_edit_.editing();
   if (owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_DIRECT_DRAG)))
     set_direct_drag_enabled(false);
+  // One input mode at a time: Pick takes the pointer only once no bar can.
+  if (!live_edit_.direct_drag_settled()) {
+    // An edit that just ended because its off could not be sent has already
+    // said why and that LayerD's lease restores click-through.
+    if (was_editing == live_edit_.editing())
+      set_status(L"Pick window waits until LayerD has turned Direct drag off. "
+                 L"Choose Pick window again in a moment.");
+    return;
+  }
   task_picker_.begin_pick(task_picker_.window != nullptr &&
                           IsWindowVisible(task_picker_.window));
   if (task_picker_.was_visible() && task_picker_.window != nullptr)

@@ -173,8 +173,23 @@ void begin_toggle_and_preview_drag() {
   drag->value(0);
   drag->do_callback();
   expect(fixture.edit.direct_drag == std::vector<bool>{true, false}, "Direct Drag sends both toggle values");
+  expect(std::string_view(Access::status(app)->value()) ==
+             "Turning Direct drag off. Waiting for LayerD to confirm.",
+         "turning Direct Drag off waits for LayerD instead of claiming it is off");
   drag->value(1);
   drag->do_callback();
+  expect(!drag->value() && fixture.edit.direct_drag == std::vector<bool>{true, false} &&
+             std::string_view(Access::status(app)->value()) ==
+                 "Direct drag is still turning off. Turn it on again once LayerD confirms.",
+         "Direct Drag cannot turn on again before LayerD confirms the off");
+  fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_off, .panel_id = {}, .text = {}});
+  expect(std::string_view(Access::status(app)->value()) ==
+             "Mirrored click-through editing restored.",
+         "LayerD's confirmation restores mirrored editing");
+  drag->value(1);
+  drag->do_callback();
+  expect(drag->value() && fixture.edit.direct_drag == std::vector<bool>{true, false, true},
+         "Direct Drag turns on again once the off is confirmed");
 
   auto &preview = *Access::preview(app);
   const auto view = Access::preview_panel(app, fixture.panel());
@@ -248,13 +263,19 @@ void end_reasons_and_expiry() {
   const auto ended = [](Reason reason, std::string text = {}) -> Event {
     return {.reason = reason, .panel_id = {}, .text = std::move(text)};
   };
-  const std::array<EndCase, 7> cases{{
+  const std::array<EndCase, 9> cases{{
       {ended(Reason::connection_lost), "Live editor connection lost; normal overlays restored.", Kind::warning},
       {ended(Reason::daemon_error, "rejected"), "LayerD ended editing: rejected", Kind::failure},
       {ended(Reason::daemon_ended), "LayerD ended the on-window edit session.", Kind::information},
       {ended(Reason::daemon_ended, "finished"), "LayerD ended editing: finished", Kind::information},
       {ended(Reason::target_closed), "Edit target closed or minimized.", Kind::information},
       {ended(Reason::unavailable, "missing pipe"), "On-window editing is unavailable: missing pipe", Kind::failure},
+      {ended(Reason::direct_drag_unsent),
+          "Direct drag could not reach LayerD, so on-window editing ended. LayerD makes "
+          "the bars click-through again within two seconds.", Kind::warning},
+      {ended(Reason::direct_drag_unconfirmed),
+          "LayerD did not confirm that Direct drag turned off, so on-window editing "
+          "ended. LayerD makes the bars click-through again within two seconds.", Kind::warning},
       {{.kind = Event::Kind::expired, .panel_id = {}, .text = {}},
           "Live editing is unavailable: LayerD did not expose the live-edit "
           "service. Exit the older LayerD from its tray icon, then try Position on window again.", Kind::failure},
@@ -339,18 +360,30 @@ void direct_drag_terminal_paths() {
            fixture.edit.end.empty();
   };
 
+  const auto confirm_off = [&] {
+    fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_off, .panel_id = {}, .text = {}});
+  };
+  const auto status = [&] { return std::string_view(Access::status(app)->value()); };
+
   expect(enable(), "Direct drag turns on");
   fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_ended, .panel_id = {}, .text = {}});
   expect(ended_off(2) &&
-             std::string_view(Access::status(app)->value()) ==
-                 "Direct drag ended: LayerD no longer has pointer capture. Mirrored "
-                 "click-through editing restored." &&
+             status() == "Direct drag ended: LayerD no longer has pointer capture. Waiting "
+                         "for LayerD to confirm click-through editing." &&
              Access::status_kind(app) == editor::StatusKind::warning,
          "LayerD ending Direct drag unchecks it, echoes the end and keeps the edit");
+  fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_ended, .panel_id = {}, .text = {}});
+  expect(ended_off(2), "a second end while the off is outstanding sends nothing more");
+  confirm_off();
+  expect(status() == "Direct drag ended: LayerD no longer has pointer capture. Mirrored "
+                     "click-through editing restored." &&
+             Access::status_kind(app) == editor::StatusKind::warning,
+         "LayerD's confirmation restores mirrored editing after the capture loss");
 
   expect(enable(), "Direct drag turns on again");
   expect(send_escape(app.main_window()) == 1 && app.main_window()->shown() && ended_off(4),
          "Esc in the editor ends Direct drag, not the editor or the edit");
+  confirm_off();
 
   expect(enable(), "Direct drag turns on before Pick window");
   app.command(editor::EditorCommand::tasks);
@@ -362,13 +395,42 @@ void direct_drag_terminal_paths() {
   auto *const pick = chooser ? find_pick_button(*chooser) : nullptr;
   if (!expect(tasks && pick, "the editor opens a chooser with Pick window")) return;
   pick->do_callback();
+  expect(ended_off(6) && !Fl::grab() && tasks->shown() &&
+             status() == "Pick window waits until LayerD has turned Direct drag off. "
+                         "Choose Pick window again in a moment.",
+         "choosing Pick window ends Direct drag but waits for LayerD's confirmation");
+  pick->do_callback();
+  expect(ended_off(6) && !Fl::grab() && tasks->shown(),
+         "Pick window keeps waiting while the off is unconfirmed, sending nothing more");
+  confirm_off();
+  pick->do_callback();
   expect(ended_off(6) && Fl::grab() == app.main_window(),
-         "starting Pick window ends Direct drag before it takes the pointer");
+         "once LayerD confirms, Pick window takes the pointer");
   expect(send_escape(app.main_window()) == 1 && !Fl::grab() && tasks->shown() &&
              app.main_window()->shown() && app.placement_active(),
          "Esc then cancels only the pick");
+
+  // An off LayerD never confirms ends the edit; Pick then waits out LayerD's
+  // lease before it takes the pointer.
+  expect(enable(), "Direct drag turns on before an unconfirmed off");
+  drag->value(0);
+  drag->do_callback();
+  fixture.edit.deliver(app, {.kind = Event::Kind::ended,
+                             .reason = Event::EndReason::direct_drag_unconfirmed,
+                             .panel_id = {}, .text = {}});
+  expect(!app.placement_active() && !drag->value() &&
+             fixture.edit.end == std::vector<bool>{false},
+         "an unconfirmed off ends the edit");
+  pick->do_callback();
+  expect(!Fl::grab() && tasks->shown(), "Pick window waits out LayerD's lease");
+  Access::expire_direct_drag_lease(app);
+  pick->do_callback();
+  expect(Fl::grab() == app.main_window(), "after the lease Pick window takes the pointer");
+  expect(send_escape(app.main_window()) == 1 && !Fl::grab(), "Esc cancels that pick");
+  fixture.start();
+  fixture.started();
   app.main_window()->do_callback();
-  expect(!app.shown() && !tasks->shown() && fixture.edit.end == std::vector<bool>{true},
+  expect(!app.shown() && !tasks->shown() && fixture.edit.end == std::vector<bool>{false, true},
          "closing the editor after Pick ends the edit");
 }
 
@@ -423,6 +485,10 @@ void escape_and_edit_end_reach_both_modes() {
   Fl::remove_timeout(end_stuck_loop, nullptr);
   expect(handled == 1 && !Fl::modal() && off(),
          "Esc in Options ends Direct drag and still closes Options");
+  const auto confirm_off = [&] {
+    fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_off, .panel_id = {}, .text = {}});
+  };
+  confirm_off();
 
   expect(enable(), "Direct drag turns on before a popup");
   {
@@ -440,6 +506,7 @@ void escape_and_edit_end_reach_both_modes() {
     expect(handled == 1 && !Fl::grab() && menu_owner.shown() && off(),
            "Esc in an open popup ends Direct drag and still closes the popup");
   }
+  confirm_off();
 
   expect(enable(), "Direct drag turns on before Esc in the main window");
   {
@@ -449,6 +516,7 @@ void escape_and_edit_end_reach_both_modes() {
            "an Esc key press in the main window ends only Direct drag");
     Fl::e_keysym = previous_key;
   }
+  confirm_off();
 
   app.command(editor::EditorCommand::tasks);
   auto *const tasks = Access::tasks_window(app);

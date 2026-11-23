@@ -16,6 +16,7 @@
 #include "status_voice.hpp"
 #include "steady_timeout.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -108,6 +109,10 @@ public:
   // Turns Direct drag off (Esc in the editor, or Pick window starting);
   // false when it was not on.
   bool cancel_direct_drag();
+  // No bar can still take clicks for Direct drag: it is off, LayerD confirmed
+  // the last off request, and any session stopped without that confirmation
+  // has passed LayerD's lease. Pick window starts only then.
+  [[nodiscard]] bool direct_drag_settled() const;
   void show_context_menu(EditorMenuContext context, bool has_target,
                          std::optional<EditorBounds> anchor = std::nullopt);
   void refresh();
@@ -200,6 +205,12 @@ private:
   bool on_window_live_{};    // begun, not yet ended
   bool on_window_started_{}; // LayerD has the session: Direct Drag is offered
   bool direct_drag_notice_shown_{};
+  // An off request awaits LayerD's confirmation; it may not be turned on again
+  // until then, so the next confirmation always answers this request.
+  bool direct_drag_disarming_{};
+  // The pending off echoes LayerD's own capture loss.
+  bool direct_drag_lost_{};
+  std::chrono::steady_clock::time_point direct_drag_release_by_{};
   std::function<int()> confirm_direct_drag_for_test_;
   // A Direct Drag LayerD reports before its release, shown in the preview only.
   std::optional<RemoteAnchor> remote_anchor_;
@@ -210,6 +221,8 @@ private:
   void publish_on_window();
   void send_on_window_anchor(std::string_view panel_id, bool final);
   void direct_drag_changed(bool enabled);
+  // Leaving a session where Direct drag may still be on starts the lease wait.
+  void forget_direct_drag();
   [[nodiscard]] const RemoteAnchor *remote_anchor(std::string_view panel_id) const;
   [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);

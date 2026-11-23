@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -254,6 +255,135 @@ void daemon_ends_direct_drag() {
          "a stale, foreign or enabling Direct drag message is ignored");
 }
 
+// layer57 L57-01: Direct drag counts as off only once LayerD confirms the
+// newest off request. A request that cannot be sent, or an off LayerD never
+// confirms, stops the session so no heartbeat keeps LayerD's lease alive, and
+// the editor waits out that lease before treating the bars as click-through.
+void direct_drag_off_needs_confirmation() {
+  const auto any_panel = [](std::string_view) { return true; };
+  const auto off_ack = [](const core::ProfileRevision revision,
+                          const core::EditSessionId id) {
+    core::LiveMessage message;
+    message.type = core::LiveMessageType::acknowledgement;
+    message.revision = revision;
+    message.edit_session = id;
+    message.text = std::string(core::live_direct_drag_off_ack);
+    return message;
+  };
+  const auto started = [](Fixture &fixture) {
+    (void)fixture.session.poll({});
+    fixture.authenticate();
+    (void)fixture.session.request_begin(target, {}, 2000);
+    return fixture.session.session_id();
+  };
+  const auto last_toggle = [](const Fixture &fixture) {
+    return fixture.sent(core::LiveMessageType::set_direct_drag).back().revision;
+  };
+  const auto heartbeats = [](const Fixture &fixture) {
+    return fixture.sent(core::LiveMessageType::heartbeat).size();
+  };
+  const auto release = static_cast<ULONGLONG>(core::live_edit_lease_release.count());
+
+  {
+    Fixture fixture;
+    const auto id = started(fixture);
+    expect(fixture.session.direct_drag_settled(), "a new session starts settled");
+    expect(fixture.session.send_direct_drag(true) && !fixture.session.direct_drag_settled() &&
+               !fixture.session.direct_drag_disarming(),
+           "Direct drag on is not settled");
+    expect(fixture.session.send_direct_drag(false) && fixture.session.direct_drag_disarming() &&
+               !fixture.session.direct_drag_settled(),
+           "an off request waits for LayerD's confirmation");
+    const auto first_off = last_toggle(fixture);
+    expect(fixture.session.send_direct_drag(true) && fixture.session.send_direct_drag(false),
+           "Direct drag toggles again before the first answer");
+    const auto newest_off = last_toggle(fixture);
+
+    fixture.receive(off_ack(first_off, id));
+    const auto older = fixture.session.poll(any_panel);
+    expect(!older.direct_drag_off && !older.session_acknowledged && older.forwarded.empty() &&
+               fixture.session.direct_drag_disarming(),
+           "the answer to an older off does not confirm the newest one");
+    fixture.receive(off_ack(newest_off, id + 1));
+    const auto foreign = fixture.session.poll(any_panel);
+    expect(!foreign.direct_drag_off && foreign.forwarded.size() == 1 &&
+               fixture.session.direct_drag_disarming(),
+           "another session's answer is forwarded, not taken as confirmation");
+    fixture.receive(off_ack(newest_off, id));
+    const auto confirmed = fixture.session.poll(any_panel);
+    expect(confirmed.direct_drag_off && !confirmed.session_acknowledged && !confirmed.ended &&
+               fixture.session.editing() && fixture.session.direct_drag_settled(),
+           "LayerD's answer to the newest off settles Direct drag and keeps the session");
+
+    expect(fixture.session.send_direct_drag(true), "Direct drag turns on again");
+    core::LiveMessage lost;
+    lost.type = core::LiveMessageType::set_direct_drag;
+    lost.revision = fixture.session.peer_revision() + 1;
+    lost.edit_session = id;
+    lost.direct_drag = false;
+    fixture.receive(lost);
+    const auto ended = fixture.session.poll(any_panel);
+    expect(ended.direct_drag_ended && fixture.session.direct_drag_settled(),
+           "LayerD ending Direct drag itself settles it");
+
+    expect(fixture.session.send_direct_drag(true), "Direct drag turns on before the edit ends");
+    (void)fixture.session.end(true);
+    expect(!fixture.session.editing() && !fixture.session.direct_drag_settled(),
+           "ending the edit with Direct drag on waits for LayerD's lease");
+    fixture.now += release - 1;
+    expect(!fixture.session.direct_drag_settled(), "the wait lasts the whole lease bound");
+    fixture.now += 1;
+    expect(fixture.session.direct_drag_settled(), "after the lease bound Direct drag is settled");
+  }
+
+  {
+    Fixture fixture;
+    (void)started(fixture);
+    expect(fixture.session.send_direct_drag(true) && fixture.session.send_direct_drag(false),
+           "Direct drag turns on, then off");
+    fixture.now += editor::LiveEditSession::direct_drag_ack_ms - 1;
+    const auto waiting = fixture.session.poll(any_panel);
+    expect(!waiting.ended && fixture.session.editing() && fixture.session.direct_drag_disarming(),
+           "the session waits the whole confirmation time");
+    const auto ends = fixture.sent(core::LiveMessageType::end_edit).size();
+    fixture.now += 1;
+    const auto unconfirmed = fixture.session.poll(any_panel);
+    expect(unconfirmed.ended &&
+               unconfirmed.ended->reason == editor::LiveEditEndReason::direct_drag_unconfirmed &&
+               !fixture.session.editing() &&
+               fixture.sent(core::LiveMessageType::end_edit).size() == ends + 1,
+           "an off LayerD never confirms stops the session and tells LayerD");
+    const auto beats = heartbeats(fixture);
+    const auto stopped = fixture.now;
+    fixture.now += 4 * editor::LiveEditSession::heartbeat_interval_ms;
+    (void)fixture.session.poll(any_panel);
+    expect(heartbeats(fixture) == beats && !fixture.session.direct_drag_settled(),
+           "no heartbeat keeps LayerD's lease alive, and Direct drag is not yet settled");
+    fixture.now = stopped + release;
+    expect(fixture.session.direct_drag_settled(), "the lease bound settles Direct drag");
+  }
+
+  for (const bool enabling : {true, false}) {
+    Fixture fixture;
+    (void)started(fixture);
+    if (!enabling)
+      expect(fixture.session.send_direct_drag(true), "Direct drag turns on before a lost off");
+    fixture.transport->accept_send = false;
+    const auto stopped = fixture.now;
+    expect(!fixture.session.send_direct_drag(enabling) && !fixture.session.editing() &&
+               !fixture.session.direct_drag_disarming() &&
+               !fixture.session.direct_drag_settled(),
+           "a Direct drag request that cannot be sent stops the session");
+    fixture.transport->accept_send = true;
+    const auto beats = heartbeats(fixture);
+    fixture.now += 4 * editor::LiveEditSession::heartbeat_interval_ms;
+    (void)fixture.session.poll(any_panel);
+    expect(heartbeats(fixture) == beats, "no heartbeat follows the unsent request");
+    fixture.now = stopped + release;
+    expect(fixture.session.direct_drag_settled(), "the lease bound settles an unsent request");
+  }
+}
+
 void end_and_pending_sends() {
   Fixture fixture;
   fixture.session.seed_revision(7);
@@ -391,6 +521,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(handshake_and_authentication),
                  LAYERC_TEST_CASE(session_lifecycle_and_reconnect),
                  LAYERC_TEST_CASE(anchor_ordering),
                  LAYERC_TEST_CASE(daemon_ends_direct_drag),
+                 LAYERC_TEST_CASE(direct_drag_off_needs_confirmation),
                  LAYERC_TEST_CASE(end_and_pending_sends),
                  LAYERC_TEST_CASE(heartbeat_cadence_and_target_loss),
                  LAYERC_TEST_CASE(committed_publish_and_forwarding))
