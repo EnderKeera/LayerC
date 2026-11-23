@@ -23,8 +23,12 @@ namespace layerc::editor {
 
 struct EditorAppTestAccess {
   // Autosave timing seam.
-  static bool autosave_pending(EditorApp &app) {
-    return Fl::has_timeout(EditorApp::autosave_tick, &app) != 0;
+  static EditorApp with_timer_scheduler(SteadyTimeout::Now now,
+                                        SteadyTimeout::Scheduler scheduler) {
+    return EditorApp(now, scheduler);
+  }
+  static bool autosave_pending(const EditorApp &app) {
+    return app.autosave_timer_.pending();
   }
   static std::uint64_t live_sequence(const EditorApp &app) {
     return app.live_draft_sequence_;

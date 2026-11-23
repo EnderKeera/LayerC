@@ -9,7 +9,14 @@
 namespace layerc::editor {
 namespace core = layerc::core;
 
-EditorApp::EditorApp() {
+using namespace std::chrono_literals;
+
+EditorApp::EditorApp()
+    : EditorApp(&SteadyTimeout::Clock::now, {Fl::add_timeout, Fl::remove_timeout}) {}
+
+EditorApp::EditorApp(const SteadyTimeout::Now now, const SteadyTimeout::Scheduler scheduler)
+    : timer_now_(now), timer_scheduler_(scheduler),
+      autosave_timer_([this] { autosave_tick(); }, now, scheduler) {
   window.copy_label(editor_window_title().c_str());
   // An accepted edit is the only autosave signal; presentation never is.
   session.set_change_listener([this] { sync_edit_services(); });
@@ -40,15 +47,14 @@ void EditorApp::end_live_draft() {
   live_draft_sequence_ = 0;
 }
 void EditorApp::stop_edit_services() {
-  Fl::remove_timeout(autosave_tick, this);
+  autosave_timer_.cancel();
   end_live_draft();
   live_draft_text_.clear();
   live_draft_kind_ = StatusKind::none;
 }
 void EditorApp::schedule_autosave(const bool text_change) {
   if (saving_ || !session.has_document() || session.is_draft()) return;
-  Fl::remove_timeout(autosave_tick, this);
-  Fl::add_timeout(text_change ? 0.4 : 0.001, autosave_tick, this);
+  autosave_timer_.start(text_change ? 400ms : 1ms);
 }
 void EditorApp::sync_edit_services() {
   if (saving_ || observed_generation_ == session.edit_generation()) return;
@@ -113,18 +119,17 @@ void EditorApp::live_draft_ready() {
     // The worker idles after a fault; the next accepted edit publishes anew.
   }
 }
-void EditorApp::autosave_tick(void *data) {
-  auto &app = *static_cast<EditorApp *>(data);
-  if (!app.window.shown()) { app.stop_edit_services(); return; }
+void EditorApp::autosave_tick() {
+  if (!window.shown()) { stop_edit_services(); return; }
   // Never mutate the document beneath a modal confirmation or calibration.
-  if (Fl::modal() || app.saving_) {
-    Fl::repeat_timeout(0.1, autosave_tick, data);
+  if (Fl::modal() || saving_) {
+    autosave_timer_.start(100ms);
     return;
   }
-  (void)app.flush_autosave();
+  (void)flush_autosave();
 }
 bool EditorApp::flush_autosave() {
-  Fl::remove_timeout(autosave_tick, this);
+  autosave_timer_.cancel();
   if (saving_) return false;
   if (!session.has_document()) return true;
   if (session.is_draft()) return false;

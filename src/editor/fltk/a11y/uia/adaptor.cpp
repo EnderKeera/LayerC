@@ -144,6 +144,12 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
 
   static void on_timer(void *data) {
     auto *self = static_cast<Impl *>(data);
+    const auto now = std::chrono::steady_clock::now();
+    if (now < self->next_refresh) {
+      Fl::add_timeout(std::chrono::duration<double>(self->next_refresh - now).count(),
+                      on_timer, self);
+      return;
+    }
     self->refresh_armed = false;
     (void)self->refresh();
     // A walk from this timer is the loop's only activity in this pass: the next

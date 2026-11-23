@@ -82,6 +82,9 @@ void linux_editor_appearance_contrast_floor_dialog();
 void linux_editor_main_window_text_and_tab_labels();
 void linux_editor_text_views_fit_content();
 void linux_editor_empty_automation_simulator_ready();
+void linux_editor_steady_timeout();
+void linux_editor_autosave_steady_deadline();
+void linux_editor_playback_steady_deadline();
 void linux_editor_empty_template_apply_is_not_an_edit();
 void linux_editor_typed_item_controls();
 void linux_editor_item_preview_and_active_duration();
@@ -635,7 +638,9 @@ void automation_trace_disconnect() {
   const auto before = editor::automation_graph_json(app.session.document().automation());
   const auto disk = layerc::test::read_file(fixture.path);
   record.value(1); record.do_callback();
-  for (int i = 0; i < 80 && record.value(); ++i) Fl::wait(.02);
+  for (const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(1600);
+       record.value() && std::chrono::steady_clock::now() < end;)
+    Fl::wait(.02);
   expect(!record.value() && std::string(status.value()).find("Unavailable:") == 0 &&
              std::string(editor::EditorAppTestAccess::status(app)->value()).find("Automation trace unavailable") == 0,
          "missing authenticated daemon is visible and stops the trace worker");
@@ -1103,6 +1108,9 @@ int main() {
   LAYERC_TEST_CASE(linux_editor_main_window_text_and_tab_labels),
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
   LAYERC_TEST_CASE(linux_editor_empty_automation_simulator_ready),
+  LAYERC_TEST_CASE(linux_editor_steady_timeout),
+  LAYERC_TEST_CASE(linux_editor_autosave_steady_deadline),
+  LAYERC_TEST_CASE(linux_editor_playback_steady_deadline),
   LAYERC_TEST_CASE(linux_editor_empty_template_apply_is_not_an_edit),
   LAYERC_TEST_CASE(linux_editor_typed_item_controls),
   LAYERC_TEST_CASE(linux_editor_item_preview_and_active_duration),

@@ -478,8 +478,14 @@ void Adaptor::Impl::on_check(void *data) {
 
 void Adaptor::Impl::on_refresh_timer(void *data) {
   auto *impl = static_cast<Impl *>(data);
+  const auto now = std::chrono::steady_clock::now();
+  if (now < impl->next_refresh) {
+    Fl::add_timeout(std::chrono::duration<double>(impl->next_refresh - now).count(),
+                    on_refresh_timer, impl);
+    return;
+  }
   impl->refresh_armed = false;
-  impl->next_refresh = std::chrono::steady_clock::now() + kRefreshInterval;
+  impl->next_refresh = now + kRefreshInterval;
   impl->refresh();
   // A walk from this timer is the loop's only activity in this pass: the next
   // check runs before anything else can have changed the tree, so it stays

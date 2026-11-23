@@ -3,6 +3,7 @@
 #include "cooldown_groups_window.hpp"
 #include "appearance_window.hpp"
 #include "accessible_widgets.hpp"
+#include "automation_simulator.hpp"
 #include "editor_app.hpp"
 #include "editor_appearance.hpp"
 #include "editor_menus.hpp"
@@ -30,13 +31,12 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
-#ifdef _WIN32
-#include <chrono>
-#endif
 #include <string>
 #include <string_view>
 #include <utility>
@@ -76,19 +76,212 @@ private:
   layerc::test::EditorTestEnvironment temp_;
 };
 
-Fl_Button *find_button(Fl_Group &group, const std::string &label) {
+template <class Widget = Fl_Button>
+Widget *find_control(Fl_Group &group, const std::string_view label) {
   for (int i = 0; i < group.children(); ++i) {
     auto *child = group.child(i);
-    if (auto *button = dynamic_cast<Fl_Button *>(child);
-        button && button->visible_r() && button->label() && label == button->label())
-      return button;
+    if (auto *control = dynamic_cast<Widget *>(child);
+        control && control->visible_r() && control->label() && label == control->label())
+      return control;
     if (auto *nested = dynamic_cast<Fl_Group *>(child))
-      if (auto *button = find_button(*nested, label)) return button;
+      if (auto *control = find_control<Widget>(*nested, label)) return control;
   }
   return nullptr;
 }
 
+Fl_Button *find_button(Fl_Group &group, const std::string &label) {
+  return find_control(group, label);
+}
+
+using namespace std::chrono_literals;
+using Timer = editor::SteadyTimeout;
+
+class FakeTimerQueue final {
+public:
+  struct Call {
+    double delay{};
+    Fl_Timeout_Handler handler{};
+    void *data{};
+
+    void invoke() const {
+      if (expect(handler != nullptr, "the fake scheduler has a callback to deliver"))
+        handler(data);
+    }
+  };
+
+  FakeTimerQueue() { active_ = this; }
+  ~FakeTimerQueue() { active_ = nullptr; }
+
+  static Timer::Clock::time_point now() { return active_->now_; }
+  static Timer::Scheduler scheduler() { return {add, remove}; }
+  void advance(Timer::Clock::duration elapsed) { now_ += elapsed; }
+  [[nodiscard]] bool pending() const { return call_.handler != nullptr; }
+  [[nodiscard]] bool waiting_for(std::chrono::milliseconds delay) const {
+    return pending() &&
+        std::abs(call_.delay - std::chrono::duration<double>(delay).count()) < 1e-8;
+  }
+  [[nodiscard]] Call take() { return std::exchange(call_, {}); }
+  [[nodiscard]] Call queued() const { return call_; }
+
+private:
+  static inline FakeTimerQueue *active_{};
+  Timer::Clock::time_point now_{};
+  Call call_{};
+
+  static void add(double delay, Fl_Timeout_Handler handler, void *data) {
+    expect(!active_->pending(), "a one-shot must dequeue or cancel before arming again");
+    active_->call_ = {delay, handler, data};
+  }
+  static void remove(Fl_Timeout_Handler handler, void *data) {
+    expect(active_->call_.handler == handler && active_->call_.data == data,
+           "cancel must remove the matching pending callback");
+    active_->call_ = {};
+  }
+};
+
 } // namespace
+
+void linux_editor_steady_timeout() {
+  FakeTimerQueue queue;
+  int fired{};
+  {
+    Timer timer([&] { ++fired; }, FakeTimerQueue::now, FakeTimerQueue::scheduler());
+    timer.start(400ms);
+    expect(timer.pending() && queue.waiting_for(400ms), "start arms the requested delay");
+    queue.advance(150ms);
+    queue.take().invoke();
+    expect(fired == 0 && timer.pending() && queue.waiting_for(250ms),
+           "an early wake re-arms just the steady remainder");
+    queue.advance(-200ms);
+    queue.take().invoke();
+    expect(fired == 0 && timer.pending() && queue.waiting_for(450ms),
+           "a backward clock reading cannot fire the callback before the deadline");
+    queue.advance(450ms);
+    const auto due = queue.take();
+    due.invoke();
+    due.invoke();
+    expect(fired == 1 && !timer.pending() && !queue.pending(), "the due callback fires exactly once");
+
+    timer.start(10ms);
+    const auto cancelled = queue.queued();
+    timer.cancel();
+    cancelled.invoke();
+    expect(fired == 1 && !timer.pending() && !queue.pending(), "cancel leaves no pending callback");
+
+    timer.start(10ms);
+    timer.start(30ms);
+    expect(timer.pending() && queue.waiting_for(30ms), "restart replaces the pending callback");
+    queue.advance(10ms);
+    queue.take().invoke();
+    expect(fired == 1 && queue.waiting_for(20ms), "the replaced deadline is no longer due");
+    queue.advance(20ms);
+    queue.take().invoke();
+    expect(fired == 2 && !timer.pending() && !queue.pending(), "only the replacement fires");
+    timer.start(10ms);
+  }
+  expect(fired == 2 && !queue.pending(), "destruction cancels a pending callback");
+}
+
+void linux_editor_autosave_steady_deadline() {
+  Fixture fixture;
+  fixture.store();
+  FakeTimerQueue queue;
+  using Access = editor::EditorAppTestAccess;
+  auto app = Access::with_timer_scheduler(FakeTimerQueue::now, FakeTimerQueue::scheduler());
+  app.build();
+  app.main_window()->show();
+  Fl::check();
+  const auto original = layerc::test::read_file(fixture.path);
+  if (!expect(original && app.session.has_document(), "open the private autosave fixture")) return;
+  const auto edit_name = [&](const char *name) {
+    auto *field = Access::name(app);
+    field->value(name);
+    app.field_changed(field);
+  };
+  edit_name("Monotonic autosave edit");
+  expect(Access::autosave_pending(app) && queue.waiting_for(400ms), "text edits arm the debounce");
+  queue.advance(100ms);
+  queue.take().invoke();
+  expect(queue.waiting_for(300ms) && layerc::test::read_file(fixture.path) == original &&
+             app.session.has_unsaved_changes(), "an early toolkit wake does not save");
+  queue.advance(300ms);
+  const auto due = queue.take();
+  due.invoke();
+  const auto saved = layerc::test::read_file(fixture.path);
+  expect(saved && saved->find("Monotonic autosave edit") != std::string::npos &&
+             !app.session.has_unsaved_changes() && !Access::autosave_pending(app) && !queue.pending(),
+         "at 400 ms the debounced edit saves and leaves no second callback");
+  due.invoke();
+  expect(layerc::test::read_file(fixture.path) == saved && !queue.pending(),
+         "duplicate delivery does not change the committed profile or re-arm");
+
+  edit_name("Modal autosave edit");
+  Fl_Window modal(160, 80, "Autosave fixture dialog");
+  modal.end();
+  modal.set_modal();
+  modal.show();
+  expect(Fl::modal() == &modal, "the autosave fixture has a shown modal window");
+  queue.advance(400ms);
+  queue.take().invoke();
+  expect(Access::autosave_pending(app) && queue.waiting_for(100ms) &&
+             layerc::test::read_file(fixture.path) == saved && app.session.has_unsaved_changes(),
+         "a due autosave defers while the modal is shown");
+  modal.hide();
+
+  app.main_window()->hide();
+  queue.advance(100ms);
+  queue.take().invoke();
+  expect(!Access::autosave_pending(app) && !queue.pending() &&
+             layerc::test::read_file(fixture.path) == saved, "a hidden main window cancels without saving");
+
+  app.main_window()->show();
+  edit_name("Explicit close autosave edit");
+  const auto before_close = queue.queued();
+  app.main_window()->do_callback();
+  const auto closed = layerc::test::read_file(fixture.path);
+  expect(!app.shown() && !Access::autosave_pending(app) && !queue.pending() && closed &&
+             closed->find("Explicit close autosave edit") != std::string::npos,
+         "normal close still flushes explicitly and cancels the pending timer");
+  queue.advance(400ms);
+  before_close.invoke();
+  expect(layerc::test::read_file(fixture.path) == closed && !queue.pending(),
+         "no scheduled autosave runs after close");
+}
+
+void linux_editor_playback_steady_deadline() {
+  Fixture fixture;
+  fixture.store();
+  FakeTimerQueue queue;
+  using Access = editor::EditorAppTestAccess;
+  auto app = Access::with_timer_scheduler(FakeTimerQueue::now, FakeTimerQueue::scheduler());
+  app.build();
+  app.main_window()->show();
+  Fl::check();
+  app.command(editor::EditorCommand::automation_page);
+  auto &page = *Access::automation(app)->group();
+  auto *view = find_control<Fl_Choice>(page, "Automation view");
+  if (!expect(view != nullptr, "the playback fixture can select the simulator")) return;
+  view->value(1);
+  view->do_callback();
+  auto *state = find_control<Fl_Multiline_Output>(page, "Simulator state");
+  auto *play = find_button(page, "Play");
+  if (!expect(play && state && std::string_view(state->value()).starts_with("Events: 0/1"),
+              "the playback fixture starts with an unplayed root")) return;
+
+  const auto interval = editor::simulator_interval(1);
+  play->do_callback();
+  expect(queue.waiting_for(interval), "Play arms its simulator interval");
+  queue.advance(interval / 2);
+  queue.take().invoke();
+  expect(std::string_view(state->value()).starts_with("Events: 0/1") &&
+             queue.waiting_for(interval - interval / 2), "an early wake does not advance playback");
+  queue.advance(interval - interval / 2);
+  queue.take().invoke();
+  expect(std::string_view(state->value()).starts_with("Events: 1/1") &&
+             std::string_view(play->label()) == "Play" && !queue.pending(),
+         "the due wake advances exactly one root and playback goes idle");
+  app.main_window()->hide();
+}
 
 void linux_editor_cooldown_group_dialog_transactions() {
   Fixture fixture; fixture.store();

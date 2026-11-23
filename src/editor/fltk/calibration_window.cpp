@@ -1,6 +1,7 @@
 #include "calibration_window.hpp"
 
 #include "profile_mutations.hpp"
+#include "steady_timeout.hpp"
 #include "platform/calibration.hpp"
 #include "layerc/core/calibration_readiness.hpp"
 #include "layerc/core/hash.hpp"
@@ -130,6 +131,7 @@ private:
   const CalibrationAccept &accept_;
   std::optional<AcceptedCalibration> result_;
   CalibrationSource source_;
+  SteadyTimeout capture_timer_{[this] { tick(); }};
   std::vector<CalibrationTarget> windows_;
   std::vector<core::TemplateImage> images_;
   core::CpuTemplateMatcher matcher_;
@@ -237,7 +239,7 @@ private:
             "Stopped. Select a matching window and acknowledge capture. " + scan.warning);
   }
   void stop_capture() {
-    Fl::remove_timeout(tick, this);
+    capture_timer_.cancel();
     source_.stop();
   }
   void close() { stop_capture(); live_->value(0); window_.hide(); }
@@ -260,32 +262,32 @@ private:
       message("Unavailable: the selected window disappeared or changed identity. Rescan and acknowledge capture again.");
       return;
     }
-    tick(this);
+    tick();
   }
-  static void tick(void *data) {
-    auto &self = *static_cast<CalibrationDialog *>(data);
-    if (!self.source_.running() || !self.window_.shown()) return;
-    const auto selected = self.target_->value();
-    const auto key = selected >= 0 && static_cast<std::size_t>(selected) < self.windows_.size()
-        ? self.windows_[static_cast<std::size_t>(selected)].key : 0;
-    const auto poll = self.source_.poll(key, std::chrono::steady_clock::now());
+  void tick() {
+    if (!source_.running() || !window_.shown()) return;
+    const auto selected = target_->value();
+    const auto key = selected >= 0 && static_cast<std::size_t>(selected) < windows_.size()
+        ? windows_[static_cast<std::size_t>(selected)].key : 0;
+    const auto poll = source_.poll(key, SteadyTimeout::Clock::now());
     if (poll.identity_changed) {
-      self.preview_->frame.reset(); self.preview_->redraw(); self.stop_capture();
-      self.readiness_.invalidate(); self.refresh_apply_readiness();
-      self.live_->value(0); self.notice_->value(0); self.target_->clear(); self.windows_.clear();
-      self.message("Unavailable: the selected window disappeared or changed identity. Rescan and acknowledge capture again.");
+      preview_->frame.reset(); preview_->redraw(); stop_capture();
+      readiness_.invalidate(); refresh_apply_readiness();
+      live_->value(0); notice_->value(0); target_->clear(); windows_.clear();
+      message("Unavailable: the selected window disappeared or changed identity. Rescan and acknowledge capture again.");
       return;
     }
     if (!poll.result.frame || poll.result.availability != core::CaptureAvailability::available) {
-      self.preview_->frame.reset(); self.preview_->redraw();
-      self.readiness_.invalidate(); self.refresh_apply_readiness();
-      self.message("Unavailable: " + poll.result.diagnostic);
-      self.stop_capture(); self.live_->value(0); return;
+      preview_->frame.reset(); preview_->redraw();
+      readiness_.invalidate(); refresh_apply_readiness();
+      message("Unavailable: " + poll.result.diagnostic);
+      stop_capture(); live_->value(0); return;
     }
-    if (self.preview_->frame != poll.result.frame) {
-      self.preview_->frame = poll.result.frame; self.preview_->redraw(); self.evaluate(poll.result.diagnostic);
+    if (preview_->frame != poll.result.frame) {
+      preview_->frame = poll.result.frame; preview_->redraw(); evaluate(poll.result.diagnostic);
     }
-    Fl::repeat_timeout(1.0 / self.controls_.sample_rate_hz, tick, &self);
+    capture_timer_.start(std::chrono::duration_cast<SteadyTimeout::Clock::duration>(
+        std::chrono::duration<double>{1.0 / controls_.sample_rate_hz}));
   }
   core::VisualObservation current_observation() const {
     if (controls_.predicate == CalibrationPredicate::template_match)

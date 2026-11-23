@@ -165,30 +165,28 @@ void EditorApp::open_profiles_folder() {
   }
   opener_path_ = path;
   report(StatusKind::information, "Opening the profiles folder: " + path);
-  Fl::add_timeout(0.1, &EditorApp::opener_tick, this);
+  opener_timer_.start(std::chrono::milliseconds{100});
 }
 
-void EditorApp::opener_tick(void *data) {
-  auto &app = *static_cast<EditorApp *>(data);
-  if (!app.opener_.running()) return;
-  const auto exit = app.opener_.poll();
-  if (!exit) { Fl::repeat_timeout(0.1, &EditorApp::opener_tick, data); return; }
+void EditorApp::opener_tick() {
+  if (!opener_.running()) return;
+  const auto exit = opener_.poll();
+  if (!exit) { opener_timer_.start(std::chrono::milliseconds{100}); return; }
   if (exit->accepted_without_process)
-    app.report(StatusKind::information, std::string(folder_opener_name()) +
-               " accepted the folder request, but no process exit status is available: " +
-               app.opener_path_);
+    report(StatusKind::information, std::string(folder_opener_name()) +
+           " accepted the folder request, but no process exit status is available: " + opener_path_);
   else if (!exit->code || *exit->code != 0)
-    app.report(StatusKind::failure, std::string(folder_opener_name()) +
-               " could not open the profiles folder (" +
-               (exit->code ? "exit " + std::to_string(*exit->code)
-                           : std::string("no exit status")) +
-               "); it is " + app.opener_path_);
+    report(StatusKind::failure, std::string(folder_opener_name()) +
+           " could not open the profiles folder (" +
+           (exit->code ? "exit " + std::to_string(*exit->code)
+                       : std::string("no exit status")) +
+           "); it is " + opener_path_);
   else
-    app.report(StatusKind::success, "Opened the profiles folder: " + app.opener_path_);
+    report(StatusKind::success, "Opened the profiles folder: " + opener_path_);
 }
 
 void EditorApp::stop_opener() {
-  Fl::remove_timeout(&EditorApp::opener_tick, this);
+  opener_timer_.cancel();
   opener_.stop();
 }
 

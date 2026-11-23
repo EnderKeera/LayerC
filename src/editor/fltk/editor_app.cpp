@@ -182,7 +182,7 @@ void EditorApp::tab_changed() {
 bool EditorApp::save() {
   if (!session.has_document()) { report(StatusKind::failure, "No profile is open."); return false; }
   if (saving_) return false;
-  Fl::remove_timeout(autosave_tick, this);
+  autosave_timer_.cancel();
   saving_ = true;
   if (const auto error = apply_field_buffers()) {
     saving_ = false;
@@ -214,7 +214,7 @@ void EditorApp::close_window() {
 bool EditorApp::may_leave() {
   if (!pending_fields_ && !session.has_unsaved_changes()) return true;
   if (!session.is_draft() && flush_autosave()) return true;
-  Fl::remove_timeout(autosave_tick, this);
+  autosave_timer_.cancel();
   fl_message_title("Unsaved changes");
   const auto decision = fl_choice("This profile has unsaved changes.", "Cancel", "Discard", "Save");
   if (decision == 2) return save();

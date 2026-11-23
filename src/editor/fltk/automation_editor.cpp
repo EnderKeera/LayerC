@@ -109,8 +109,12 @@ struct LinuxAutomationEditor::Impl {
   Pending pending{Pending::none};
   int current_view{};
   bool playing{};
+  SteadyTimeout playback_timer;
+  SteadyTimeout trace_timer{[this] { trace_tick(this); }};
 
-  Impl(EditorApp &owner, Fl_Group &group) : app(owner), page(&group) {
+  Impl(EditorApp &owner, Fl_Group &group)
+      : app(owner), page(&group),
+        playback_timer([this] { tick(); }, app.timer_now_, app.timer_scheduler_) {
     page->begin();
     view = choice(285, 95, 170, "Automation view");
     for (const auto label : automation_view_labels) append_choice(*view, label);
@@ -263,11 +267,12 @@ struct LinuxAutomationEditor::Impl {
   }
   void stop() {
     playing = false;
-    Fl::remove_timeout(tick, this);
+    playback_timer.cancel();
     play->copy_label("Play");
   }
   void stop_live(const std::string &status = "Stopped. No LayerD subscription.") {
     Fl::remove_timeout(trace_tick, this);
+    trace_timer.cancel();
     trace_enabled->value(0);
     trace_client.reset(); // owned, joined worker; unsubscribes or lease expires
     trace_state->value(status.c_str());
@@ -302,7 +307,7 @@ struct LinuxAutomationEditor::Impl {
       self.trace_state->redraw();
     }
     self.trace_client->request_poll();
-    Fl::repeat_timeout(0.2, trace_tick, &self);
+    self.trace_timer.start(std::chrono::milliseconds{200});
   }
   void set_pending(Pending next) {
     stop();
@@ -534,16 +539,12 @@ struct LinuxAutomationEditor::Impl {
     message(StatusKind::information, "Unsaved automation changes. Save applies them.", StatusVoice::silent);
     return true;
   }
-  static void tick(void *data) {
-    auto &self = *static_cast<Impl *>(data);
-    if (!self.playing || !self.app.shown() || !self.page->visible_r()) {
-      self.stop(); return;
-    }
-    const bool more = self.simulator.step(self.breakpoint->value());
-    self.describe();
-    if (!more) { self.stop(); return; }
-    Fl::repeat_timeout(static_cast<double>(simulator_interval(self.speed->value()).count()) / 1000.0,
-                       tick, &self);
+  void tick() {
+    if (!playing || !app.shown() || !page->visible_r()) { stop(); return; }
+    const bool more = simulator.step(breakpoint->value());
+    describe();
+    if (!more) { stop(); return; }
+    playback_timer.start(simulator_interval(speed->value()));
   }
   void trace_file(bool save) {
     suspend();
@@ -676,7 +677,7 @@ struct LinuxAutomationEditor::Impl {
         message(StatusKind::information, "Reset the simulator or add an event before playback."); return;
       }
       playing = true; play->copy_label("Pause");
-      Fl::add_timeout(static_cast<double>(simulator_interval(speed->value()).count()) / 1000.0, tick, this);
+      playback_timer.start(simulator_interval(speed->value()));
       return;
     }
     set_pending(widget == json ? Pending::json : Pending::basic);

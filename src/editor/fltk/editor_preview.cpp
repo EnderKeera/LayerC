@@ -71,10 +71,7 @@ PanelPreview::PanelPreview(int x, int y, int width, int height, EditorApp &app)
   // The Preview role's default; Appearance may override it.
   color(token_color(current_editor_tokens().input));
 }
-PanelPreview::~PanelPreview() { Fl::remove_timeout(wake, this); }
-void PanelPreview::wake(void *data) {
-  static_cast<PanelPreview *>(data)->redraw();
-}
+PanelPreview::~PanelPreview() = default;
 
 SimulatorPanelPreview PanelPreview::present(const core::Panel &panel,
                                            bool *simulated) const {
@@ -109,7 +106,7 @@ SimulatorPanelPreview PanelPreview::present(const core::Panel &panel,
 void PanelPreview::draw() {
   // The only preview wakeup is a real core flash edge. Deterministic replay
   // redraws on a simulator step, never against the wall clock.
-  Fl::remove_timeout(wake, this);
+  wake_timer_.cancel();
   std::optional<core::TimePoint> next;
   fl_push_clip(x(), y(), w(), h());
   fl_rectf(x(), y(), w(), h(), color());
@@ -178,8 +175,8 @@ void PanelPreview::draw() {
       draw_editor_focus(x(), y(), w(), h());
   fl_pop_clip();
   if (next && visible_r()) {
-    const auto seconds = std::chrono::duration<double>(*next - core::MonotonicClock::now()).count();
-    Fl::add_timeout(std::max(seconds, 0.001), wake, this);
+    const SteadyTimeout::Clock::duration minimum = std::chrono::milliseconds{1};
+    wake_timer_.start(std::max(*next - core::MonotonicClock::now(), minimum));
   }
 }
 

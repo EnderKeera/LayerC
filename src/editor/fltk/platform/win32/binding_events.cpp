@@ -1,6 +1,7 @@
 #include "platform/services.hpp"
 
 #include "binding_controls.hpp"
+#include "steady_timeout.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
@@ -19,7 +20,7 @@ namespace {
 using Kind = FocusedKeyResult::Kind;
 constexpr UINT_PTR subclass_id = 1;
 // Short enough to observe a tap; it runs only while this modal owns focus.
-constexpr double controller_poll_seconds = 0.02;
+constexpr auto controller_poll_interval = std::chrono::milliseconds{20};
 
 FocusedKeyResult physical_key(const WPARAM key, const LPARAM data) noexcept {
   if (key == VK_PROCESSKEY || key == VK_PACKET)
@@ -72,12 +73,13 @@ struct FocusedBindingEvents::Impl {
   }
 
   void arm() {
-    if (focused() && !Fl::has_timeout(poll, this))
+    if (focused() && !poll_timer.pending() && !Fl::has_timeout(poll, this))
       Fl::add_timeout(0.0, poll, this);
   }
 
   void disarm() {
     Fl::remove_timeout(poll, this);
+    poll_timer.cancel();
     controllers.reset();
     composing = false;
   }
@@ -111,7 +113,7 @@ struct FocusedBindingEvents::Impl {
                                                  : " XInput controllers ready."));
     }
     if (self.focused())
-      Fl::repeat_timeout(controller_poll_seconds, poll, &self);
+      self.poll_timer.start(controller_poll_interval);
     else
       self.disarm();
   }
@@ -155,6 +157,7 @@ struct FocusedBindingEvents::Impl {
   }
 
   FocusedBindingCallbacks callbacks;
+  SteadyTimeout poll_timer{[this] { poll(this); }};
   HWND hwnd{};
   bool composing{};
   unsigned connected{};

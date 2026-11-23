@@ -14,6 +14,7 @@
 #include "platform/on_window_edit.hpp"
 #include "platform/services.hpp"
 #include "status_voice.hpp"
+#include "steady_timeout.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -54,8 +55,8 @@ private:
   friend struct EditorAppTestAccess;
   [[nodiscard]] SimulatorPanelPreview present(const core::Panel &panel,
                                              bool *simulated = nullptr) const;
-  static void wake(void *data);
   EditorApp &app_;
+  SteadyTimeout wake_timer_{[this] { redraw(); }};
   void move_anchor(std::string_view panel_id, const std::function<void(core::Panel &)> &move);
   void finish_move(std::string_view panel_id);
   bool nudge(int key);
@@ -140,6 +141,10 @@ public:
   [[nodiscard]] std::optional<TaskCandidate> window_target(TaskRequest request);
 
 private:
+  EditorApp(SteadyTimeout::Now now, SteadyTimeout::Scheduler scheduler);
+  const SteadyTimeout::Now timer_now_;
+  const SteadyTimeout::Scheduler timer_scheduler_;
+  SteadyTimeout autosave_timer_;
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_;
   StatusKind daemon_kind_{StatusKind::none};
   // The last message spoken, so a repeating failure is said once.
@@ -158,15 +163,16 @@ private:
   void schedule_autosave(bool text_change);
   void stop_edit_services();
   void update_daemon_status();
-  static void autosave_tick(void *);
+  void autosave_tick();
   void live_draft_ready();
   void end_live_draft();
   void open_profiles_folder();
-  static void opener_tick(void *);
+  void opener_tick();
   void stop_opener();
   EditorAppearance appearance_;
   std::string appearance_error_;
   FolderOpener opener_;
+  SteadyTimeout opener_timer_{[this] { opener_tick(); }};
   friend struct EditorFolderTestAccess;
   std::function<bool(const std::filesystem::path &)> start_folder_for_test_;
   std::string opener_path_;
@@ -205,6 +211,7 @@ private:
   friend class ProfilePage;
   friend class PanelPreview;
   friend class PanelPage;
+  friend class LinuxAutomationEditor;
   friend struct EditorCommandRegistry;
   friend struct EditorAppTestAccess;
 };
