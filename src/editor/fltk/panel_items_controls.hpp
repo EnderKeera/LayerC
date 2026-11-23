@@ -19,7 +19,8 @@ class EditorApp;
 class PanelItemsControls final {
 public:
   explicit PanelItemsControls(EditorApp &app) noexcept : app_(app) {}
-  void build();
+  // Lays the list out between the row above (`top`) and the parent's `bottom`.
+  void build(int top, int bottom);
   void show(const core::GameProfile &profile, std::optional<std::size_t> panel);
   [[nodiscard]] bool owns(const Fl_Widget *widget) const;
 private:

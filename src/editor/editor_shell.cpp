@@ -2,6 +2,7 @@
 #include "dialog_layout.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_dialog_layouts.hpp"
+#include "editor_promise_text.hpp"
 #include "editor_resource.h"
 #include "editor_shortcuts.hpp"
 #include "editor_window.hpp"
@@ -669,8 +670,8 @@ void EditorWindow::show_about() {
       shell_.connection_cache + L"\n" + shell_.visual_runtime_status;
   const std::wstring text =
       L"LayerC Editor " + version +
-      L"\n\nCreates and edits cooldown overlay profiles. LayerC reads input "
-      L"passively: it never blocks, changes or sends input.\n\n"
+      L"\n\nCreates and edits cooldown overlay profiles. " +
+      to_wide(std::string(about_input_promise())) + L"\n\n"
       L"Source and releases: github.com/EnderKeera/LayerC";
   static constexpr PromptButton buttons[] = {{L"Copy details", 1},
                                              {L"Close", IDCANCEL}};

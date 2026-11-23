@@ -6,6 +6,8 @@
 #include "platform/services.hpp"
 #include "profile_edit.hpp"
 #include "editor_test_environment.hpp"
+#include "editor_appearance.hpp"
+#include "editor_style.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -15,6 +17,8 @@
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Tabs.H>
+#include <FL/fl_draw.H>
+#include <FL/platform.H>
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -243,6 +247,120 @@ void profile_identity_and_browse() {
   app.refresh();
   browse->do_callback();
   expect(!accepted().game.global, "Browse changes a global profile to application matching");
+}
+
+// layer56 L56-02: the item list's outside label has its own band, one group
+// gap under the checkbox row, and the list, its wrapped disabled reason and the
+// action captions fit the Panels fields without overlapping. Measured on an
+// unmapped window, as production applies desktop text: FLTK's size is capped
+// at 14 px and larger text scales the screens (desktop_text_metrics).
+void panel_items_fit_their_fields() {
+  using Access = editor::EditorAppTestAccess;
+  editor::install_editor_style();
+  fl_open_display();
+  const int base = FL_NORMAL_SIZE;
+  const editor::DesktopTextMetrics passes[] = {
+      editor::desktop_text_metrics(11), {base, 1.0F}, editor::desktop_text_metrics(20)};
+  // The two longest reason lines the panel can show (a full panel has more
+  // than one item, so "full" and "last item" never show together).
+  const std::string reasons[] = {
+      "A panel holds at most " + std::to_string(core::max_overlay_items_per_panel) +
+          " items. This item kind is kept as it is and can't be edited here.",
+      "This item kind is kept as it is and can't be edited here. A panel needs at least one item."};
+  for (const auto &metrics : passes) {
+    // Restores every screen's scale however the pass ends.
+    struct Scales {
+      std::vector<float> saved;
+      ~Scales() {
+        for (std::size_t screen = 0; screen < saved.size(); ++screen)
+          Fl::screen_scale(static_cast<int>(screen), saved[screen]);
+      }
+    } scales;
+    for (int screen = 0; screen < Fl::screen_count(); ++screen) {
+      scales.saved.push_back(Fl::screen_scale(screen));
+      Fl::screen_scale(screen, scales.saved.back() * metrics.scale);
+    }
+    Fixture fixture;
+    editor::EditorApp app;
+    FL_NORMAL_SIZE = metrics.normal_size;
+    app.build();
+    FL_NORMAL_SIZE = base;
+    const std::string at = " at text size " + std::to_string(metrics.normal_size) +
+                           " and scale " + std::to_string(metrics.scale);
+    auto *list = Access::items(app);
+    if (!expect(list && list->parent() && list->parent()->parent(),
+                "the item list sits in its group" + at)) return;
+    Fl_Group &group = *list->parent();
+    Fl_Group &fields = *group.parent();
+    int label_width = 0, label_height = 0;
+    list->measure_label(label_width, label_height);
+    const int label_top = list->y() - label_height;
+    int row_bottom = 0;
+    for (const Fl_Widget *row :
+         {static_cast<Fl_Widget *>(field<Fl_Check_Button>(fields, "Show bar text")),
+          static_cast<Fl_Widget *>(field<Fl_Button>(fields, "Colours...")),
+          static_cast<Fl_Widget *>(field<Fl_Check_Button>(fields, "Hide bars when ready"))}) {
+      if (!expect(row != nullptr, "the row above the list exists" + at)) return;
+      row_bottom = std::max(row_bottom, row->y() + row->h());
+    }
+    expect(label_height > 0 && label_top >= row_bottom + editor::editor_group_gap &&
+               label_top >= group.y(),
+           "the label starts one group gap under the row above" + at);
+    const auto inside = [](const Fl_Widget &outer, const Fl_Widget &inner) {
+      return inner.x() >= outer.x() && inner.y() >= outer.y() &&
+             inner.x() + inner.w() <= outer.x() + outer.w() &&
+             inner.y() + inner.h() <= outer.y() + outer.h();
+    };
+    expect(inside(fields, group), "the item group stays in the panel fields" + at);
+    struct Box { int x, y, w, h; };
+    std::vector<Box> boxes{{list->x(), label_top, label_width, label_height}};
+    bool contained = true, captions_fit = true;
+    const Fl_Widget *reason = nullptr;
+    for (int index = 0; index < group.children(); ++index) {
+      const Fl_Widget &child = *group.child(index);
+      contained = contained && inside(group, child);
+      boxes.push_back({child.x(), child.y(), child.w(), child.h()});
+      if (&child == list) continue;
+      if (const auto *button = dynamic_cast<const Fl_Button *>(&child)) {
+        int width = 0, height = 0;
+        button->measure_label(width, height);
+        captions_fit = captions_fit && width + Fl::box_dw(button->box()) <= button->w() &&
+                       height + Fl::box_dh(button->box()) <= button->h();
+      } else {
+        reason = &child;
+      }
+    }
+    expect(contained, "every item control stays in its group" + at);
+    expect(captions_fit, "every action caption fits inside its button" + at);
+    bool apart = true;
+    for (std::size_t first = 0; first < boxes.size(); ++first)
+      for (std::size_t second = first + 1; second < boxes.size(); ++second) {
+        const auto &a = boxes[first];
+        const auto &b = boxes[second];
+        apart = apart && (a.x + a.w <= b.x || b.x + b.w <= a.x ||
+                          a.y + a.h <= b.y || b.y + b.h <= a.y);
+      }
+    expect(apart, "the label band, list, reason line and actions never overlap" + at);
+    if (!expect(reason != nullptr, "the disabled reason line exists" + at)) return;
+    // Fl_Widget::draw_label insets a left-aligned inside label by 3 px a side.
+    int text_width = reason->w() - Fl::box_dw(reason->box());
+    if (text_width > 11) text_width -= 6;
+    bool reasons_fit = true;
+    fl_font(reason->labelfont(), reason->labelsize());
+    for (const auto &line : reasons) {
+      int width = text_width, height = 0;
+      fl_measure(line.c_str(), width, height, 0);
+      reasons_fit = reasons_fit && height <= reason->h() - Fl::box_dh(reason->box());
+    }
+    expect(reasons_fit, "the longest disabled reasons fit their line, wrapped" + at);
+    // A long authored item shows the horizontal scrollbar, so a full row must
+    // fit inside the browser's frame with it shown (Fl_Browser_::bbox).
+    const Fl_Boxtype frame = list->box() ? list->box() : FL_DOWN_BOX;
+    const int scrollbar = list->scrollbar_size() ? list->scrollbar_size() : Fl::scrollbar_size();
+    fl_font(list->textfont(), list->textsize());
+    expect(list->h() - Fl::box_dh(frame) - scrollbar >= fl_height(),
+           "the list shows a full row above a horizontal scrollbar" + at);
+  }
 }
 
 void disabled_action_reasons() {

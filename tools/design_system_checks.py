@@ -216,7 +216,8 @@ def token_violations(root: Path) -> list[tuple[Path, int, str, str]]:
 
     metrics = (("src/editor/dialog_layout.hpp", "native_control_height", "win-control-height"),
                ("src/editor/fltk/editor_style.hpp", "editor_input_height", "linux-input-height"),
-               ("src/editor/fltk/editor_style.hpp", "editor_button_height", "linux-button-height"))
+               ("src/editor/fltk/editor_style.hpp", "editor_button_height", "linux-button-height"),
+               ("src/editor/fltk/editor_style.hpp", "editor_group_gap", "linux-group-gap"))
     for relative, constant, name in metrics:
         path = root / relative
         try:

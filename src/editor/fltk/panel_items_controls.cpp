@@ -11,9 +11,11 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Hold_Browser.H>
+#include <FL/fl_draw.H>
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 
@@ -27,30 +29,59 @@ core::OverlayItem row_item(const core::Panel &panel, const std::size_t row) {
 std::size_t row_count(const core::Panel &panel) {
   return panel.items ? panel.items->size() : panel.cooldown_ids.size();
 }
+
+constexpr std::string_view opaque_reason =
+    "This item kind is kept as it is and can't be edited here.";
+constexpr std::string_view last_reason = "A panel needs at least one item.";
+
+// The line under the list: each disabled action's reason, in action order.
+std::string reason_line(const bool full, const bool opaque, const bool last) {
+  std::string line;
+  const auto add = [&](const bool shown, const std::string_view reason) {
+    if (!shown) return;
+    if (!line.empty()) line += ' ';
+    line += reason;
+  };
+  add(full, "A panel holds at most " + std::to_string(core::max_overlay_items_per_panel) +
+                " items.");
+  add(opaque, opaque_reason);
+  add(last, last_reason);
+  return line;
+}
+
+// The height of `text` wrapped as `widget` draws an inside label
+// (Fl_Widget::draw_label insets a left-aligned label by 3 px a side).
+int wrapped_label_height(const Fl_Widget &widget, const std::string &text) {
+  int width = widget.w() - Fl::box_dw(widget.box());
+  if (width > 11 && (widget.align() & (FL_ALIGN_LEFT | FL_ALIGN_RIGHT)) != 0) width -= 6;
+  int height = 0;
+  fl_font(widget.labelfont(), widget.labelsize());
+  fl_measure(text.c_str(), width, height, 0);
+  return height;
+}
 } // namespace
 
-void PanelItemsControls::build() {
-  group_ = new Fl_Group(495, 295, 540, 140);
+void PanelItemsControls::build(const int top, const int bottom) {
+  group_ = new Fl_Group(495, top, 540, bottom - top);
   group_->begin();
-  const int reason_height = 2 * editor_input_height;
-  const int reason_y = group_->y() + group_->h() - reason_height;
-  items_ = new Fl_Hold_Browser(500, 310, 355, reason_y - 310, "Panel items (ordered)");
-  reason_ = make_disabled_reason(items_->x(), reason_y, items_->w(), reason_height);
+  // Created in focus order, then laid out from their measured text.
+  items_ = new Fl_Hold_Browser(500, top, 355, 0, "Panel items (ordered)");
   items_->align(FL_ALIGN_TOP_LEFT);
   items_->format_char(0);
+  reason_ = make_disabled_reason(500, top, 355, 0);
   items_->callback([](Fl_Widget *, void *data) {
     static_cast<PanelItemsControls *>(data)->select();
   }, this);
-  const auto button = [&](const int x, const int y, const char *label) {
-    auto *value = new Fl_Button(x, y, 80, editor_button_height, label);
+  const auto button = [&](const char *label) {
+    auto *value = new Fl_Button(500, top, 80, editor_button_height, label);
     value->labelsize(FL_NORMAL_SIZE);
     return value;
   };
-  add_ = button(865, 310, "Add item");
-  edit_ = button(950, 310, "Edit item");
-  remove_ = button(865, 350, "Remove item");
-  up_ = button(950, 350, "Move up");
-  down_ = button(950, 390, "Move down");
+  add_ = button("Add item");
+  edit_ = button("Edit item");
+  remove_ = button("Remove item");
+  up_ = button("Move up");
+  down_ = button("Move down");
   add_->callback([](Fl_Widget *, void *data) {
     static_cast<PanelItemsControls *>(data)->edit(true);
   }, this);
@@ -67,6 +98,44 @@ void PanelItemsControls::build() {
     static_cast<PanelItemsControls *>(data)->move(1);
   }, this);
   group_->end();
+
+  // FLTK draws a top label at the bottom of the space between the group's top
+  // and the list, so that space is one group gap plus the label's own height
+  // at the current text size (DesignSystem.md, Spacing).
+  int label_width = 0, line_height = 0;
+  items_->measure_label(label_width, line_height);
+  const int band = top + editor_group_gap;
+  // Two action columns at the group's right edge, each as wide as the widest
+  // caption inside its box (80 px as authored, never narrower).
+  int column = 80;
+  for (const auto *action : {add_, edit_, remove_, up_, down_}) {
+    int width = 0, height = 0;
+    action->measure_label(width, height);
+    column = std::max(column, width + Fl::box_dw(action->box()) + 6);
+  }
+  const int second = group_->x() + group_->w() - 5 - column;
+  const int first = second - 5 - column;
+  const int pitch = editor_button_height + editor_group_gap;
+  const auto place = [&](Fl_Button *action, const int x, const int y) {
+    action->resize(x, y, column, editor_button_height);
+  };
+  place(add_, first, band);
+  place(edit_, second, band);
+  place(remove_, first, band + pitch);
+  place(up_, second, band + pitch);
+  place(down_, second, band + 2 * pitch);
+  // The list and its reason line fill the rest; the line keeps room for the
+  // longest reason it can show, wrapped. A full panel has more than one item,
+  // so the "full" and "last item" reasons never show together.
+  const int list_width = first - editor_group_gap - items_->x();
+  reason_->resize(items_->x(), bottom, list_width, 0);
+  int reason_height = line_height;
+  for (const auto &line : {reason_line(true, true, false), reason_line(false, true, true)})
+    reason_height = std::max(reason_height, wrapped_label_height(*reason_, line));
+  const int reason_y = bottom - reason_height;
+  const int list_y = band + line_height;
+  reason_->resize(items_->x(), reason_y, list_width, reason_height);
+  items_->resize(items_->x(), list_y, list_width, reason_y - list_y);
 }
 
 void PanelItemsControls::show(const core::GameProfile &profile,
@@ -102,22 +171,16 @@ void PanelItemsControls::select() {
   const auto active = [](Fl_Widget *widget, const bool enabled) {
     if (enabled) widget->activate(); else widget->deactivate();
   };
-  std::string line;
   const auto action = [&](Fl_Button *button, const bool enabled, const std::string &reason) {
     active(button, enabled);
     accessibility::describe_with_tooltip(*button, reason);
-    if (reason.empty()) return;
-    if (!line.empty()) line += ' ';
-    line += reason;
   };
-  action(add_, panel && !full,
-         full ? "A panel holds at most " + std::to_string(core::max_overlay_items_per_panel) +
-                    " items." : "");
-  action(edit_, has_row && !opaque,
-         opaque ? "This item kind is kept as it is and can't be edited here." : "");
-  action(remove_, has_row && !last, last ? "A panel needs at least one item." : "");
+  action(add_, panel && !full, reason_line(full, false, false));
+  action(edit_, has_row && !opaque, reason_line(false, opaque, false));
+  action(remove_, has_row && !last, reason_line(false, false, last));
   active(up_, has_row && *row > 0);
   active(down_, has_row && *row + 1 < count);
+  const auto line = reason_line(full, opaque, last);
   reason_->copy_label(line.c_str());
   if (line.empty()) reason_->hide(); else reason_->show();
 }

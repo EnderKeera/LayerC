@@ -28,6 +28,8 @@ void install_editor_style();
 // number (DesignSystem.md, Density).
 inline constexpr int editor_input_height = 28;
 inline constexpr int editor_button_height = 30;
+// The smallest gap between two groups on a form (`linux-group-gap`).
+inline constexpr int editor_group_gap = 10;
 
 // The appearance the authored drawing resolves its tokens from.
 void set_editor_style_appearance(const EditorAppearance &appearance);

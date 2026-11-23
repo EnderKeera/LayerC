@@ -480,7 +480,7 @@ and announcements carry the full message, not a duplicate glyph character.
 | `win-gap-main` | 16px | Windows: between groups in the main window. In code: `DialogLayout` and `editor_layout.cpp`. |
 | `win-section-gap` | 12px | Windows: between groups in the profile column (Timing and key, Overlay bar, Visual trigger). In code: `section_gap` (`editor_layout.cpp`). |
 | `swatch-inset` | 8px | Inset of the 16 px swatch inside a color button. |
-| `linux-group-gap` | 10px | Linux: the smallest gap between groups; forms use 10–15 px. |
+| `linux-group-gap` | 10px | Linux: the smallest gap between groups; forms use 10–15 px. In code: `editor_group_gap` (`editor_style.hpp`). |
 | `linux-margin` | 15px | Linux: outer margin of the main window and dialogs, and the largest gap between groups. |
 | `radius-none` | 0px | Every control, focus ring and window frame (Windows sets DWMWCP_DONOTROUND). |
 | `radius-radio` | 50% | Radio buttons and their dot, nothing else. |

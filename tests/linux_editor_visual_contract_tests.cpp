@@ -940,6 +940,20 @@ void about_shows_product_and_copies_build_details() {
       const std::string_view text = body->value();
       expect(text.starts_with("LayerE ") && text.find("Creates and edits cooldown overlay profiles.") !=
                  std::string_view::npos, "About describes LayerE and its purpose");
+#ifdef _WIN32
+      constexpr std::string_view promise =
+          "LayerC reads input passively and never changes or sends it. Only two editor modes "
+          "that you start yourself take mouse input. Pick window captures the mouse for your "
+          "next left click; pressing Esc or losing mouse capture cancels the pick. Direct drag, "
+          "once you agree, lets LayerD's visible panels take the clicks that land on them while "
+          "you position them on the game window. The editor never accesses the network.";
+#else
+      constexpr std::string_view promise =
+          "LayerC reads input passively: it never blocks, changes or sends input, and the editor "
+          "never accesses the network.";
+#endif
+      expect(text.find(promise) != std::string_view::npos,
+             "About states this platform's input exceptions and the no-network promise");
       copy->do_callback();
       auto details = read_clipboard();
       expect(details.starts_with("LayerE ") &&

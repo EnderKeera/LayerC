@@ -121,8 +121,9 @@ class TokenRules(unittest.TestCase):
             "linux-outline-background": "#6e6e6e", "linux-outline-panel": "#777777",
         })
         size = {"win-control-height": "26px", "linux-input-height": "28px", "linux-button-height": "30px"}
+        spacing = {"linux-group-gap": "10px"}
         self.data: dict[str, TokenSection] = {section: {"tokens": [{"name": k, "value": v} for k, v in values.items()]}
-                     for section, values in (("color", colors), ("size", size), ("spacing", {}), ("radius", {}))}
+                     for section, values in (("color", colors), ("size", size), ("spacing", spacing), ("radius", {}))}
         self.write_spec()
         fields = "\n".join(f".{name} = 0x{value[1:]}," for name, value in fixed.items())
         presets = "\n".join(f"int {p}_accent = 0x{value[1:]};" for p, value in preset_values.items())
@@ -131,7 +132,8 @@ class TokenRules(unittest.TestCase):
         self.put(rules.LINUX_THEME, source)
         self.put(rules.COLOR_MATH, "int accent_2_blue = 0x60b0ff; int accent_2_violet = 0xb99bff;\n")
         self.put("src/editor/dialog_layout.hpp", "int native_control_height = 26;")
-        self.put("src/editor/fltk/editor_style.hpp", "int editor_input_height = 28; int editor_button_height = 30;")
+        self.put("src/editor/fltk/editor_style.hpp",
+                 "int editor_input_height = 28; int editor_button_height = 30; int editor_group_gap = 10;")
 
     def put(self, relative, text):
         path = self.root / relative
@@ -195,7 +197,13 @@ class TokenRules(unittest.TestCase):
         self.assertTrue(rules.token_violations(self.root))
 
     def test_control_metric_mutation_is_caught(self):
-        self.put("src/editor/fltk/editor_style.hpp", "int editor_input_height = 29; int editor_button_height = 30;")
+        self.put("src/editor/fltk/editor_style.hpp",
+                 "int editor_input_height = 29; int editor_button_height = 30; int editor_group_gap = 10;")
+        self.assertTrue(rules.token_violations(self.root))
+
+    def test_group_gap_mutation_is_caught(self):
+        self.put("src/editor/fltk/editor_style.hpp",
+                 "int editor_input_height = 28; int editor_button_height = 30; int editor_group_gap = 8;")
         self.assertTrue(rules.token_violations(self.root))
 
     def test_missing_spec_fails_closed(self):

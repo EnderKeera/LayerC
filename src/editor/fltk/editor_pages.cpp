@@ -587,9 +587,13 @@ void PanelPage::build(FormBuilder &builder) {
   contrast_mark_->hide();
   contrast_line_->hide();
   show_text_ = builder.check(500, 280, 180, "Show bar text");
-  (void)builder.button(685, 275, 90, "Colours...", EditorCommand::panel_colors);
+  auto *colours = builder.button(685, 275, 90, "Colours...", EditorCommand::panel_colors);
   hide_ready_ = builder.check(780, 280, 250, "Hide bars when ready");
-  items_.build();
+  // The item list's label starts one group gap below this row, never inside it.
+  const int row_bottom = std::max({show_text_->y() + show_text_->h(),
+                                   colours->y() + colours->h(),
+                                   hide_ready_->y() + hide_ready_->h()});
+  items_.build(row_bottom, panel_fields_->y() + panel_fields_->h());
   panel_fields_->end();
   panel_tab_->end();
 }
