@@ -1,3 +1,4 @@
+#include "editor_popup.hpp"
 #include "linux_editor_test_access.hpp"
 #include "profile_edit.hpp"
 #include "test_support.hpp"
@@ -9,8 +10,10 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
+#include <FL/platform.H>
 #include <array>
 #include <memory>
 #include <string_view>
@@ -369,6 +372,120 @@ void direct_drag_terminal_paths() {
          "closing the editor after Pick ends the edit");
 }
 
+// Presses Esc once at whichever window runs the current popup or modal loop.
+void escape_in_loop(void *data) {
+  Fl_Window *const target = Fl::grab() ? Fl::grab() : Fl::modal();
+  if (!target) return;
+  const int previous_key = Fl::e_keysym, previous_state = Fl::e_state;
+  Fl::e_keysym = FL_Escape;
+  Fl::e_state = 0;
+  *static_cast<int *>(data) = Fl::handle(FL_KEYDOWN, target);
+  Fl::e_keysym = previous_key;
+  Fl::e_state = previous_state;
+}
+
+// Ends a loop whose Esc was not handled, so a failure cannot hang the suite.
+void end_stuck_loop(void *window) {
+  if (auto *const modal = Fl::modal()) modal->hide();
+  if (window) static_cast<Fl_Window *>(window)->hide();
+}
+
+// layer57 L57-02: Esc as a real key press in Options, in an open popup and in
+// the main window ends Direct drag, and the dialog or popup still closes. The
+// end of the edit, by LayerD or by a profile switch, cancels an armed Pick
+// window and gives back the pointer.
+void escape_and_edit_end_reach_both_modes() {
+  Fixture fixture;
+  if (!fixture.build()) return;
+  auto &app = fixture.app();
+  app.show();
+  fixture.start();
+  fixture.started();
+  auto *const drag = Access::direct_drag(app);
+  if (!expect(drag && drag->active(), "Direct drag is available in a started edit")) return;
+  Access::acknowledge_direct_drag_notice(app);
+  const auto enable = [&] {
+    drag->value(1);
+    drag->do_callback();
+    return drag->value() != 0 && !fixture.edit.direct_drag.empty() &&
+           fixture.edit.direct_drag.back();
+  };
+  const auto off = [&] {
+    return app.placement_active() && drag->active() && !drag->value() &&
+           !fixture.edit.direct_drag.back() && fixture.edit.end.empty();
+  };
+
+  expect(enable(), "Direct drag turns on before Options");
+  int handled = 0;
+  Fl::add_timeout(0.05, escape_in_loop, &handled);
+  Fl::add_timeout(5.0, end_stuck_loop, nullptr);
+  app.command(editor::EditorCommand::options);
+  Fl::remove_timeout(end_stuck_loop, nullptr);
+  expect(handled == 1 && !Fl::modal() && off(),
+         "Esc in Options ends Direct drag and still closes Options");
+
+  expect(enable(), "Direct drag turns on before a popup");
+  {
+    Fl_Window menu_owner(40, 40, 200, 80, "LayerC popup fixture");
+    Fl_Menu_Bar bar(0, 0, 200, 25);
+    bar.add("&File/&Probe", 0, nullptr);
+    menu_owner.end();
+    menu_owner.show();
+    Fl::check();
+    handled = 0;
+    Fl::add_timeout(0.05, escape_in_loop, &handled);
+    Fl::add_timeout(5.0, end_stuck_loop, &menu_owner);
+    editor::track_editor_popup(bar, 0);
+    Fl::remove_timeout(end_stuck_loop, &menu_owner);
+    expect(handled == 1 && !Fl::grab() && menu_owner.shown() && off(),
+           "Esc in an open popup ends Direct drag and still closes the popup");
+  }
+
+  expect(enable(), "Direct drag turns on before Esc in the main window");
+  {
+    const int previous_key = Fl::e_keysym;
+    Fl::e_keysym = FL_Escape;
+    expect(Fl::handle(FL_KEYDOWN, app.main_window()) == 1 && app.main_window()->shown() && off(),
+           "an Esc key press in the main window ends only Direct drag");
+    Fl::e_keysym = previous_key;
+  }
+
+  app.command(editor::EditorCommand::tasks);
+  auto *const tasks = Access::tasks_window(app);
+  Fl_Window *chooser{};
+  for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
+    if (std::string_view(window->label() ? window->label() : "") == "Detected Tasks — LayerE")
+      chooser = window;
+  auto *const pick = chooser ? find_pick_button(*chooser) : nullptr;
+  if (!expect(tasks && pick, "the editor opens a chooser with Pick window")) return;
+  const auto prior = Fl::event_dispatch();
+  const HWND main = fl_xid(app.main_window());
+  pick->do_callback();
+  if (!expect(Fl::grab() == app.main_window() && GetCapture() == main,
+              "Pick window holds the editor's capture during the edit")) return;
+  fixture.edit.deliver(app, {.kind = Event::Kind::ended,
+                             .reason = Event::EndReason::target_closed,
+                             .panel_id = {}, .text = {}});
+  expect(!Fl::grab() && GetCapture() != main && Fl::event_dispatch() == prior &&
+             tasks->shown() && !app.placement_active(),
+         "LayerD ending the edit cancels Pick window and gives back capture");
+  expect(std::string_view(Access::status(app)->value()) == "Edit target closed or minimized.",
+         "the end of the edit stays the reported status");
+
+  fixture.start();
+  fixture.started();
+  pick->do_callback();
+  if (!expect(Fl::grab() == app.main_window() && GetCapture() == main,
+              "Pick window arms in the next edit")) return;
+  auto *const profiles = Access::profiles(app);
+  profiles->value(2);
+  app.selection_changed(profiles);
+  expect(!Fl::grab() && GetCapture() != main && Fl::event_dispatch() == prior &&
+             !app.placement_active() && fixture.edit.end == std::vector<bool>{false, true},
+         "switching profiles ends the edit, notifies LayerD and cancels Pick window");
+  tasks->hide();
+}
+
 void closing_main_window_closes_tool_windows_and_edit() {
   Fixture fixture;
   if (!fixture.build()) return;
@@ -414,5 +531,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(end_reasons_and_expiry),
     LAYERC_TEST_CASE(ended_during_direct_drag_confirmation),
     LAYERC_TEST_CASE(direct_drag_terminal_paths),
+    LAYERC_TEST_CASE(escape_and_edit_end_reach_both_modes),
     LAYERC_TEST_CASE(closing_main_window_closes_tool_windows_and_edit),
     LAYERC_TEST_CASE(switching_or_closing_profile_ends_edit))

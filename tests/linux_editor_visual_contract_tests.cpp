@@ -944,7 +944,8 @@ void about_shows_product_and_copies_build_details() {
       constexpr std::string_view promise =
           "LayerC reads input passively and never changes or sends it. Only two editor modes "
           "that you start yourself take mouse input. Pick window captures the mouse for your "
-          "next left click; pressing Esc or losing mouse capture cancels the pick. Direct drag, "
+          "next left click; pressing a key other than a modifier, losing mouse capture or the "
+          "end of the edit cancels the pick. Direct drag, "
           "once you agree, lets LayerD's visible panels take the clicks that land on them while "
           "you position them on the game window. The editor never accesses the network.";
 #else

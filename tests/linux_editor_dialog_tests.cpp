@@ -19,6 +19,7 @@
 #include "tasks_window.hpp"
 
 #include <FL/Fl.H>
+#include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Group.H>
@@ -510,10 +511,12 @@ editor::TaskCandidate task_fixture() {
 
 struct FltkEventState {
   int event{Fl::e_number}, key{Fl::e_keysym}, x{Fl::e_x}, y{Fl::e_y},
-      clicks{Fl::e_clicks}, is_click{Fl::e_is_click};
+      clicks{Fl::e_clicks}, is_click{Fl::e_is_click}, length{Fl::e_length};
+  char *text{Fl::e_text};
   ~FltkEventState() {
     Fl::e_number = event; Fl::e_keysym = key; Fl::e_x = x; Fl::e_y = y;
     Fl::e_clicks = clicks; Fl::e_is_click = is_click;
+    Fl::e_text = text; Fl::e_length = length;
   }
 };
 
@@ -987,5 +990,101 @@ void tasks_pick_needs_capture_watch() {
            "Escape cancels the armed pick");
   }
   tasks.hide();
+}
+
+// layer57 L57-03: a capture loss still waiting for its deferred notice ends
+// the pick on the next release without choosing a window or taking capture
+// back from the editor-thread window that holds it. A key other than a
+// modifier ends the pick, then reaches the editor.
+void tasks_pick_loss_and_keys() {
+  Fixture fixture;
+  struct KeyProbe final : Fl_Box {
+    KeyProbe() : Fl_Box(10, 10, 80, 30, "probe") {}
+    int handle(const int event) override {
+      if (event == FL_FOCUS || event == FL_UNFOCUS) return 1;
+      if (event == FL_KEYBOARD) { ++keys; return 1; }
+      return Fl_Box::handle(event);
+    }
+    int keys = 0;
+  };
+  Fl_Window owner(60, 60, 240, 160, "LayerC pick owner fixture");
+  auto *const probe = new KeyProbe;
+  owner.end();
+  owner.show();
+  Fl::check();
+  int actions_run = 0;
+  std::vector<std::string> reports;
+  editor::TasksWindow::Actions actions;
+  actions.scan = [](std::string &) { return std::vector<editor::TaskCandidate>{}; };
+  actions.pick_owner = &owner;
+  actions.use = [&](const editor::TaskCandidate &, bool) { ++actions_run; };
+  actions.position = [&](const editor::TaskCandidate &) { ++actions_run; };
+  actions.calibrate = [&](const editor::TaskCandidate &) { ++actions_run; };
+  actions.report = [&](editor::StatusKind, const std::string &text) { reports.push_back(text); };
+  editor::TasksWindow tasks(std::move(actions));
+  tasks.show();
+  auto *window = detected_tasks_window();
+  auto *pick = window ? find_button(*window, "Pick &window") : nullptr;
+  if (!expect(pick != nullptr, "the chooser offers Pick window")) return;
+  const auto prior = Fl::event_dispatch();
+  const HWND hwnd = fl_xid(&owner);
+  struct Successor {
+    HWND window;
+    ~Successor() {
+      if (window && GetCapture() == window) ReleaseCapture();
+      if (window) DestroyWindow(window);
+    }
+  } successor{CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC",
+                              L"LayerC capture successor", WS_POPUP, 0, 0, 10, 10, nullptr,
+                              nullptr, GetModuleHandleW(nullptr), nullptr)};
+  if (!expect(successor.window != nullptr, "create the editor-thread capture successor")) return;
+
+  pick->do_callback();
+  if (!expect(Fl::grab() == &owner && GetCapture() == hwnd && !tasks.shown(),
+              "the armed pick holds the owner's capture")) return;
+  SetCapture(successor.window);
+  expect(GetCapture() == successor.window, "an editor-thread window takes capture");
+  {
+    const FltkEventState event_restore;
+    Fl::e_keysym = FL_Button + FL_LEFT_MOUSE;
+    expect(Fl::handle(FL_RELEASE, &owner) == 1, "the picker takes the release");
+  }
+  expect(actions_run == 0 && !reports.empty() && reports.back() == "Window picking cancelled.",
+         "a release after capture loss cancels instead of choosing a window");
+  expect(!Fl::grab() && Fl::event_dispatch() == prior && tasks.shown(),
+         "the cancelled pick restores the dispatcher and the chooser");
+  expect(GetCapture() == successor.window, "ending the pick leaves the successor's capture");
+  const auto reported = reports.size();
+  for (int pass = 0; pass < 5; ++pass) Fl::wait(0.01);
+  expect(reports.size() == reported && GetCapture() == successor.window && !Fl::grab(),
+         "the deferred loss notice never runs after the pick ended");
+  ReleaseCapture();
+
+  // The chooser stays hidden, so ending this pick moves no keyboard focus.
+  tasks.hide();
+  (void)Fl::handle(FL_FOCUS, &owner);
+  pick->do_callback();
+  if (!expect(Fl::grab() == &owner && GetCapture() == hwnd, "the pick arms again")) return;
+  Fl::focus(probe);
+  {
+    const FltkEventState event_restore;
+    // An unused key reaches FLTK's case-swapping shortcut retry, which
+    // rewrites the event text in place: give each key writable text.
+    char no_text[] = "", letter[] = "a";
+    Fl::e_text = no_text;
+    Fl::e_length = 0;
+    Fl::e_keysym = FL_Shift_L;
+    (void)Fl::handle(FL_KEYDOWN, &owner);
+    expect(Fl::grab() == &owner && !tasks.shown(), "a modifier alone leaves the pick armed");
+    const int keys = probe->keys;
+    Fl::e_text = letter;
+    Fl::e_length = 1;
+    Fl::e_keysym = 'a';
+    expect(Fl::handle(FL_KEYDOWN, &owner) == 1 && probe->keys == keys + 1,
+           "another key reaches the editor's focused widget");
+  }
+  expect(!Fl::grab() && GetCapture() != hwnd && Fl::event_dispatch() == prior && !tasks.shown() &&
+             actions_run == 0 && reports.back() == "Window picking cancelled.",
+         "another key first ends the pick and gives back capture");
 }
 #endif

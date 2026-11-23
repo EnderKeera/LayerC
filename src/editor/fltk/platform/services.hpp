@@ -88,6 +88,10 @@ struct PickCaptureTimer {
 };
 [[nodiscard]] std::unique_ptr<PickCaptureWatch>
 watch_pick_capture(std::uintptr_t owner, PickCaptureTimer timer, std::function<void()> lost);
+// Ends Pick window's FLTK grab. Native capture is released only while `owner`
+// still holds it; false when another window of this thread has taken capture
+// since, which then keeps it.
+[[nodiscard]] bool release_pick_grab(std::uintptr_t owner);
 
 struct FocusedBindingCallbacks {
   std::function<void(const core::InputToken &)> record;

@@ -156,6 +156,8 @@ void EditorApp::on_window_event(const OnWindowEditEvent &event) {
 }
 
 void EditorApp::end_on_window(const bool notify) {
+  // Pick window ends with the edit it served, before its status is replaced.
+  if (on_window_live_ && tasks_window) tasks_window->cancel_active_pick();
   if (on_window_live_ && on_window_) on_window_->end(notify);
   on_window_live_ = false;
   on_window_started_ = false;

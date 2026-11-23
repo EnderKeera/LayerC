@@ -65,6 +65,8 @@ public:
   [[nodiscard]] bool shown() const;
   [[nodiscard]] const TaskCandidate *selected() const;
   void set_message(const std::string &text);
+  // Ends an armed Pick window as Esc does; the edit it served has ended.
+  void cancel_active_pick();
 
 private:
   static void on_refresh(Fl_Widget *, void *);
@@ -90,6 +92,7 @@ private:
   TaskRequest request_{TaskRequest::none};
   TaskRequest pick_request_{TaskRequest::none};
   int (*previous_dispatch_)(int, Fl_Window *){};
+  std::uintptr_t pick_owner_native_{};
   Fl_Window *previous_grab_{};
   std::unique_ptr<PickCaptureWatch> capture_watch_;
   bool pick_was_shown_{};

@@ -1,6 +1,8 @@
 #include "platform/services.hpp"
 #include "x11_window.hpp"
 
+#include <FL/Fl.H>
+
 namespace layerc::editor {
 namespace {
 constexpr std::uint32_t scan_limit = 64;
@@ -52,6 +54,11 @@ std::optional<TaskCandidate> task_under_cursor() { return std::nullopt; }
 std::unique_ptr<PickCaptureWatch>
 watch_pick_capture(std::uintptr_t, PickCaptureTimer, std::function<void()>) {
   return nullptr;
+}
+
+bool release_pick_grab(std::uintptr_t) {
+  Fl::grab(nullptr);
+  return true;
 }
 
 std::optional<TaskCandidate> matching_task(const std::vector<TaskCandidate> &tasks,

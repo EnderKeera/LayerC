@@ -59,7 +59,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/platform/win32/window_settings.cpp
     src/editor/fltk/platform/win32/window_chrome.cpp
     src/editor/fltk/platform/win32/desktop_listener.cpp
-    src/editor/fltk/platform/win32/on_window_edit.cpp)
+    src/editor/fltk/platform/win32/on_window_edit.cpp
+    src/editor/fltk/platform/win32/pick_grab.cpp)
 target_include_directories(layerc_editor_fltk PUBLIC src/editor/fltk)
 # Calibration types only; the Windows capture backend arrives with its service.
 target_link_libraries(layerc_editor_fltk PUBLIC

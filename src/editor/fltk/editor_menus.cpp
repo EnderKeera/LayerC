@@ -123,6 +123,17 @@ bool EditorWindow::document_shortcut() {
 // popup menus, dialogs and other windows keep their own keyboard handling.
 int EditorWindow::dispatch(int event, Fl_Window *window) {
   const auto &owners = keyboard_owners();
+  if (event == FL_KEYBOARD && Fl::event_key() == FL_Escape) {
+    // Esc in any editor window, popup or dialog ends Direct drag before the
+    // focused popup or dialog takes it; their own Esc still runs afterwards.
+    bool ended = false;
+    for (auto *const owner : std::vector<EditorWindow *>(owners))
+      ended = owner->app_.cancel_direct_drag() || ended;
+    // The main window would close on Esc, so there the key ends only the mode.
+    if (ended && !Fl::grab() && !Fl::modal() &&
+        std::find(owners.begin(), owners.end(), window) != owners.end())
+      return 1;
+  }
   if (event == FL_KEYBOARD && history_key()) {
     const auto owner = std::find(owners.begin(), owners.end(), window);
     if (owner != owners.end() && (*owner)->document_shortcut()) return 1;

@@ -241,6 +241,7 @@ void TasksWindow::begin_pick() {
   pick_request_ = std::exchange(request_, TaskRequest::none);
   previous_dispatch_ = Fl::event_dispatch();
   previous_grab_ = previous_grab;
+  pick_owner_native_ = owner;
   capture_watch_ = std::move(watch);
   window_->hide();
   Fl::first_window(actions_.pick_owner);
@@ -265,8 +266,10 @@ void TasksWindow::end_pick(const bool reshow) {
   picker_ = nullptr;
   Fl::event_dispatch(previous_dispatch_);
   capture_watch_.reset();
-  Fl::grab(nullptr);
-  if (previous_grab_ && previous_grab_->shown()) {
+  // A window which took capture after the pick keeps it, and supersedes the
+  // grab the pick replaced.
+  if (release_pick_grab(std::exchange(pick_owner_native_, 0)) && previous_grab_ &&
+      previous_grab_->shown()) {
     Fl::first_window(previous_grab_);
     Fl::grab(previous_grab_);
   }
@@ -305,6 +308,18 @@ void TasksWindow::cancel_pick() {
   if (actions_.report) actions_.report(StatusKind::information, "Window picking cancelled.");
 }
 
+void TasksWindow::cancel_active_pick() {
+  if (picker_ == this) cancel_pick();
+}
+
+namespace {
+// Modifiers alone neither use nor end the pick.
+bool modifier_key(const int key) noexcept {
+  return (key >= FL_Shift_L && key <= FL_Alt_R) || key == FL_Alt_Gr || key == FL_Num_Lock ||
+         key == FL_Scroll_Lock;
+}
+} // namespace
+
 int TasksWindow::dispatch_pick(const int event, Fl_Window *window) {
   auto &picker = *picker_;
   const auto dispatch = picker.previous_dispatch_;
@@ -312,12 +327,23 @@ int TasksWindow::dispatch_pick(const int event, Fl_Window *window) {
   case FL_PUSH:
     return 1;
   case FL_RELEASE:
-    if (Fl::event_button() == FL_LEFT_MOUSE) picker.finish_pick();
+    // A capture loss still waiting for its deferred notice ends the pick
+    // here; it never selects a window.
+    if (Fl::event_button() != FL_LEFT_MOUSE) return 1;
+    if (picker.capture_watch_ && picker.capture_watch_->owns_capture())
+      picker.finish_pick();
+    else
+      picker.cancel_pick();
     return 1;
   case FL_KEYDOWN:
   case FL_SHORTCUT:
-    if (Fl::event_key() == FL_Escape) picker.cancel_pick();
-    return 1;
+    if (Fl::event_key() == FL_Escape) {
+      picker.cancel_pick();
+      return 1;
+    }
+    // Pick takes only the mouse: another key ends it, then reaches the editor.
+    if (!modifier_key(Fl::event_key())) picker.cancel_pick();
+    break;
   case FL_CLOSE:
   case FL_HIDE:
     if (window == picker.actions_.pick_owner) picker.end_pick(false);
