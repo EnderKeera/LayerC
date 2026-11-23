@@ -45,7 +45,13 @@ remain open.
 ## Non-negotiable guarantees
 
 - **Passive input only:** LayerC reads input events; it never blocks or
-  synthesizes them. XTest is linked only into a Linux test binary.
+  synthesizes them. XTest is linked only into a Linux test binary. The only
+  exceptions are two Windows editor modes that you start yourself. **Pick
+  window** captures the mouse until your next left click picks the window
+  under it; Esc or a capture loss cancels it. **Direct drag** asks for consent
+  first. Then, during Position on window, LayerD's visible panels take the
+  clicks that land on them until you turn it off or the edit ends. Neither mode
+  installs hooks or synthesizes input.
 - **No anti-cheat bypass:** no injection, hooks, game-memory reads, drivers, or
   administrator elevation.
 - **No telemetry or network:** exceptions are the optional same-package Game

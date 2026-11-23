@@ -59,7 +59,10 @@ documentation and tests together.
 ### Product
 
 - Input is passive: never block, modify, or synthesize it. XTest is test-only and
-  must not link into `layerd`.
+  must not link into `layerd`. The only exceptions are the two Windows editor
+  modes named in the README guarantees, Pick window and Direct drag. Keep them
+  user-started and bounded: cancel, capture loss, turning the mode off, or the
+  end of the edit ends them. Do not add another mode that takes input.
 - No injection, hooks, game-memory reads, drivers, administrator elevation, or
   anti-cheat bypass.
 - No telemetry or network access, with two exceptions: the same-package Game
@@ -97,7 +100,8 @@ documentation and tests together.
 - Shared mutable data is mutex-protected with value-copy boundaries. The daemon
   owns one platform event/message loop.
 
-On Windows, overlays stay non-activating and click-through. Visual capture uses
+On Windows, overlays stay non-activating and click-through; only the user's
+Direct drag lets LayerD's visible panels take clicks. Visual capture uses
 WGC with Desktop Duplication fallback and explicit unavailable/fault
 diagnostics. The isolated worker remains authenticated, Job-bounded,
 kill-on-close, and demand-launched. Game Bar-specific limits and authority live

@@ -4,7 +4,7 @@
 
 ## 1. Decisions
 
-Made by the user on 2026-11-16. Changing one goes back to the user.
+Made by the user on 2026-11-16 (D11 on 2026-11-23). Changing one goes back to the user.
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ Made by the user on 2026-11-16. Changing one goes back to the user.
 | D8 | Memory | **Windows: measure and report** private bytes and working set at every gate, with no ceiling. The approved Linux ceilings stay as they are. |
 | D9 | FLTK version | **Pin 1.4.5 wherever this project builds FLTK:** vendored for Windows, and the Flatpak moves from 1.4.3 to 1.4.5. Native Linux packages keep the distribution's FLTK with a 1.4 floor. |
 | D10 | Evidence | **Automated tests plus a separate agent review** at every gate. Physical screen-reader, IME and hardware runs are not gate requirements; they are listed as gaps (§9). |
+| D11 | Input exceptions | **Keep Pick window and Direct drag, documented as the only exceptions to passive input.** Both editors keep the two user-started Windows modes from Win32. Each one ends on cancel, capture loss, being turned off, or the end of the edit. The [README guarantees](../README.md#non-negotiable-guarantees) and `CONTRIBUTING.md` name them, and tests check that the target window gets input back afterwards. |
 
 ## 2. Why
 
