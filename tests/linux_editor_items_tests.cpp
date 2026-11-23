@@ -20,6 +20,7 @@
 #include <FL/fl_draw.H>
 #include <FL/platform.H>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -267,26 +268,42 @@ void panel_items_fit_their_fields() {
       "A panel holds at most " + std::to_string(core::max_overlay_items_per_panel) +
           " items. This item kind is kept as it is and can't be edited here.",
       "This item kind is kept as it is and can't be edited here. A panel needs at least one item."};
-  for (const auto &metrics : passes) {
-    // Restores every screen's scale however the pass ends.
-    struct Scales {
-      std::vector<float> saved;
-      ~Scales() {
-        for (std::size_t screen = 0; screen < saved.size(); ++screen)
-          Fl::screen_scale(static_cast<int>(screen), saved[screen]);
+  // Restores every screen's scale however the pass ends.
+  struct Scales {
+    std::vector<float> saved;
+    void apply(const float ratio) const {
+      for (std::size_t i = 0; i < saved.size(); ++i) {
+        const auto screen = static_cast<int>(i);
+        const float target = saved[i] * ratio;
+        if (Fl::screen_scale(screen) != target) Fl::screen_scale(screen, target);
       }
-    } scales;
-    for (int screen = 0; screen < Fl::screen_count(); ++screen) {
-      scales.saved.push_back(Fl::screen_scale(screen));
-      Fl::screen_scale(screen, scales.saved.back() * metrics.scale);
     }
+    [[nodiscard]] bool matches(const float ratio) const {
+      for (std::size_t i = 0; i < saved.size(); ++i)
+        if (Fl::screen_scale(static_cast<int>(i)) != saved[i] * ratio) return false;
+      return true;
+    }
+    ~Scales() {
+      apply(1.0F);
+      expect(matches(1.0F), "the original scale is restored on every screen");
+    }
+  };
+  constexpr std::array action_labels{"Add item", "Edit item", "Remove item", "Move up", "Move down"};
+  for (const auto &metrics : passes) {
+    const std::string at = " at text size " + std::to_string(metrics.normal_size) +
+                           " and scale " + std::to_string(metrics.scale);
+    Scales scales;
+    const int count = Fl::screen_count();
+    for (int screen = 0; screen < count; ++screen)
+      scales.saved.push_back(Fl::screen_scale(screen));
+    scales.apply(metrics.scale);
+    expect(count > 0 && scales.matches(metrics.scale), "the requested scale is applied on every screen" + at);
+
     Fixture fixture;
     editor::EditorApp app;
     FL_NORMAL_SIZE = metrics.normal_size;
     app.build();
     FL_NORMAL_SIZE = base;
-    const std::string at = " at text size " + std::to_string(metrics.normal_size) +
-                           " and scale " + std::to_string(metrics.scale);
     auto *list = Access::items(app);
     if (!expect(list && list->parent() && list->parent()->parent(),
                 "the item list sits in its group" + at)) return;
@@ -314,23 +331,27 @@ void panel_items_fit_their_fields() {
     expect(inside(fields, group), "the item group stays in the panel fields" + at);
     struct Box { int x, y, w, h; };
     std::vector<Box> boxes{{list->x(), label_top, label_width, label_height}};
-    bool contained = true, captions_fit = true;
+    bool contained = true;
     const Fl_Widget *reason = nullptr;
     for (int index = 0; index < group.children(); ++index) {
       const Fl_Widget &child = *group.child(index);
       contained = contained && inside(group, child);
       boxes.push_back({child.x(), child.y(), child.w(), child.h()});
-      if (&child == list) continue;
-      if (const auto *button = dynamic_cast<const Fl_Button *>(&child)) {
+      if (&child != list && !dynamic_cast<const Fl_Button *>(&child)) reason = &child;
+    }
+    expect(contained, "every item control stays in its group" + at);
+    std::size_t actions = 0;
+    bool captions_fit = true;
+    for (const auto *label : action_labels) {
+      if (const auto *button = field<Fl_Button>(group, label)) {
+        ++actions;
         int width = 0, height = 0;
         button->measure_label(width, height);
         captions_fit = captions_fit && width + Fl::box_dw(button->box()) <= button->w() &&
                        height + Fl::box_dh(button->box()) <= button->h();
-      } else {
-        reason = &child;
       }
     }
-    expect(contained, "every item control stays in its group" + at);
+    expect(actions == action_labels.size(), "all five item actions exist" + at);
     expect(captions_fit, "every action caption fits inside its button" + at);
     bool apart = true;
     for (std::size_t first = 0; first < boxes.size(); ++first)

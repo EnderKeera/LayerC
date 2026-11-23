@@ -398,6 +398,12 @@ void direct_edit_restores_click_through() {
               WS_EX_TRANSPARENT) == 0,
          "mouse-up completes one drag and keeps Direct drag on");
 
+  OwnedWindow successor{CreateWindowExW(
+      WS_EX_TOOLWINDOW, L"STATIC", L"LayerC overlay capture successor",
+      WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr)};
+  if (!expect(successor.window != nullptr, "the same-thread capture successor should exist"))
+    return;
+
   drag_reported = false;
   drag_final = false;
   GetWindowRect(fixture.overlay_window, &overlay_rect);
@@ -408,10 +414,11 @@ void direct_edit_restores_click_through() {
   SendMessageW(fixture.overlay_window, WM_MOUSEMOVE, MK_LBUTTON,
                MAKELPARAM(capture_x + 12, capture_y));
   // Take capture away from the overlay without clearing its edit mode.
-  SetCapture(fixture.target_window);
-  expect(GetCapture() == fixture.target_window,
-         "the disposable target took capture from the overlay");
-  if (GetCapture() == fixture.target_window) ReleaseCapture();
+  expect(GetCapture() == fixture.overlay_window,
+         "the overlay owns capture before the transfer");
+  SetCapture(successor.window);
+  expect(GetCapture() == successor.window,
+         "the same-thread window took capture from the overlay");
   expect(drag_reported && drag_final,
          "capture loss should finalize an in-progress direct drag");
   expect(lost_count == 1 && lost_panel == "main",
@@ -420,6 +427,8 @@ void direct_edit_restores_click_through() {
              (GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE) &
               WS_EX_TRANSPARENT) != 0,
          "capture loss ends Direct drag without a new edit mode");
+  if (GetCapture() == successor.window || GetCapture() == fixture.overlay_window)
+    ReleaseCapture();
   const auto pointer_point = overlay_pointer_point(fixture);
   if (pointer_point)
     expect_overlay_pointer_target(fixture, *pointer_point, false,

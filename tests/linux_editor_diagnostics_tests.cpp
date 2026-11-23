@@ -18,6 +18,11 @@
 #include "fltk_a11y_snapshot_support.hpp"
 #include "a11y/fltk_semantics.hpp"
 
+#ifdef _WIN32
+#include "layerc/platform/native_theme.hpp"
+#include <optional>
+#endif
+
 namespace editor = layerc::editor;
 
 #include <FL/Fl.H>
@@ -268,6 +273,12 @@ void diagnostics_summary_raw_and_retry() {
 
 void appearance_checks_diagnostics_both_modes() {
   Fixture fixture;
+#ifdef _WIN32
+  const struct ContrastOverride {
+    ~ContrastOverride() { layerc::platform::set_native_high_contrast_override(std::nullopt); }
+  } reset;
+  layerc::platform::set_native_high_contrast_override(false);
+#endif
   editor::install_editor_style();
   Fl_Double_Window root(300, 200, "Appearance fixture");
   root.end();
