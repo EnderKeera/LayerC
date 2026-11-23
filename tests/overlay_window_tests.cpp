@@ -343,6 +343,8 @@ void direct_edit_restores_click_through() {
   bool drag_reported{};
   bool drag_final{};
   double dragged_x{};
+  int lost_count{};
+  std::string lost_panel;
   fixture.overlay->set_edit_mode(true, true, true,
                                  [&](const std::string_view panel_id,
                                      const double anchor_x, const double,
@@ -350,6 +352,10 @@ void direct_edit_restores_click_through() {
                                    drag_reported = panel_id == "main";
                                    drag_final = final;
                                    dragged_x = anchor_x;
+                                 },
+                                 [&](const std::string_view panel_id) {
+                                   ++lost_count;
+                                   lost_panel = panel_id;
                                  });
   const auto direct_style = GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE);
   expect((direct_style & WS_EX_TRANSPARENT) == 0 &&
@@ -387,6 +393,10 @@ void direct_edit_restores_click_through() {
                MAKELPARAM(local_x + 24, local_y));
   expect(drag_reported && drag_final && dragged_x > 0.5,
          "direct edit should report normalized final bar movement");
+  expect(fixture.overlay->direct_drag() && lost_count == 0 &&
+             (GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE) &
+              WS_EX_TRANSPARENT) == 0,
+         "mouse-up completes one drag and keeps Direct drag on");
 
   drag_reported = false;
   drag_final = false;
@@ -397,16 +407,35 @@ void direct_edit_restores_click_through() {
                MAKELPARAM(capture_x, capture_y));
   SendMessageW(fixture.overlay_window, WM_MOUSEMOVE, MK_LBUTTON,
                MAKELPARAM(capture_x + 12, capture_y));
-  SendMessageW(fixture.overlay_window, WM_CAPTURECHANGED, 0, 0);
-  if (GetCapture() == fixture.overlay_window)
-    ReleaseCapture();
+  // Take capture away from the overlay without clearing its edit mode.
+  SetCapture(fixture.target_window);
+  expect(GetCapture() == fixture.target_window,
+         "the disposable target took capture from the overlay");
+  if (GetCapture() == fixture.target_window) ReleaseCapture();
   expect(drag_reported && drag_final,
          "capture loss should finalize an in-progress direct drag");
+  expect(lost_count == 1 && lost_panel == "main",
+         "capture loss during a drag reports the end of Direct drag once");
+  expect(!fixture.overlay->direct_drag() &&
+             (GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE) &
+              WS_EX_TRANSPARENT) != 0,
+         "capture loss ends Direct drag without a new edit mode");
   const auto pointer_point = overlay_pointer_point(fixture);
+  if (pointer_point)
+    expect_overlay_pointer_target(fixture, *pointer_point, false,
+                                  "capture loss gives the point back to the target");
+  if (const auto point = pointer_point)
+    expect(SendMessageW(fixture.overlay_window, WM_NCHITTEST, 0,
+                        MAKELPARAM(point->x, point->y)) == HTTRANSPARENT,
+           "after capture loss the overlay is hit-test transparent");
+
+  // Re-armed by its owner, Direct drag takes the pointer again.
+  fixture.overlay->set_edit_mode(true, true, true, {}, [&](std::string_view) { ++lost_count; });
   if (pointer_point)
     expect_overlay_pointer_target(fixture, *pointer_point, true,
                                   "direct drag makes the overlay the pointer target");
   fixture.overlay->set_edit_mode(false, false, false);
+  expect(lost_count == 1, "turning Direct drag off is not reported as a loss");
   if (pointer_point)
     expect_overlay_pointer_target(fixture, *pointer_point, false,
                                   "ending direct drag gives the same point back to the target");

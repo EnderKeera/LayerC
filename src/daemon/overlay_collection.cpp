@@ -56,7 +56,8 @@ void OverlayCollection::rebuild(const layerc::core::GameProfile &profile,
     if (edit_mode != nullptr) {
       overlay->set_edit_mode(true, edit_mode->direct_drag,
                              panel.id == edit_mode->selected_panel,
-                             edit_mode->drag_callback);
+                             edit_mode->drag_callback,
+                             edit_mode->direct_drag_lost);
     }
     next.push_back(std::move(overlay));
   }

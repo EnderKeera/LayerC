@@ -212,18 +212,47 @@ void TasksWindow::run_action(const TaskRequest action, const TaskCandidate &task
 
 void TasksWindow::begin_pick() {
   if (picker_ || !actions_.pick_owner || !actions_.pick_owner->shown()) return;
+  // Release an older grab first: its capture loss is not this pick's.
+  auto *const previous_grab = Fl::grab();
+  if (previous_grab) Fl::grab(nullptr);
+  // The watch exists before the grab, so no capture loss can go unseen, and
+  // Pick never arms without it.
+  const auto owner = std::bit_cast<std::uintptr_t>(fl_xid(actions_.pick_owner));
+  auto lost = [this] { cancel_pick(); };
+  auto watch = actions_.watch_capture
+                   ? actions_.watch_capture(owner, std::move(lost))
+                   : watch_pick_capture(owner, {Fl::add_timeout, Fl::remove_timeout},
+                                        std::move(lost));
+  if (!watch) {
+    if (previous_grab && previous_grab->shown()) {
+      Fl::first_window(previous_grab);
+      Fl::grab(previous_grab);
+    }
+    const std::string reason = "Pick window is unavailable: the editor could not watch its "
+                               "pointer capture. Choose the window from the list instead.";
+    set_message(reason);
+    if (actions_.report) actions_.report(StatusKind::failure, reason);
+    return;
+  }
+  if (actions_.pick_starting) actions_.pick_starting();
   pick_was_shown_ = shown();
   pick_request_ = std::exchange(request_, TaskRequest::none);
   previous_dispatch_ = Fl::event_dispatch();
-  previous_grab_ = Fl::grab();
-  if (previous_grab_) Fl::grab(nullptr);
+  previous_grab_ = previous_grab;
+  capture_watch_ = std::move(watch);
   window_->hide();
   Fl::first_window(actions_.pick_owner);
   picker_ = this;
   Fl::event_dispatch(dispatch_pick);
   Fl::grab(actions_.pick_owner);
-  capture_watch_ = watch_pick_capture(std::bit_cast<std::uintptr_t>(fl_xid(actions_.pick_owner)),
-                                      {Fl::add_timeout, Fl::remove_timeout}, [this] { cancel_pick(); });
+  if (!capture_watch_->owns_capture()) {
+    end_pick(true);
+    const std::string reason = "Pick window is unavailable: the editor could not take pointer "
+                               "capture. Choose the window from the list instead.";
+    set_message(reason);
+    if (actions_.report) actions_.report(StatusKind::failure, reason);
+    return;
+  }
   if (actions_.report)
     actions_.report(StatusKind::information,
                     "Pick window active — click a game window, or press Esc to cancel.");

@@ -287,12 +287,20 @@ void EditorWindow::begin_picker() {
     cancel_picker();
     return;
   }
+  if (owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_DIRECT_DRAG)))
+    set_direct_drag_enabled(false);
   task_picker_.begin_pick(task_picker_.window != nullptr &&
                           IsWindowVisible(task_picker_.window));
   if (task_picker_.was_visible() && task_picker_.window != nullptr)
     ShowWindow(task_picker_.window, SW_HIDE);
   SetFocus(shell_.window);
   SetCapture(shell_.window);
+  if (GetCapture() != shell_.window) {
+    cancel_picker();
+    set_status(L"Pick window is unavailable: the editor could not take pointer "
+               L"capture. Choose the window from the list instead.");
+    return;
+  }
   set_status(
       L"Pick window active — click a game window, or press Esc to cancel.");
 }

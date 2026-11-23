@@ -148,6 +148,19 @@ void coalesced_profile_throttled_anchors_and_direct_drag() {
   expect(toggles.size() == 1 && toggles.front().direct_drag, "direct drag reaches the active session");
 }
 
+void daemon_ends_direct_drag() {
+  Fixture f;
+  f.poll();
+  f.authenticate();
+  f.begin();
+  const auto id = f.session.session_id();
+  f.transport->inbox.emplace_back(LiveMessage{.type = LiveMessageType::set_direct_drag,
+      .revision = 3, .edit_session = id, .direct_drag = false});
+  f.poll();
+  expect(f.last(Event::Kind::direct_drag_ended) && f.driver.live() && f.session.editing(),
+         "LayerD ending Direct drag is delivered while the edit continues");
+}
+
 void target_closes_during_edit() {
   Fixture f;
   f.poll();
@@ -222,5 +235,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(begin_authenticated_and_shutdown),
     LAYERC_TEST_CASE(await_latest_profile_expire_and_refuse),
     LAYERC_TEST_CASE(coalesced_profile_throttled_anchors_and_direct_drag),
+    LAYERC_TEST_CASE(daemon_ends_direct_drag),
     LAYERC_TEST_CASE(target_closes_during_edit),
     LAYERC_TEST_CASE(peer_events_and_discard))

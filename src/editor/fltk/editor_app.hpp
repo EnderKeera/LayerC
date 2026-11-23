@@ -105,6 +105,9 @@ public:
   [[nodiscard]] bool sync_accessibility();
 #endif
   [[nodiscard]] bool handle_shortcut(int key, int modifiers);
+  // Turns Direct drag off (Esc in the editor, or Pick window starting);
+  // false when it was not on.
+  bool cancel_direct_drag();
   void show_context_menu(EditorMenuContext context, bool has_target,
                          std::optional<EditorBounds> anchor = std::nullopt);
   void refresh();

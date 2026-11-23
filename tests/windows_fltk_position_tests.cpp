@@ -6,9 +6,11 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
+#include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Tabs.H>
+#include <FL/Fl_Window.H>
 #include <array>
 #include <memory>
 #include <string_view>
@@ -290,6 +292,83 @@ void ended_during_direct_drag_confirmation() {
          "Continue cannot enable direct drag in an ended session");
 }
 
+Fl_Button *find_pick_button(Fl_Group &group) {
+  for (int index = 0; index < group.children(); ++index) {
+    auto *const child = group.child(index);
+    if (auto *button = dynamic_cast<Fl_Button *>(child);
+        button && button->label() && std::string_view(button->label()) == "Pick &window")
+      return button;
+    if (auto *nested = child->as_group())
+      if (auto *button = find_pick_button(*nested)) return button;
+  }
+  return nullptr;
+}
+
+int send_escape(Fl_Window *window) {
+  const int previous_key = Fl::e_keysym;
+  Fl::e_keysym = FL_Escape;
+  const int handled = Fl::handle(FL_SHORTCUT, window);
+  Fl::e_keysym = previous_key;
+  return handled;
+}
+
+// Direct drag ends on LayerD's capture loss, on Esc in the editor and when
+// Pick window starts; each keeps the edit session and the editor open.
+void direct_drag_terminal_paths() {
+  Fixture fixture;
+  if (!fixture.build()) return;
+  auto &app = fixture.app();
+  app.show();
+  fixture.start();
+  fixture.started();
+  auto *const drag = Access::direct_drag(app);
+  if (!expect(drag && drag->active(), "Direct drag is available in a started edit")) return;
+  Access::acknowledge_direct_drag_notice(app);
+  const auto enable = [&] {
+    drag->value(1);
+    drag->do_callback();
+    return drag->value() != 0 && !fixture.edit.direct_drag.empty() &&
+           fixture.edit.direct_drag.back();
+  };
+  const auto ended_off = [&](const std::size_t sends) {
+    return app.placement_active() && drag->active() && !drag->value() &&
+           fixture.edit.direct_drag.size() == sends && !fixture.edit.direct_drag.back() &&
+           fixture.edit.end.empty();
+  };
+
+  expect(enable(), "Direct drag turns on");
+  fixture.edit.deliver(app, {.kind = Event::Kind::direct_drag_ended, .panel_id = {}, .text = {}});
+  expect(ended_off(2) &&
+             std::string_view(Access::status(app)->value()) ==
+                 "Direct drag ended: LayerD no longer has pointer capture. Mirrored "
+                 "click-through editing restored." &&
+             Access::status_kind(app) == editor::StatusKind::warning,
+         "LayerD ending Direct drag unchecks it, echoes the end and keeps the edit");
+
+  expect(enable(), "Direct drag turns on again");
+  expect(send_escape(app.main_window()) == 1 && app.main_window()->shown() && ended_off(4),
+         "Esc in the editor ends Direct drag, not the editor or the edit");
+
+  expect(enable(), "Direct drag turns on before Pick window");
+  app.command(editor::EditorCommand::tasks);
+  auto *const tasks = Access::tasks_window(app);
+  Fl_Window *chooser{};
+  for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
+    if (std::string_view(window->label() ? window->label() : "") == "Detected Tasks — LayerE")
+      chooser = window;
+  auto *const pick = chooser ? find_pick_button(*chooser) : nullptr;
+  if (!expect(tasks && pick, "the editor opens a chooser with Pick window")) return;
+  pick->do_callback();
+  expect(ended_off(6) && Fl::grab() == app.main_window(),
+         "starting Pick window ends Direct drag before it takes the pointer");
+  expect(send_escape(app.main_window()) == 1 && !Fl::grab() && tasks->shown() &&
+             app.main_window()->shown() && app.placement_active(),
+         "Esc then cancels only the pick");
+  app.main_window()->do_callback();
+  expect(!app.shown() && !tasks->shown() && fixture.edit.end == std::vector<bool>{true},
+         "closing the editor after Pick ends the edit");
+}
+
 void closing_main_window_closes_tool_windows_and_edit() {
   Fixture fixture;
   if (!fixture.build()) return;
@@ -334,5 +413,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(incoming_anchor_and_accepted_edit),
     LAYERC_TEST_CASE(end_reasons_and_expiry),
     LAYERC_TEST_CASE(ended_during_direct_drag_confirmation),
+    LAYERC_TEST_CASE(direct_drag_terminal_paths),
     LAYERC_TEST_CASE(closing_main_window_closes_tool_windows_and_edit),
     LAYERC_TEST_CASE(switching_or_closing_profile_ends_edit))

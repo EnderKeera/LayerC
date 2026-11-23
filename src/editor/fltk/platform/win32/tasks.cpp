@@ -59,6 +59,10 @@ public:
     return true;
   }
 
+  [[nodiscard]] bool owns_capture() const noexcept override {
+    return owner_ && !pending_ && GetCapture() == owner_;
+  }
+
 private:
   [[nodiscard]] UINT_PTR id() const noexcept { return reinterpret_cast<UINT_PTR>(this); }
 

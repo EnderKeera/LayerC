@@ -73,6 +73,7 @@ void panel_contrast_line_follows_colors();
 #ifdef _WIN32
 void task_at_screen_point_maps_fixture_window();
 void tasks_picker_restores_capture();
+void tasks_pick_needs_capture_watch();
 #endif
 void linux_editor_field_error_contracts();
 void linux_editor_pending_automation_status_contracts();
@@ -1063,7 +1064,8 @@ void windows_editor_platform_exclusions();
 #define LAYERC_NATIVE_CAPTURE_CASE
 #define LAYERC_TASK_PICK_CASES \
   LAYERC_TEST_CASE(task_at_screen_point_maps_fixture_window), \
-  LAYERC_TEST_CASE(tasks_picker_restores_capture),
+  LAYERC_TEST_CASE(tasks_picker_restores_capture), \
+  LAYERC_TEST_CASE(tasks_pick_needs_capture_watch),
 #else
 #define LAYERC_PLATFORM_WIDGET_CASES \
   LAYERC_TEST_CASE(linux_editor_accessibility_tree_rows), \

@@ -259,7 +259,8 @@ int run(const std::initializer_list<Case> cases) {
   }
   std::cout << passed_cases << '/' << cases.size() << " case(s) passed";
   if (skipped_cases != 0) std::cout << ", " << skipped_cases << " skipped";
-  std::cout << '\n';
+  // Write the receipt before GUI libraries can tear down during process exit.
+  std::cout << '\n' << std::flush;
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return EXIT_FAILURE;

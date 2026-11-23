@@ -125,6 +125,7 @@ void HubEditDriver::apply_step(const LiveEditStep &step, LiveEditSession &sessio
     for (const auto &anchor : step.anchors)
       emit_(id_, {.kind = Event::Kind::anchor, .panel_id = anchor.panel_id,
                   .x = anchor.x, .y = anchor.y, .final = anchor.final});
+    if (step.direct_drag_ended) emit_(id_, {.kind = Event::Kind::direct_drag_ended});
     if (step.ended) {
       finish({.kind = Event::Kind::ended, .reason = end_reason(step.ended->reason),
               .text = step.ended->text});

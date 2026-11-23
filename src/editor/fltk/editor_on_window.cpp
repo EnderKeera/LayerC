@@ -129,6 +129,15 @@ void EditorApp::on_window_event(const OnWindowEditEvent &event) {
     changed(error);
     return;
   }
+  case Event::Kind::direct_drag_ended:
+    if (!on_window_started_ || !on_window_) return;
+    // Echo the end, so a toggle crossing it in flight cannot leave LayerD on.
+    on_window_->direct_drag(false);
+    if (panel_page_) panel_page_->show_direct_drag(true, false);
+    report(StatusKind::warning,
+           "Direct drag ended: LayerD no longer has pointer capture. Mirrored "
+           "click-through editing restored.");
+    return;
   case Event::Kind::protocol_error:
     report(StatusKind::failure, "Live channel error: " + event.text);
     return;
@@ -197,6 +206,14 @@ void EditorApp::direct_drag_changed(const bool enabled) {
   if (panel_page_) panel_page_->show_direct_drag(true, enabled);
   report(StatusKind::information, enabled ? "Direct drag enabled for this edit session."
                                           : "Mirrored click-through editing restored.");
+}
+
+bool EditorApp::cancel_direct_drag() {
+  if (!on_window_started_ || !on_window_ || !panel_page_ ||
+      !panel_page_->direct_drag_enabled())
+    return false;
+  direct_drag_changed(false);
+  return true;
 }
 
 const EditorApp::RemoteAnchor *EditorApp::remote_anchor(const std::string_view panel_id) const {

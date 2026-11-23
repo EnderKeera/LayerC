@@ -37,7 +37,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <functional>
 #include <optional>
 #include <string>
@@ -829,5 +831,81 @@ void tasks_picker_restores_capture() {
     expect(!Fl::grab(), "editor destruction leaves no grab behind");
     expect(Fl::event_dispatch() == before_editor, "editor destruction leaves no dispatcher behind");
   }
+}
+
+// Pick window needs both a watch and native capture. Direct drag is told to
+// end before the grab, never when the watch could not be installed.
+void tasks_pick_needs_capture_watch() {
+  Fixture fixture;
+  Fl_Window owner(60, 60, 240, 160, "LayerC pick owner fixture");
+  owner.end();
+  owner.show();
+  Fl::check();
+  struct StubWatch final : editor::PickCaptureWatch {
+    explicit StubWatch(const bool captured) : captured_(captured) {}
+    bool owns_capture() const noexcept override { return captured_; }
+    bool captured_;
+  };
+  bool watch_available = false, capture_available = false;
+  int watches = 0, starts = 0;
+  std::vector<std::pair<editor::StatusKind, std::string>> reports;
+  editor::TasksWindow::Actions actions;
+  actions.scan = [](std::string &) { return std::vector<editor::TaskCandidate>{}; };
+  actions.pick_owner = &owner;
+  actions.report = [&](const editor::StatusKind kind, const std::string &text) {
+    reports.emplace_back(kind, text);
+  };
+  actions.pick_starting = [&] {
+    expect(!Fl::grab(), "Direct drag ends before Pick window takes the pointer");
+    ++starts;
+  };
+  actions.watch_capture = [&](const std::uintptr_t window, std::function<void()>)
+      -> std::unique_ptr<editor::PickCaptureWatch> {
+    ++watches;
+    expect(window == reinterpret_cast<std::uintptr_t>(fl_xid(&owner)) && !Fl::grab(),
+           "the owner's capture watch attaches before any grab");
+    if (!watch_available) return nullptr;
+    return std::make_unique<StubWatch>(capture_available);
+  };
+  editor::TasksWindow tasks(std::move(actions));
+  tasks.show();
+  auto *window = detected_tasks_window();
+  auto *pick = window ? find_button(*window, "Pick &window") : nullptr;
+  if (!expect(pick != nullptr, "the chooser offers Pick window")) return;
+  const auto prior = Fl::event_dispatch();
+
+  pick->do_callback();
+  expect(watches == 1 && starts == 0 && !Fl::grab() && GetCapture() != fl_xid(&owner) &&
+             Fl::event_dispatch() == prior && tasks.shown(),
+         "without a capture watch Pick window takes nothing and leaves Direct drag alone");
+  expect(reports.size() == 1 && reports.back().first == editor::StatusKind::failure &&
+             reports.back().second ==
+                 "Pick window is unavailable: the editor could not watch its pointer "
+                 "capture. Choose the window from the list instead.",
+         "the refusal names the reason and the list alternative");
+
+  watch_available = true;
+  pick->do_callback();
+  expect(watches == 2 && starts == 1 && !Fl::grab() && GetCapture() != fl_xid(&owner) &&
+             Fl::event_dispatch() == prior && tasks.shown(),
+         "if capture fails Pick window restores the chooser, dispatcher and grab");
+  expect(reports.size() == 2 && reports.back().first == editor::StatusKind::failure &&
+             reports.back().second ==
+                 "Pick window is unavailable: the editor could not take pointer "
+                 "capture. Choose the window from the list instead.",
+         "failed acquisition has its own reason and does not report active");
+
+  capture_available = true;
+  pick->do_callback();
+  expect(watches == 3 && starts == 2 && Fl::grab() == &owner && !tasks.shown(),
+         "with a watch and capture Pick window arms after ending Direct drag");
+  {
+    const FltkEventState event_restore;
+    Fl::e_keysym = FL_Escape;
+    expect(Fl::handle(FL_KEYDOWN, &owner) == 1 && !Fl::grab() &&
+               Fl::event_dispatch() == prior && tasks.shown(),
+           "Escape cancels the armed pick");
+  }
+  tasks.hide();
 }
 #endif

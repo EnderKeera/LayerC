@@ -205,6 +205,7 @@ public:
   void show_position(bool active);
   // Direct Drag is offered only inside a started on-window edit session.
   void show_direct_drag(bool available, bool enabled);
+  [[nodiscard]] bool direct_drag_enabled() const;
   // Recomputes the overlay contrast line from the colour fields' text.
   void update_contrast();
 private:

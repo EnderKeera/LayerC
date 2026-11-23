@@ -122,6 +122,19 @@ void LiveEditSession::handle_message(
                                           message.anchor_y, message.final});
     return;
   }
+  if (message.type == LiveMessageType::set_direct_drag) {
+    // Only LayerD's own end of Direct drag is meaningful in this direction;
+    // it shares the anchor revision order, so a stale one is ignored.
+    if (session_id_ == 0 || message.edit_session != session_id_ ||
+        message.direct_drag)
+      return;
+    if (layerc::core::revision_decision(message.revision, peer_revision_) !=
+        layerc::core::RevisionDecision::accept)
+      return;
+    peer_revision_ = message.revision;
+    step.direct_drag_ended = true;
+    return;
+  }
   step.forwarded.push_back(message);
 }
 

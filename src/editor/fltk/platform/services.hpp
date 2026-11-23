@@ -78,6 +78,8 @@ matching_task(const std::vector<TaskCandidate> &tasks, const core::GameMatch &ma
 class PickCaptureWatch {
 public:
   virtual ~PickCaptureWatch() = default;
+  // FLTK's grab is void; check that the native owner actually took capture.
+  [[nodiscard]] virtual bool owns_capture() const noexcept = 0;
 };
 struct PickCaptureTimer {
   using Callback = void (*)(void *);

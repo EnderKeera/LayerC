@@ -130,6 +130,9 @@ int EditorWindow::dispatch(int event, Fl_Window *window) {
   return Fl::handle_(event, window);
 }
 int EditorWindow::handle(int event) {
+  // Esc in the editor ends Direct drag before FLTK's Esc-closes-window path.
+  if (event == FL_SHORTCUT && Fl::event_key() == FL_Escape && app_.cancel_direct_drag())
+    return 1;
   if (event == FL_SHORTCUT && document_shortcut()) return 1;
   return Fl_Double_Window::handle(event);
 }

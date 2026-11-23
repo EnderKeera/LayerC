@@ -229,6 +229,13 @@ void EditorWindow::poll_live_channel() {
     // An incoming final applies once locally and is never echoed as final.
     if (anchor.final) (void)commit_pending_anchor(false);
   }
+  if (step.direct_drag_ended && live_edit_.editing()) {
+    set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
+    // Echo the end, so a toggle crossing it in flight cannot leave LayerD on.
+    (void)live_edit_.send_direct_drag(false);
+    set_status(L"Direct drag ended: LayerD no longer has pointer capture. Mirrored "
+               L"click-through editing restored.");
+  }
   if (step.ended) {
     switch (step.ended->reason) {
     case LiveEditEndReason::daemon_error:

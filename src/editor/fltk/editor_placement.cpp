@@ -26,6 +26,8 @@ void EditorApp::show_tasks(const std::string &reason, const TaskRequest request)
           return session.document().profile().game;
         },
         .scan = {},
+        .pick_starting = [this] { (void)cancel_direct_drag(); },
+        .watch_capture = {},
     });
   }
   tasks_window->show(reason, request);

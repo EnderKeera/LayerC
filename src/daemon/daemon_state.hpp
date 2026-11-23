@@ -119,6 +119,7 @@ private:
                      layerc::core::GameProfile profile);
   void on_direct_anchor(std::string_view panel_id, double anchor_x,
                         double anchor_y, bool final);
+  void on_direct_drag_lost();
 
   SessionRegistry &sessions_;
   SessionControl &control_;

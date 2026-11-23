@@ -127,11 +127,17 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
       continue;
     if (handle_list_key(message))
       continue;
-    if (task_picker_.picking() && message.message == WM_KEYDOWN &&
-        message.wParam == VK_ESCAPE) {
-      cancel_picker();
-      set_status(L"Window picker cancelled.");
-      continue;
+    if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE) {
+      if (task_picker_.picking()) {
+        cancel_picker();
+        set_status(L"Window picker cancelled.");
+        continue;
+      }
+      if ((message.hwnd == shell_.window || IsChild(shell_.window, message.hwnd)) &&
+          owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_DIRECT_DRAG))) {
+        set_direct_drag_enabled(false);
+        continue;
+      }
     }
     if (accelerators != nullptr && IsWindowEnabled(shell_.window) != FALSE &&
         TranslateAcceleratorW(shell_.window, accelerators, &message) != 0)

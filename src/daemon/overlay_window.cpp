@@ -94,11 +94,13 @@ void OverlayWindow::set_session_override(
 }
 void OverlayWindow::set_edit_mode(const bool enabled, const bool direct_drag,
                                   const bool selected,
-                                  DragCallback callback) {
+                                  DragCallback callback,
+                                  DirectDragLost lost) {
   edit_mode_ = enabled;
   overrides_.edit_mode = enabled;
   edit_selected_ = enabled && selected;
   drag_callback_ = std::move(callback);
+  direct_drag_lost_ = std::move(lost);
   set_direct_drag(enabled && direct_drag);
   release_render_resources();
 }
@@ -123,6 +125,21 @@ void OverlayWindow::set_direct_drag(const bool enabled) {
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                    SWP_FRAMECHANGED);
 }
+void OverlayWindow::lose_direct_drag_capture() {
+  const bool moved = drag_moved_;
+  const auto finish = drag_callback_;
+  const auto notify = direct_drag_lost_;
+  const auto panel_id = panel_.id;
+  const auto x = panel_.anchor_x, y = panel_.anchor_y;
+  dragging_ = false;
+  drag_moved_ = false;
+  set_direct_drag(false);
+  // Disarm all panels before reporting the final anchor. The callbacks may
+  // rebuild this window, so use copies and don't touch it again.
+  if (notify) notify(panel_id);
+  if (moved && finish) finish(panel_id, x, y, true);
+}
+
 void OverlayWindow::set_capture_exclusion(const bool enabled) {
   capture_exclusion_ = enabled;
   if (window_ != nullptr && IsWindow(window_)) {
@@ -374,6 +391,7 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
       overlay->dragging_ = true;
       overlay->drag_moved_ = false;
       SetCapture(window);
+      if (GetCapture() != window) overlay->lose_direct_drag_capture();
       return 0;
     }
     if (message == WM_MOUSEMOVE && overlay->dragging_) {
@@ -390,12 +408,9 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
       return 0;
     }
     if (message == WM_CAPTURECHANGED) {
-      if (overlay->dragging_ && overlay->drag_moved_ &&
-          overlay->drag_callback_)
-        overlay->drag_callback_(overlay->panel_.id, overlay->panel_.anchor_x,
-                                overlay->panel_.anchor_y, true);
-      overlay->dragging_ = false;
-      overlay->drag_moved_ = false;
+      // Mouse-up and explicit turn-off clear dragging_ before releasing.
+      // Losing the capture mid-drag ends Direct drag itself.
+      if (overlay->dragging_) overlay->lose_direct_drag_capture();
       return 0;
     }
   }

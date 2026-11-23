@@ -729,4 +729,8 @@ void PanelPage::show_direct_drag(const bool available, const bool enabled) {
   direct_drag_->redraw();
 }
 
+bool PanelPage::direct_drag_enabled() const {
+  return direct_drag_ && direct_drag_->active() && direct_drag_->value() != 0;
+}
+
 } // namespace layerc::editor

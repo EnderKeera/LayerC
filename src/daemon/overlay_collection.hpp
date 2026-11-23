@@ -17,6 +17,7 @@ struct OverlayEditMode {
   bool direct_drag{};
   std::string_view selected_panel;
   OverlayWindow::DragCallback drag_callback;
+  OverlayWindow::DirectDragLost direct_drag_lost;
 };
 
 class OverlayCollection {

@@ -102,7 +102,7 @@ void pending_target_and_disconnect() {
   Fixture fixture;
   (void)fixture.session.poll({});
   expect(fixture.session.request_begin(
-             target, {.profile_key = "key", .panel_id = "p"}, 2000) ==
+             target, {.profile_key = "key", .panel_id = "p", .profile_json = {}}, 2000) ==
              editor::LiveEditBegin::awaiting_daemon &&
              fixture.session.awaiting_target(),
          "an unauthenticated begin awaits the daemon instead of starting");
@@ -128,7 +128,7 @@ void pending_target_and_disconnect() {
   fixture.transport->changed = true;
   (void)fixture.session.poll({});
   expect(fixture.session.request_begin(
-             second_target, {.profile_key = "key", .panel_id = "p"}, 2000) ==
+             second_target, {.profile_key = "key", .panel_id = "p", .profile_json = {}}, 2000) ==
              editor::LiveEditBegin::awaiting_daemon,
          "a later begin before authentication awaits the daemon again");
   fixture.receive(core::LiveMessageType::acknowledgement,
@@ -145,7 +145,7 @@ void session_lifecycle_and_reconnect() {
   (void)fixture.session.poll({});
   fixture.authenticate();
   expect(fixture.session.request_begin(
-             target, {.profile_key = "key", .panel_id = "p"}, 2000) ==
+             target, {.profile_key = "key", .panel_id = "p", .profile_json = {}}, 2000) ==
                  editor::LiveEditBegin::started &&
              fixture.session.editing() &&
              fixture.sent(core::LiveMessageType::begin_edit).size() == 1,
@@ -217,6 +217,41 @@ void anchor_ordering() {
   expect(both.anchors.size() == 2 && both.anchors[0].final &&
              !both.anchors[1].final && fixture.session.peer_revision() == 8,
          "a final followed by a new drag in one poll keeps both, in order");
+}
+
+// LayerD ends Direct drag itself after losing the pointer capture; the edit
+// session continues and the end shares the anchor revision order.
+void daemon_ends_direct_drag() {
+  Fixture fixture;
+  (void)fixture.session.poll({});
+  fixture.authenticate();
+  (void)fixture.session.request_begin(target, {}, 2000);
+  const auto session = fixture.session.session_id();
+  const auto direct_drag = [&](const core::ProfileRevision revision,
+                               const core::EditSessionId id, const bool enabled) {
+    core::LiveMessage message;
+    message.type = core::LiveMessageType::set_direct_drag;
+    message.revision = revision;
+    message.edit_session = id;
+    message.direct_drag = enabled;
+    return message;
+  };
+  const auto any_panel = [](std::string_view) { return true; };
+
+  fixture.receive(anchor(5, session, "p"));
+  (void)fixture.session.poll(any_panel);
+  fixture.receive(direct_drag(6, session, false));
+  auto ended = fixture.session.poll(any_panel);
+  expect(ended.direct_drag_ended && !ended.ended && ended.forwarded.empty() &&
+             fixture.session.editing() && fixture.session.peer_revision() == 6,
+         "LayerD ending Direct drag keeps the session and advances the peer revision");
+
+  fixture.receive(direct_drag(6, session, false));
+  fixture.receive(direct_drag(7, session + 1, false));
+  fixture.receive(direct_drag(8, session, true));
+  auto ignored = fixture.session.poll(any_panel);
+  expect(!ignored.direct_drag_ended && fixture.session.peer_revision() == 6,
+         "a stale, foreign or enabling Direct drag message is ignored");
 }
 
 void end_and_pending_sends() {
@@ -355,6 +390,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(handshake_and_authentication),
                  LAYERC_TEST_CASE(pending_target_and_disconnect),
                  LAYERC_TEST_CASE(session_lifecycle_and_reconnect),
                  LAYERC_TEST_CASE(anchor_ordering),
+                 LAYERC_TEST_CASE(daemon_ends_direct_drag),
                  LAYERC_TEST_CASE(end_and_pending_sends),
                  LAYERC_TEST_CASE(heartbeat_cadence_and_target_loss),
                  LAYERC_TEST_CASE(committed_publish_and_forwarding))

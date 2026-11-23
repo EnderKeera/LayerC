@@ -109,6 +109,9 @@ struct LiveEditStep {
   // Every accepted anchor in arrival order: a final followed by a new drag
   // in the same poll must still commit the final locally.
   std::vector<LiveEditAnchor> anchors;
+  // LayerD ended Direct drag itself (another window took the pointer
+  // capture); the session stays open with mirrored click-through editing.
+  bool direct_drag_ended{};
   std::optional<LiveEditEnd> ended;
   bool live_profile_due{};
   // Present only when the poll cadence changed.

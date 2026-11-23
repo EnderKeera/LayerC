@@ -20,6 +20,9 @@ class OverlayWindow {
 public:
   using DragCallback =
       std::function<void(std::string_view, double, double, bool)>;
+  // Direct drag ended because another window took the pointer capture during
+  // a drag. The overlay is already click-through again when this runs.
+  using DirectDragLost = std::function<void(std::string_view)>;
 
   OverlayWindow(const layerc::core::Panel &panel,
                 std::span<const layerc::core::CooldownDefinition> cooldowns);
@@ -38,7 +41,8 @@ public:
                             std::vector<layerc::core::ItemPresentationOverride> items = {});
   [[nodiscard]] bool sync_rows(const layerc::core::PanelPresentation &presentation);
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
-                     DragCallback callback = {});
+                     DragCallback callback = {}, DirectDragLost lost = {});
+  [[nodiscard]] bool direct_drag() const noexcept { return direct_drag_; }
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
   [[nodiscard]] bool created() const noexcept {
     return window_ != nullptr && IsWindow(window_) != FALSE;
@@ -68,6 +72,7 @@ private:
   [[nodiscard]] bool
   assign_rows(std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_direct_drag(bool enabled);
+  void lose_direct_drag_capture();
   void update_drag(POINT screen_point, bool final);
   void clear_window_state();
 
@@ -100,6 +105,7 @@ private:
   POINT drag_start_{};
   POINT drag_offset_{};
   DragCallback drag_callback_;
+  DirectDragLost direct_drag_lost_;
 
   HDC buffer_dc_{};
   HBITMAP buffer_bitmap_{};

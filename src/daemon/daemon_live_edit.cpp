@@ -336,7 +336,8 @@ void LiveEditHost::rebuild_overlays() {
       .drag_callback = [this](const std::string_view id, const double x,
                               const double y, const bool final) {
         on_direct_anchor(id, x, y, final);
-      }};
+      },
+      .direct_drag_lost = [this](std::string_view) { on_direct_drag_lost(); }};
   session.overlays.rebuild(session.profile, overlays_.capture_exclusion(), &edit_mode);
   update_overlays();
 }
@@ -382,6 +383,24 @@ void LiveEditHost::on_direct_anchor(const std::string_view panel_id,
       .anchor_x = anchor_x,
       .anchor_y = anchor_y,
       .final = final,
+  });
+}
+
+// An overlay could not keep pointer capture. Direct drag ends for the whole
+// session, so no rebuild re-arms it and the editor shows click-through editing.
+void LiveEditHost::on_direct_drag_lost() {
+  if (session_ == nullptr || !session_->direct_drag)
+    return;
+  session_->direct_drag = false;
+  rebuild_overlays();
+  if (session_ == nullptr)
+    return;
+  ++session_->outbound_revision;
+  (void)send_authenticated({
+      .type = layerc::core::LiveMessageType::set_direct_drag,
+      .revision = session_->outbound_revision,
+      .edit_session = session_->id,
+      .direct_drag = false,
   });
 }
 

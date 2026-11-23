@@ -32,6 +32,9 @@ struct OnWindowEditEvent {
     acknowledged,
     // LayerD moved a bar during Direct Drag, already validated and ordered.
     anchor,
+    // LayerD ended Direct Drag after losing the pointer capture; the session
+    // continues with mirrored click-through editing.
+    direct_drag_ended,
     ended,
     // LayerD never exposed its live-edit service before the deadline.
     expired,
