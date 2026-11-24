@@ -283,9 +283,10 @@ private:
     result = runtime_->get_factory(
         L"Windows.Graphics.Capture.GraphicsCaptureItem",
         wgc_abi::iid_capture_item_interop, item_factory);
-    if (SUCCEEDED(result))
-      result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
-                                             &item_);
+    if (FAILED(result))
+      return {"WGC capture item factory is unavailable", result};
+    result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
+                                           &item_);
     if (FAILED(result))
       return {"WGC window item creation failed", result};
 

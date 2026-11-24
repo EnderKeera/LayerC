@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -318,11 +319,18 @@ void capture_math_contracts() {
 }
 
 #if defined(_WIN32)
-// WGC refuses a message-only window after its item factory exists. The
-// refusal must release every WinRT object before the backend uninitializes
-// the runtime: the last RoUninitialize can unload GraphicsCapture.dll, and
-// releasing a factory afterwards crashed LayerC Calibration with an access
-// violation on a desktop where WGC refuses the target window.
+bool wgc_prerequisite_unavailable(const std::string_view diagnostic) {
+  return diagnostic.starts_with("Windows capture runtime libraries are unavailable") ||
+         diagnostic.starts_with("Windows capture runtime entry points are unavailable") ||
+         diagnostic.starts_with("WinRT initialization failed") ||
+         diagnostic.starts_with("hardware D3D11 device creation failed") ||
+         diagnostic.starts_with("D3D11 WinRT interop failed") ||
+         diagnostic.starts_with("WGC capture item factory is unavailable");
+}
+
+// Require a refusal after the item factory is acquired, unless a prerequisite
+// is unavailable. Releasing the factory after the last RoUninitialize can
+// crash because that call can unload GraphicsCapture.dll.
 void wgc_refusal_releases_before_runtime_teardown() {
   using layerc::test::expect;
   const HWND window =
@@ -337,18 +345,29 @@ void wgc_refusal_releases_before_runtime_teardown() {
         window, {.allow_desktop_duplication = false});
     expect(!session.start(), "WGC must refuse a message-only window");
     const auto polled = session.poll(layerc::core::MonotonicClock::now(), true);
+    const auto &diagnostic = polled.result.diagnostic;
     expect(polled.result.availability ==
                    layerc::core::CaptureAvailability::unavailable &&
-               polled.result.frame == nullptr && !polled.result.diagnostic.empty(),
-           "a refused WGC start reports a diagnosed unavailable poll");
-    if (attempt == 0)
-      std::cout << "WGC refusal: " << polled.result.diagnostic << '\n';
+               polled.result.frame == nullptr,
+           "a refused WGC start reports an unavailable poll without a frame");
+    if (attempt == 0) {
+      std::cout << "WGC refusal: " << diagnostic << '\n';
+      if (wgc_prerequisite_unavailable(diagnostic)) {
+        std::cout << "[skip] WGC refusal after item-factory acquisition not reached: "
+                  << diagnostic << '\n';
+        DestroyWindow(window);
+        return;
+      }
+    }
+    constexpr std::string_view prefix = "WGC window item creation failed: ";
+    expect(diagnostic.starts_with(prefix) && diagnostic.size() > prefix.size(),
+           "WGC refuses a message-only window after acquiring the item factory");
   }
   DestroyWindow(window);
 }
 
-// A size check that fails with a successful HRESULT has no system text: the
-// diagnostic must not end in an empty ": " suffix.
+// Require refusal at the size check unless a prerequisite or item creation
+// prevents reaching it. The size refusal has no HRESULT text to append.
 void wgc_zero_size_target_has_complete_diagnostic() {
   using layerc::test::expect;
   const HWND window = CreateWindowExW(
@@ -366,8 +385,18 @@ void wgc_zero_size_target_has_complete_diagnostic() {
   const auto &diagnostic = polled.result.diagnostic;
   std::cout << "WGC zero-size target: started=" << started << " diagnostic="
             << diagnostic << '\n';
-  expect(started || !diagnostic.empty(),
-         "a refused zero-size start reports a diagnostic");
+  expect(!started, "WGC must refuse a zero-size window");
+  expect(polled.result.availability == layerc::core::CaptureAvailability::unavailable &&
+             polled.result.frame == nullptr,
+         "a refused zero-size start reports an unavailable poll without a frame");
+  if (wgc_prerequisite_unavailable(diagnostic) ||
+      diagnostic.starts_with("WGC window item creation failed")) {
+    std::cout << "[skip] WGC size check not reached for a zero-size target: "
+              << diagnostic << '\n';
+  } else {
+    expect(diagnostic == "WGC target window has no capturable size",
+           "WGC refuses a zero-size window at the size check");
+  }
   expect(!diagnostic.ends_with(": ") && !diagnostic.ends_with(':') &&
              diagnostic.find(": ;") == std::string::npos,
          "a capture diagnostic never ends in an empty system-text suffix");
