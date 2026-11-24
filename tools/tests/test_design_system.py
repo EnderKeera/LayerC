@@ -65,7 +65,8 @@ class SourceRules(unittest.TestCase):
         self.assertTrue(self.visual("auto fill = 0x123456;", "src/editor/fltk/editor_preview.cpp"))
 
     def test_control_heights_reject_literals_in_single_line_controls(self):
-        for widget in ("Fl_Input", "Fl_Choice", "Fl_Button", "EditorChoice", "EditorField<Fl_Input>"):
+        for widget in ("Fl_Input", "Fl_Choice", "Fl_Button", "EditorChoice", "EditorField<Fl_Input>",
+                       "Fl_Round_Button", "Fl_Secret_Input", "Fl_Spinner", "Fl_Value_Input"):
             with self.subTest(widget=widget):
                 self.assertIn("control-height", [item[1] for item in self.visual(f"new {widget}(x, y, width, 28, label);")])
         for text in ('CreateWindowExW(0, L"EDIT", L"", style, x, y, w, 26, parent, 0, 0, 0);',
@@ -73,10 +74,17 @@ class SourceRules(unittest.TestCase):
                      "const int button_h = 26;"):
             self.assertIn("control-height", [item[1] for item in self.visual(text)])
 
+    def test_literal_height_in_check_button_factory_is_caught(self):
+        for construct in ('new Fl_Check_Button(x, y, w, 28, label)',
+                          'std::make_unique<EditorField<Fl_Check_Button>>(x, y, w, 28, label)'):
+            found = self.visual(f"auto check(int x, int y, int w, const char *label) {{ return {construct}; }}")
+            self.assertEqual([(1, "control-height", "use kit::metric, not a literal control height")], found)
+
     def test_control_heights_allow_metrics_multiline_and_windows(self):
-        text = "new Fl_Input(x, y, std::max(10, width), editor_input_height); new Fl_Multiline_Output(x, y, w, 120); new Fl_Double_Window(800, 600);"
+        text = ("new Fl_Input(x, y, std::max(10, width), kit::metric(Metric::control_height)); "
+                "new Fl_Multiline_Output(x, y, w, 120); new Fl_Double_Window(800, 600);")
         self.assertEqual([], self.visual(text))
-        self.assertEqual([], self.visual("const int button_h = 30;", "src/editor/fltk/editor_style.hpp"))
+        self.assertEqual([], self.visual("const int button_h = 30;", rules.KIT_METRICS))
 
     def test_writing_resources_and_both_menu_formats(self):
         path = Path("menu.rc")
@@ -120,8 +128,12 @@ class TokenRules(unittest.TestCase):
             "accent_2": dict(zip(("copper", "teal", "plum", "slate"), ("#60b0ff", "#b99bff", "#60b0ff", "#b99bff"), strict=False)),
             "linux-outline-background": "#6e6e6e", "linux-outline-panel": "#777777",
         })
-        size = {"win-control-height": "26px", "linux-input-height": "28px", "linux-button-height": "30px"}
-        spacing = {"linux-group-gap": "10px"}
+        size = {"win-control-height": "26px", "win-combo-height": "23px", "outline": "1px",
+                "focus-width": "2px", "accent-rail": "3px", "checkbox": "16px", "swatch": "16px",
+                "menu-item": "24px", "scrollbar-track": "12px", "scrollbar-thumb": "6px",
+                "tooltip-max": "360px", "key-chip": "20px", "key-chip-padding": "6px",
+                "button-min-width": "88px", "button-text-pad": "24px", "status-glyph": "12px"}
+        spacing = {"win-gap-dialog": "8px", "swatch-inset": "8px"}
         self.data: dict[str, TokenSection] = {section: {"tokens": [{"name": k, "value": v} for k, v in values.items()]}
                      for section, values in (("color", colors), ("size", size), ("spacing", spacing), ("radius", {}))}
         self.write_spec()
@@ -131,9 +143,10 @@ class TokenRules(unittest.TestCase):
         self.put(rules.NATIVE_THEME, source)
         self.put(rules.LINUX_THEME, source)
         self.put(rules.COLOR_MATH, "int accent_2_blue = 0x60b0ff; int accent_2_violet = 0xb99bff;\n")
-        self.put("src/editor/dialog_layout.hpp", "int native_control_height = 26;")
-        self.put("src/editor/fltk/editor_style.hpp",
-                 "int editor_input_height = 28; int editor_button_height = 30; int editor_group_gap = 10;")
+        self.put(rules.NATIVE_METRICS, "int native_control_height = 26;")
+        self.kit_table = "\n".join(f"inline constexpr int {name.replace('-', '_')} = {value[:-2]};"
+                                   for name, value in (size | spacing).items())
+        self.put(rules.KIT_METRICS, self.kit_table)
 
     def put(self, relative, text):
         path = self.root / relative
@@ -196,15 +209,16 @@ class TokenRules(unittest.TestCase):
         self.write_spec()
         self.assertTrue(rules.token_violations(self.root))
 
-    def test_control_metric_mutation_is_caught(self):
-        self.put("src/editor/fltk/editor_style.hpp",
-                 "int editor_input_height = 29; int editor_button_height = 30; int editor_group_gap = 10;")
-        self.assertTrue(rules.token_violations(self.root))
+    def test_kit_base_metric_mutation_is_caught(self):
+        self.put(rules.KIT_METRICS, self.kit_table.replace("win_control_height = 26", "win_control_height = 29"))
+        self.assertEqual([(self.root / rules.KIT_METRICS, 1, "token-agreement",
+                           "win-control-height: found '29px'; expected '26px'")], rules.token_violations(self.root))
 
-    def test_group_gap_mutation_is_caught(self):
-        self.put("src/editor/fltk/editor_style.hpp",
-                 "int editor_input_height = 28; int editor_button_height = 30; int editor_group_gap = 8;")
-        self.assertTrue(rules.token_violations(self.root))
+    def test_kit_table_rejects_missing_and_unpublished_tokens(self):
+        self.put(rules.KIT_METRICS, self.kit_table.replace("win_gap_dialog", "win_gap_missing"))
+        self.assertEqual([(self.root / rules.KIT_METRICS, 1, "token-agreement", message) for message in (
+            "win-gap-dialog: found None; expected '8px'", "win-gap-missing: found '8px'; expected None",
+        )], rules.token_violations(self.root))
 
     def test_missing_spec_fails_closed(self):
         (self.root / "docs/design-system/tokens.json").unlink()

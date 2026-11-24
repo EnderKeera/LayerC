@@ -94,7 +94,7 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   int y = margin;
   const auto check = [&](const char *label, const bool checked) {
     const int w = row_width - check_indent;
-    const int height = std::max(editor_input_height, wrapped_height(label, w));
+    const int height = std::max(kit::metric(kit::Metric::control_height), wrapped_height(label, w));
     auto *control = new EditorField<Fl_Check_Button>(margin, y, row_width, height, label);
     control->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
     control->value(checked);
@@ -124,7 +124,7 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   accessibility::describe_with(*editor_, *capture_hint_);
   refresh_capture_warning();
 
-  text_size_ = new EditorChoice(choice_x, y, choice_width, editor_input_height, text_size_label);
+  text_size_ = new EditorChoice(choice_x, y, choice_width, kit::metric(kit::Metric::combo_height), text_size_label);
   text_size_->shortcut_label(1);
   for (std::size_t i = 0; i < text_scale_choices.size(); ++i) {
     const int percent = text_scale_choices[i];
@@ -134,7 +134,7 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   if (text_size_->value() < 0) text_size_->value(0);
   text_size_->callback([](Fl_Widget *, void *data) { static_cast<OptionsWindow *>(data)->enable_apply(); },
                        this);
-  y += editor_input_height;
+  y += text_size_->h();
   accessibility::describe_with(*text_size_, hint(choice_x, text_size_hint));
 
   updates_ = check(updates_label, initial.launcher_updates);
@@ -143,7 +143,7 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
 
   int x = width - margin - actions_width;
   const auto action = [&](const std::size_t i, Fl_Callback *callback) {
-    auto *button = new Fl_Button(x, y, button_widths[i], editor_button_height, labels[i]);
+    auto *button = new Fl_Button(x, y, button_widths[i], kit::metric(kit::Metric::control_height), labels[i]);
     button->callback(callback, this);
     x += button_widths[i] + gap;
     return button;
@@ -160,7 +160,7 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   apply_->deactivate();
 
   end();
-  size(width, y + editor_button_height + margin);
+  size(width, y + kit::metric(kit::Metric::control_height) + margin);
   set_modal();
   apply_editor_appearance(appearance, *this);
 }

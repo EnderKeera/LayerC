@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kit/metrics.hpp"
 #include "platform/contrast.hpp"
 #include "status_kind.hpp"
 
@@ -23,13 +24,6 @@ void install_editor_style();
 
 // The menu bar's box once the style is installed, else FL_UP_BOX.
 [[nodiscard]] Fl_Boxtype editor_menu_bar_box() noexcept;
-
-// One height per single-line control class: authored forms never repeat the
-// number (DesignSystem.md, Density).
-inline constexpr int editor_input_height = 28;
-inline constexpr int editor_button_height = 30;
-// The smallest gap between two groups on a form (`linux-group-gap`).
-inline constexpr int editor_group_gap = 10;
 
 // The appearance the authored drawing resolves its tokens from.
 void set_editor_style_appearance(const EditorAppearance &appearance);

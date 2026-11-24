@@ -57,10 +57,10 @@ std::optional<PanelColorSet> edit_panel_colors_internal(const PanelColorSet &cur
   std::array<Pick, 4> picks{};
   for (std::size_t index = 0; index < fields.size(); ++index) {
     const int y = 15 + static_cast<int>(index) * 40;
-    fields[index] = new EditorField<Fl_Input>(layout.input_x, y, input_width, editor_input_height, nullptr);
+    fields[index] = new EditorField<Fl_Input>(layout.input_x, y, input_width, kit::metric(kit::Metric::control_height), nullptr);
     fields[index]->copy_label((std::string(color_names[index]) + " #RRGGBB").c_str());
     fields[index]->value(format_rgb(current.values[index]).c_str());
-    auto *choose = new Fl_Button(layout.button_x, y, button_width, editor_button_height, nullptr);
+    auto *choose = new Fl_Button(layout.button_x, y, button_width, kit::metric(kit::Metric::control_height), nullptr);
     buttons[index] = choose;
     choose->copy_label(("Choose " + std::string(color_names[index]) + "...").c_str());
     picks[index] = {fields[index], choose, color_names[index]};
@@ -85,11 +85,11 @@ std::optional<PanelColorSet> edit_panel_colors_internal(const PanelColorSet &cur
     accessibility::describe_with(*buttons[index], *message);
   }
   bool accepted = false;
-  auto *cancel = new Fl_Button(layout.window_width - 250, 205, 110, editor_button_height, "Cancel");
+  auto *cancel = new Fl_Button(layout.window_width - 250, 205, 110, kit::metric(kit::Metric::control_height), "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
   struct Accept { bool *accepted; std::array<Fl_Input *, 4> *fields; Fl_Box *message; };
   Accept accept_state{&accepted, &fields, message};
-  auto *ok = new Fl_Button(layout.window_width - 125, 205, 110, editor_button_height, "OK");
+  auto *ok = new Fl_Button(layout.window_width - 125, 205, 110, kit::metric(kit::Metric::control_height), "OK");
   ok->callback([](Fl_Widget *widget, void *data) {
     auto &state = *static_cast<Accept *>(data);
     for (std::size_t index = 0; index < state.fields->size(); ++index)

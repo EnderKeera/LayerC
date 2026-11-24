@@ -320,7 +320,7 @@ void panel_items_fit_their_fields() {
       if (!expect(row != nullptr, "the row above the list exists" + at)) return;
       row_bottom = std::max(row_bottom, row->y() + row->h());
     }
-    expect(label_height > 0 && label_top >= row_bottom + editor::editor_group_gap &&
+    expect(label_height > 0 && label_top >= row_bottom + editor::kit::metric(editor::kit::Metric::gap_dialog) &&
                label_top >= group.y(),
            "the label starts one group gap under the row above" + at);
     const auto inside = [](const Fl_Widget &outer, const Fl_Widget &inner) {

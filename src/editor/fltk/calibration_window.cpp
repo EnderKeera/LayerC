@@ -68,7 +68,7 @@ public:
     capture_ = button(305, 510, 265, "Capture reference");
     import_ = button(20, 550, 265, "Import PNG reference...");
     clear_ = button(305, 550, 265, "Clear references");
-    references_ = new EditorField<Fl_Output>(20, 605, 550, editor_input_height, "Template references");
+    references_ = new EditorField<Fl_Output>(20, 605, 550, kit::metric(kit::Metric::control_height), "Template references");
     references_->align(FL_ALIGN_TOP_LEFT);
     outcome_ = new EditorField<Fl_Multiline_Output>(20, 665, 550, 65, "Capture / live match status");
     outcome_->wrap(1);
@@ -90,7 +90,7 @@ public:
     keep_ = check(610, 450, 420, "Keep input alongside the visual trigger");
     timeout_ = input(610, 510, 200, "Input timeout (50–5000 ms)");
     unavailable_ = choice(830, 510, 200, "Capture unavailable", "Ignore|Trigger from input");
-    auto *note = new EditorField<Fl_Multiline_Output>(610, 560, 420, 80, "Calibration semantics");
+    auto *note = new EditorField<Fl_Multiline_Output>(610, 562, 420, 80, "Calibration semantics");
     note->wrap(1);
     note->align(FL_ALIGN_TOP_LEFT); note->textsize(FL_NORMAL_SIZE);
     note->value("Passive X11 capture; no input is blocked or synthesized.\n"
@@ -153,19 +153,19 @@ private:
     }, this);
   }
   Fl_Button *button(int x, int y, int width, const char *label) {
-    auto *w = new Fl_Button(x, y, width, editor_button_height, label); bind(*w); return w;
+    auto *w = new Fl_Button(x, y, width, kit::metric(kit::Metric::control_height), label); bind(*w); return w;
   }
   Fl_Input *input(int x, int y, int width, const char *label) {
-    auto *w = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
+    auto *w = new EditorField<Fl_Input>(x, y, width, kit::metric(kit::Metric::control_height), label);
     w->align(FL_ALIGN_TOP_LEFT); w->when(FL_WHEN_CHANGED); bind(*w); return w;
   }
   Fl_Choice *choice(int x, int y, int width, const char *label, const char *items) {
-    auto *w = new EditorChoice(x, y, width, editor_input_height, label);
+    auto *w = new EditorChoice(x, y, width, kit::metric(kit::Metric::combo_height), label);
     w->align(FL_ALIGN_TOP_LEFT); if (items) w->add(items);
     w->value(0); bind(*w); return w;
   }
   Fl_Check_Button *check(int x, int y, int width, const char *label) {
-    auto *w = new Fl_Check_Button(x, y, width, 28, label); bind(*w); return w;
+    auto *w = new Fl_Check_Button(x, y, width, kit::metric(kit::Metric::control_height), label); bind(*w); return w;
   }
   void message(const std::string &text) { outcome_->value(text.c_str()); }
   void fill_region() {

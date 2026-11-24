@@ -7,6 +7,7 @@
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Return_Button.H>
 #include <FL/Fl_Value_Input.H>
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -17,22 +18,30 @@ namespace {
 class ColorDialog final : public Fl_Double_Window {
 public:
   explicit ColorDialog(const char *title, std::uint32_t initial)
-      : Fl_Double_Window(215, 175 + editor_button_height, title) {
-    chooser_ = new Fl_Color_Chooser(10, 10, 195, 115);
+      : Fl_Double_Window(215, 1, title) {
+    const int control_height = kit::metric(kit::Metric::control_height);
+    const int combo_height = kit::metric(kit::Metric::combo_height);
+    const int first_channel = std::max(30, combo_height);
+    const int pitch = std::max(30, control_height);
+    const int chooser_height = std::max(115, first_channel + 2 * pitch + control_height);
+    const int extra = chooser_height - 115;
+    chooser_ = new Fl_Color_Chooser(10, 10, 195, chooser_height);
     Fl_Choice *native_mode{};
-    int area = 0;
+    int area = 0, channel_y = chooser_->y() + first_channel;
     for (int i = 0; i < chooser_->children(); ++i) {
       auto &child = *chooser_->child(i);
       if (auto *choice = dynamic_cast<Fl_Choice *>(&child)) native_mode = choice;
-      else if (!dynamic_cast<Fl_Value_Input *>(&child) && !dynamic_cast<Fl_Box *>(&child))
+      else if (auto *value = dynamic_cast<Fl_Value_Input *>(&child)) {
+        value->resize(value->x(), channel_y, value->w(), control_height);
+        channel_y += pitch;
+      } else if (!dynamic_cast<Fl_Box *>(&child))
         accessibility::set_accessible_name(child, area++ == 0 ? "Hue and saturation" : "Value");
     }
     // The embedded choice cannot be subclassed. Replace only that control,
     // using its public geometry/menu, and keep mode() as the native authority.
     if (native_mode) {
       chooser_->begin();
-      mode_ = new EditorChoice(native_mode->x(), native_mode->y(), native_mode->w(),
-                                editor_input_height);
+      mode_ = new EditorChoice(native_mode->x(), native_mode->y(), native_mode->w(), combo_height);
       mode_->copy(native_mode->menu());
       accessibility::set_accessible_name(*mode_, "Color mode");
       native_mode->hide();
@@ -49,21 +58,22 @@ public:
                    static_cast<double>(initial & 255U) / 255.0);
     name_channels();
     begin();
-    current_ = new Fl_Box(FL_DOWN_BOX, 10, 130, 95, 25, nullptr);
-    auto *original = new Fl_Box(FL_DOWN_BOX, 110, 130, 95, 25, nullptr);
+    current_ = new Fl_Box(FL_DOWN_BOX, 10, 130 + extra, 95, 25, nullptr);
+    auto *original = new Fl_Box(FL_DOWN_BOX, 110, 130 + extra, 95, 25, nullptr);
     original->color(fl_rgb_color(static_cast<uchar>(initial >> 16U),
                                  static_cast<uchar>(initial >> 8U), static_cast<uchar>(initial)));
-    auto *ok = new Fl_Return_Button(10, 165, 95, editor_button_height, "OK");
+    auto *ok = new Fl_Return_Button(10, 165 + extra, 95, control_height, "OK");
     primary_button(*ok);
     ok->callback([](Fl_Widget *, void *data) {
       auto &self = *static_cast<ColorDialog *>(data); self.accepted = true; self.hide();
     }, this);
-    auto *cancel = new Fl_Button(110, 165, 95, editor_button_height, "Cancel");
+    auto *cancel = new Fl_Button(110, 165 + extra, 95, control_height, "Cancel");
     cancel->shortcut(FL_Escape);
     cancel->callback([](Fl_Widget *w, void *) { w->window()->hide(); });
     chooser_->callback([](Fl_Widget *, void *data) { static_cast<ColorDialog *>(data)->update_chip(); }, this);
     update_chip();
     end(); set_modal();
+    size(215, 175 + extra + control_height);
     // This compact native chooser has fixed-size fields and actions.
     size_range(w(), h(), w(), h());
   }

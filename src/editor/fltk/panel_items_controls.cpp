@@ -73,7 +73,7 @@ void PanelItemsControls::build(const int top, const int bottom) {
     static_cast<PanelItemsControls *>(data)->select();
   }, this);
   const auto button = [&](const char *label) {
-    auto *value = new Fl_Button(500, top, 80, editor_button_height, label);
+    auto *value = new Fl_Button(500, top, 80, kit::metric(kit::Metric::control_height), label);
     value->labelsize(FL_NORMAL_SIZE);
     return value;
   };
@@ -104,7 +104,7 @@ void PanelItemsControls::build(const int top, const int bottom) {
   // at the current text size (DesignSystem.md, Spacing).
   int label_width = 0, line_height = 0;
   items_->measure_label(label_width, line_height);
-  const int band = top + editor_group_gap;
+  const int band = top + kit::metric(kit::Metric::gap_dialog);
   // Two action columns at the group's right edge, each as wide as the widest
   // caption inside its box (80 px as authored, never narrower).
   int column = 80;
@@ -115,9 +115,9 @@ void PanelItemsControls::build(const int top, const int bottom) {
   }
   const int second = group_->x() + group_->w() - 5 - column;
   const int first = second - 5 - column;
-  const int pitch = editor_button_height + editor_group_gap;
+  const int pitch = kit::metric(kit::Metric::control_height) + kit::metric(kit::Metric::gap_dialog);
   const auto place = [&](Fl_Button *action, const int x, const int y) {
-    action->resize(x, y, column, editor_button_height);
+    action->resize(x, y, column, kit::metric(kit::Metric::control_height));
   };
   place(add_, first, band);
   place(edit_, second, band);
@@ -127,7 +127,7 @@ void PanelItemsControls::build(const int top, const int bottom) {
   // The list and its reason line fill the rest; the line keeps room for the
   // longest reason it can show, wrapped. A full panel has more than one item,
   // so the "full" and "last item" reasons never show together.
-  const int list_width = first - editor_group_gap - items_->x();
+  const int list_width = first - kit::metric(kit::Metric::gap_dialog) - items_->x();
   reason_->resize(items_->x(), bottom, list_width, 0);
   int reason_height = line_height;
   for (const auto &line : {reason_line(true, true, false), reason_line(false, true, true)})

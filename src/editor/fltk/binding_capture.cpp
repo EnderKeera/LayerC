@@ -20,7 +20,7 @@ namespace core = layerc::core;
 class CaptureButton final : public Fl_Button {
 public:
   CaptureButton(int x, int y, int w, const char *label, FocusedBindingEvents &capture)
-      : Fl_Button(x, y, w, editor_button_height, label), capture_(capture) {}
+      : Fl_Button(x, y, w, kit::metric(kit::Metric::control_height), label), capture_(capture) {}
   int handle(int event) override {
     if ((event == FL_KEYDOWN || event == FL_SHORTCUT) &&
         capture_.keyboard_token().kind == FocusedKeyResult::Kind::ignore)

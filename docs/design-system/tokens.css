@@ -1,4 +1,4 @@
-/* Generated from tokens.json; do not edit. */
+/* Keep in sync with tokens.json. */
 :root, [data-theme="copper"] {
   --background: #1f1f1f;
   --panel: #2d2d2d;
@@ -60,8 +60,8 @@
   --win-gap-main: 16px;
   --win-section-gap: 12px;
   --swatch-inset: 8px;
-  --linux-group-gap: 10px;
-  --linux-margin: 15px;
+  --key-chip-padding: 6px;
+  --button-text-pad: 24px;
   --radius-none: 0px;
   --radius-radio: 50%;
   --outline: 1px;
@@ -83,8 +83,13 @@
   --win-slot-min: 260px;
   --win-field-cap: 480px;
   --win-timing-label: 84px;
-  --linux-input-height: 28px;
-  --linux-button-height: 30px;
+  --menu-item: 24px;
+  --scrollbar-track: 12px;
+  --scrollbar-thumb: 6px;
+  --tooltip-max: 360px;
+  --key-chip: 20px;
+  --button-min-width: 88px;
+  --status-glyph: 12px;
   --linux-sidebar: 240px;
   --linux-window-width: 1080px;
   --linux-window-height: 790px;

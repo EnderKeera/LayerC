@@ -37,7 +37,7 @@ public:
       : Fl_Double_Window(hid_width, hid_height, "Capture HID binding"),
         capture_(capture), accept_(accept), announce_(announce) {
     begin();
-    include_system_ = new Fl_Check_Button(hid_margin, hid_margin, hid_content_width, editor_input_height,
+    include_system_ = new Fl_Check_Button(hid_margin, hid_margin, hid_content_width, kit::metric(kit::Metric::control_height),
                                           "Include keyboard and mouse devices (advanced)");
     include_system_->callback([](Fl_Widget *, void *self) {
       static_cast<HidBindingDialog *>(self)->scan(true);
@@ -54,12 +54,12 @@ public:
       static_cast<HidBindingDialog *>(self)->select_device();
     }, this);
 
-    auto *refresh = new Fl_Button(hid_margin, 224, hid_action_width, editor_button_height, "Refresh devices");
+    auto *refresh = new Fl_Button(hid_margin, 224, hid_action_width, kit::metric(kit::Metric::control_height), "Refresh devices");
     refresh->callback([](Fl_Widget *, void *self) {
       static_cast<HidBindingDialog *>(self)->scan(true);
     }, this);
     listen_ = new Fl_Button(hid_margin + hid_action_width + hid_action_gap, 224, hid_action_width,
-                            editor_button_height, "Capture");
+                            kit::metric(kit::Metric::control_height), "Capture");
     listen_->callback([](Fl_Widget *, void *self) {
       static_cast<HidBindingDialog *>(self)->listen();
     }, this);
@@ -71,7 +71,7 @@ public:
     constexpr int field_width = (hid_content_width - 2 * hid_action_gap) / 3;
     const auto field = [](int column, const char *label) {
       auto *edit = new EditorField<Fl_Input>(hid_margin + column * (field_width + hid_action_gap),
-                                             343, field_width, editor_input_height, label);
+                                             343, field_width, kit::metric(kit::Metric::control_height), label);
       edit->align(FL_ALIGN_TOP_LEFT);
       return edit;
     };
@@ -80,23 +80,23 @@ public:
     threshold_ = field(1, "Axis threshold (%)");
     hysteresis_ = field(2, "Axis hysteresis (%)");
 
-    replace_ = new Fl_Check_Button(hid_margin, 378, hid_content_width, editor_input_height,
+    replace_ = new Fl_Check_Button(hid_margin, 378, hid_content_width, kit::metric(kit::Metric::control_height),
                                    "Allow replacing another device in this slot");
     replace_->tooltip(replace_warning);
     auto *replace_note = new Fl_Box(hid_margin + 20, 408, hid_content_width - 20, 18, replace_warning);
     replace_note->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT);
     accessibility::describe_with(*replace_, *replace_note);
 
-    constexpr int action_y = hid_height - hid_margin - editor_button_height;
+    const int action_y = hid_height - hid_margin - kit::metric(kit::Metric::control_height);
     apply_ = new Fl_Return_Button(hid_width - hid_margin - 2 * hid_action_width - hid_action_gap,
-                                  action_y, hid_action_width, editor_button_height, "Use binding");
+                                  action_y, hid_action_width, kit::metric(kit::Metric::control_height), "Use binding");
     primary_button(*apply_);
     accessibility::describe_with(*apply_, *status_);
     apply_->callback([](Fl_Widget *, void *self) {
       static_cast<HidBindingDialog *>(self)->apply();
     }, this);
     auto *cancel = new Fl_Button(hid_width - hid_margin - hid_action_width, action_y,
-                                 hid_action_width, editor_button_height, "Cancel");
+                                 hid_action_width, kit::metric(kit::Metric::control_height), "Cancel");
     cancel->callback([](Fl_Widget *, void *self) {
       static_cast<HidBindingDialog *>(self)->hide();
     }, this);

@@ -25,7 +25,7 @@
 namespace layerc::editor {
 namespace {
 constexpr int diagnostics_width = 680, diagnostics_height = 480, margin = 10;
-constexpr int button_height = editor_button_height;
+int button_height() noexcept { return kit::metric(kit::Metric::control_height); }
 
 class DiagnosticsOutput final : public EditorField<Fl_Multiline_Output> {
 public:
@@ -39,10 +39,10 @@ public:
   TextDialogShell(int width, int height, const char *title)
       : Fl_Double_Window(width, height, title) {
     body_ = new Fl_Group(margin, margin, width - 2 * margin,
-                          height - 3 * margin - button_height);
+                          height - 3 * margin - button_height());
     body_->end();
-    row_ = new Fl_Group(margin, height - margin - button_height,
-                         width - 2 * margin, button_height);
+    row_ = new Fl_Group(margin, height - margin - button_height(),
+                         width - 2 * margin, button_height());
     spacer_ = new Fl_Box(row_->x(), row_->y(), row_->w(), row_->h());
     row_->resizable(spacer_); row_->end();
     end(); resizable(body_);
@@ -52,7 +52,7 @@ public:
     row_->begin();
     fl_font(FL_HELVETICA, FL_NORMAL_SIZE);
     const int width = std::max(110, static_cast<int>(fl_width(label)) + 2 * margin);
-    auto *button = new Fl_Button(0, row_->y(), width, button_height, label);
+    auto *button = new Fl_Button(0, row_->y(), width, button_height(), label);
     row_->end();
     int x = row_->x() + row_->w();
     for (int i = row_->children(); i-- > 1;) {
@@ -66,7 +66,7 @@ public:
   void minimum(int content_width, int content_height) {
     const int actions = row_->w() - spacer_->w();
     size_range(std::max(content_width, actions) + 2 * margin,
-                content_height + 3 * margin + button_height);
+                content_height + 3 * margin + button_height());
   }
 private:
   Fl_Group *body_{}, *row_{};
@@ -104,9 +104,9 @@ DiagnosticsWindow::DiagnosticsWindow(std::function<DaemonStatus()> status,
                                                  "Runtime diagnostics — LayerE")),
       status_(std::move(status)), retry_(std::move(retry)) {
   window_->begin();
-  mode_ = new Fl_Group(margin, margin, diagnostics_width - 2 * margin, editor_input_height);
-  summary_mode_ = new Fl_Round_Button(margin, margin, 110, editor_input_height, "&Summary");
-  raw_ = new Fl_Round_Button(margin + 120, margin, 110, editor_input_height, "Raw &JSON");
+  mode_ = new Fl_Group(margin, margin, diagnostics_width - 2 * margin, kit::metric(kit::Metric::control_height));
+  summary_mode_ = new Fl_Round_Button(margin, margin, 110, kit::metric(kit::Metric::control_height), "&Summary");
+  raw_ = new Fl_Round_Button(margin + 120, margin, 110, kit::metric(kit::Metric::control_height), "Raw &JSON");
   for (auto *button : {summary_mode_, raw_}) {
     button->type(FL_RADIO_BUTTON);
     button->callback(on_mode, this);
@@ -116,18 +116,18 @@ DiagnosticsWindow::DiagnosticsWindow(std::function<DaemonStatus()> status,
   mode_->end();
   const int top = mode_->y() + mode_->h() + margin;
   text_ = new DiagnosticsOutput(margin, top, diagnostics_width - 2 * margin,
-      diagnostics_height - top - 2 * margin - button_height, "Runtime diagnostics");
+      diagnostics_height - top - 2 * margin - button_height(), "Runtime diagnostics");
   text_->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE);
   text_->labeltype(FL_NO_LABEL);
-  const int y = diagnostics_height - margin - button_height;
-  auto *refresh_button = new Fl_Button(margin, y, 110, button_height, "&Refresh");
+  const int y = diagnostics_height - margin - button_height();
+  auto *refresh_button = new Fl_Button(margin, y, 110, button_height(), "&Refresh");
   refresh_button->callback(on_refresh, this);
-  retry_button_ = new Fl_Button(margin + 120, y, 110, button_height, "Retry &visual");
+  retry_button_ = new Fl_Button(margin + 120, y, 110, button_height(), "Retry &visual");
   retry_button_->callback(on_retry, this);
   retry_button_->hide();
-  copy_ = new Fl_Button(retry_button_->x(), y, 150, button_height, "&Copy raw JSON");
+  copy_ = new Fl_Button(retry_button_->x(), y, 150, button_height(), "&Copy raw JSON");
   copy_->callback(on_copy, this);
-  auto *close = new Fl_Button(diagnostics_width - margin - 110, y, 110, button_height, "Close");
+  auto *close = new Fl_Button(diagnostics_width - margin - 110, y, 110, button_height(), "Close");
   primary_button(*close);
   close->callback(on_close, this);
   window_->resizable(text_);
@@ -272,7 +272,7 @@ void show_shortcuts_dialog(const std::string_view rows) {
   Fl::screen_xywh(screen_x, screen_y, screen_width, screen_height, 0);
   const int width = std::min(keys + descriptions + 2 * margin, screen_width);
   const int visible = std::min(static_cast<int>(pairs.size()), 22);
-  const int height = std::min(2 * margin + visible * 20 + editor_button_height + margin,
+  const int height = std::min(2 * margin + visible * 20 + kit::metric(kit::Metric::control_height) + margin,
                               screen_height);
   TextDialogShell dialog(width, height, "Keyboard shortcuts — LayerE");
   auto &body = dialog.body(); body.begin();

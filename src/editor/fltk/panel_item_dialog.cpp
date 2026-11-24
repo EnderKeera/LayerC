@@ -46,28 +46,28 @@ PanelItemDialog::PanelItemDialog(
       apply_(std::move(apply)) {
   begin();
   const auto input = [](const int y, const char *label) {
-    auto *field = new EditorField<Fl_Input>(235, y, 380, editor_input_height, label);
+    auto *field = new EditorField<Fl_Input>(235, y, 380, kit::metric(kit::Metric::control_height), label);
     return field;
   };
-  kind_ = new EditorChoice(235, 25, 380, editor_input_height, "Item type");
+  kind_ = new EditorChoice(235, 25, 380, kit::metric(kit::Metric::combo_height), "Item type");
   kind_->add("Cooldown|Automation timer|Active-duration timer|Counter|Indicator");
   if (!current_) kind_->add("Timer preset");
   kind_->value(current_ ? static_cast<int>(current_->content.index()) : 0);
-  source_ = new EditorChoice(235, 78, 380, editor_input_height, "Source");
-  custom_label_ = new Fl_Check_Button(20, 130, 200, 28, "Custom label");
+  source_ = new EditorChoice(235, 78, 380, kit::metric(kit::Metric::combo_height), "Source");
+  custom_label_ = new Fl_Check_Button(20, 130, 200, kit::metric(kit::Metric::control_height), "Custom label");
   label_ = input(166, "Item label");
   label_->tooltip("An explicitly empty custom label is preserved.");
   maximum_ = input(222, "Counter maximum (optional)");
-  display_ = new EditorChoice(235, 278, 380, editor_input_height, "Counter display");
+  display_ = new EditorChoice(235, 278, 380, kit::metric(kit::Metric::combo_height), "Counter display");
   display_->add("Number|Pips"); display_->value(0);
   flash_ = input(334, "Flash Hz (0 = off)"); flash_->value("0");
   interval_ = input(390, "Preset seconds"); interval_->value("5");
   message_mark_ = new EditorStatusMark(20, 440, 18, 80);
   message_ = new Fl_Box(38, 440, 577, 80, item_help);
   message_->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  auto *cancel = new Fl_Button(375, 540, 110, editor_button_height, "Cancel");
+  auto *cancel = new Fl_Button(375, 540, 110, kit::metric(kit::Metric::control_height), "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  auto *apply_button = new Fl_Button(505, 540, 110, editor_button_height, "Apply item");
+  auto *apply_button = new Fl_Button(505, 540, 110, kit::metric(kit::Metric::control_height), "Apply item");
   primary_button(*apply_button);
   apply_button->callback([](Fl_Widget *, void *data) {
     static_cast<PanelItemDialog *>(data)->accept();

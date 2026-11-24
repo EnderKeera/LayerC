@@ -4,6 +4,9 @@
 
 enable_testing()
 
+set_source_files_properties(tests/fltk_kit_metrics_tests.cpp PROPERTIES COMPILE_DEFINITIONS
+    "$<$<OR:$<STREQUAL:$<TARGET_PROPERTY:NAME>,layerc_linux_editor_widget_tests>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,layerc_windows_fltk_widget_tests>>:LAYERC_KIT_WIDGET_TESTS>")
+
 # Test construction and registration live together so newly added suites
 # inherit the same warnings, harness, labels, and MinGW runtime PATH.
 function(layerc_add_test target)
@@ -96,13 +99,14 @@ if(WIN32 AND TARGET layerc_editor_fltk)
     set(editor_test_daemon tests/windows_fltk_test_daemon.cpp)
     layerc_add_test(layerc_windows_fltk_model_tests WIN32
         SOURCES tests/linux_editor_model_tests.cpp tests/linux_editor_platform_tests.cpp
+            tests/fltk_kit_metrics_tests.cpp
             ${editor_test_daemon}
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_session_tests WIN32
         SOURCES tests/linux_editor_session_tests.cpp ${editor_test_daemon}
         LINK layerc_editor_fltk_support TIMEOUT 60 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_widget_tests WIN32
-        SOURCES tests/linux_editor_widget_tests.cpp
+        SOURCES tests/linux_editor_widget_tests.cpp tests/fltk_kit_metrics_tests.cpp
             tests/linux_editor_items_tests.cpp tests/linux_editor_dialog_tests.cpp
             tests/editor_steady_timer_fault_tests.cpp
             tests/linux_editor_visual_contract_tests.cpp tests/linux_editor_diagnostics_tests.cpp
@@ -461,7 +465,7 @@ if(NOT WIN32)
         src/platform/linux)
 
     layerc_add_test(layerc_linux_editor_model_tests
-        SOURCES tests/linux_editor_model_tests.cpp
+        SOURCES tests/linux_editor_model_tests.cpp tests/fltk_kit_metrics_tests.cpp
         LINK layerc_editor_linux TIMEOUT 30)
     layerc_add_test(layerc_linux_editor_session_tests
         SOURCES tests/linux_editor_session_tests.cpp
@@ -490,7 +494,7 @@ if(NOT WIN32)
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_fltk_accessibility_tree_tests)
         layerc_add_test(layerc_linux_editor_widget_tests
-            SOURCES tests/linux_editor_widget_tests.cpp
+            SOURCES tests/linux_editor_widget_tests.cpp tests/fltk_kit_metrics_tests.cpp
                 tests/linux_editor_items_tests.cpp
                 tests/linux_editor_dialog_tests.cpp
                 tests/editor_steady_timer_fault_tests.cpp

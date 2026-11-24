@@ -322,7 +322,7 @@ public:
       : Fl_Double_Window(520, 430, "Appearance — LayerE"), staged(current), root_(root),
         sidebar_(sidebar), preview_(preview) {
     begin();
-    theme = new EditorChoice(150, 15, 355, editor_input_height, "Theme");
+    theme = new EditorChoice(150, 15, 355, kit::metric(kit::Metric::combo_height), "Theme");
     // Menu paths treat '/' as a submenu: add a placeholder, then the label.
     for (std::size_t index = 0; index < static_cast<std::size_t>(EditorTheme::count); ++index) {
       const auto item = theme->add(("theme-" + std::to_string(index)).c_str());
@@ -333,7 +333,7 @@ public:
     auto *note = new Fl_Box(15, 90, 490, 40, "An empty accent uses the preset's. Colors below "
         "override one role; empty fields use the theme.");
     note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-    role = new EditorChoice(150, 135, 355, editor_input_height, "Role");
+    role = new EditorChoice(150, 135, 355, kit::metric(kit::Metric::combo_height), "Role");
     for (std::size_t index = 0; index < editor_role_count; ++index)
       role->add(std::string(role_label(static_cast<EditorRole>(index))).c_str());
     role->value(0);
@@ -348,13 +348,13 @@ public:
     chooser(360, 210, "Choose text...", &AppearanceDialog::choose_text);
     selection = input(150, 245, 200, "Role selection");
     chooser(360, 245, "Choose selection...", &AppearanceDialog::choose_selection);
-    auto *reset_role = new Fl_Button(150, 285, 170, editor_button_height, "Reset role colors");
+    auto *reset_role = new Fl_Button(150, 285, 170, kit::metric(kit::Metric::control_height), "Reset role colors");
     reset_role->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
       dialog.staged.overrides[static_cast<std::size_t>(dialog.role->value())] = {};
       dialog.load_role(); dialog.preview_changes();
     }, this);
-    auto *reset_all = new Fl_Button(335, 285, 170, editor_button_height, "Reset all colors");
+    auto *reset_all = new Fl_Button(335, 285, 170, kit::metric(kit::Metric::control_height), "Reset all colors");
     reset_all->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
       dialog.staged.overrides = {}; dialog.staged.accent.reset();
@@ -371,9 +371,9 @@ public:
              accent, fill, text, selection, choosers_[0].button, choosers_[1].button,
              choosers_[2].button, choosers_[3].button})
       accessibility::describe_with(*control, *status);
-    auto *cancel = new Fl_Button(265, 385, 115, editor_button_height, "Cancel");
+    auto *cancel = new Fl_Button(265, 385, 115, kit::metric(kit::Metric::control_height), "Cancel");
     cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-    apply_ = new Fl_Button(390, 385, 115, editor_button_height, "Apply");
+    apply_ = new Fl_Button(390, 385, 115, kit::metric(kit::Metric::control_height), "Apply");
     // Cancel stays left, the primary Apply right (DesignSystem.md, Dialogs).
     primary_button(*apply_);
     apply_->callback([](Fl_Widget *, void *self) {
@@ -478,7 +478,7 @@ private:
     hide();
   }
   Fl_Input *input(int x, int y, int width, const char *label) {
-    auto *field = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
+    auto *field = new EditorField<Fl_Input>(x, y, width, kit::metric(kit::Metric::control_height), label);
     field->when(FL_WHEN_CHANGED);
     field->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
@@ -487,7 +487,7 @@ private:
     return field;
   }
   void chooser(int x, int y, const char *label, Choose choose) {
-    auto *button = new Fl_Button(x, y, 145, editor_button_height, label);
+    auto *button = new Fl_Button(x, y, 145, kit::metric(kit::Metric::control_height), label);
     choosers_[chooser_count_] = {this, choose, button, label};
     button->callback([](Fl_Widget *, void *data) {
       const auto &target = *static_cast<const Target *>(data);

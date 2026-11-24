@@ -5,10 +5,9 @@ and Linux `layere` (FLTK on X11). This document owns the editor look; source
 owns exact behavior. Behavior, support claims and evidence stay in
 [`README.md`](../README.md) and [`Linux.md`](Linux.md).
 
-**Version:** v2.1 (2026-11-16), a draft on top of v2, "square native,
-accessible" (2026-11-07). v2 is in the code at `design-v2-accessible`; the
-v2.1 changes below are listed under [Not yet in the
-code](#not-yet-in-the-code) until they land.
+**Version:** v2.2 (2026-11-25), a draft on top of v2.1: the LayerE kit
+(EditorUnificationPlan Phase 3). v2 is in the code at `design-v2-accessible`;
+see [Not yet in the code](#not-yet-in-the-code) for remaining v2.1 changes.
 **Previous look:** v1, tagged `design-v1-square-native`; before it
 `design-v0-rounded`. See [Revert or reimplement](#revert-or-reimplement).
 **Visual reference:** [`design-system/`](design-system/) holds the tokens,
@@ -23,6 +22,12 @@ overlays), whose shape follows each profile's own `corner_radius`
 ([Overlay](#overlay) sets only its readability rules); the editor preview of
 that overlay (it must stay faithful to the profile); and the Game Bar XAML
 widgets.
+
+## Changes from v2.1
+
+- **Kit metrics:** both FLTK editors scale one set of control and layout
+  metrics from the body font. Buttons and edits share a height; drop-downs
+  use the combo height ([Geometry](#geometry)).
 
 ## Changes from v2
 
@@ -325,6 +330,9 @@ Roboto or any other bundled face.
   layout grows with the text instead of clipping it. FLTK's own screen
   scaling multiplies in.
 
+FLTK uses the current body font to scale the kit metrics, with a 12 px floor
+for geometry. DPI and app-local screen scaling still apply on top.
+
 | Style | Size | Weight | Use |
 | --- | --- | --- | --- |
 | `win-title` | 16px | 600 | Window and page titles. |
@@ -356,21 +364,18 @@ never redraw the mark.
 Windows values are 96-DPI logical pixels, scaled by DPI and text size
 (`window_base_dpi`).
 
-- **Controls.** Every Windows button and edit is `win-control-height` (26) in
-  every window and dialog, Appearance and Choose color included; drop-downs
-  keep the native combo box height, `win-combo-height` (23). A disabled edit
-  keeps the `input` fill so it still reads as a field, as the code intends
-  (`editor_draw.cpp`); only its outline turns `divider` and its text
-  `disabled`. Linux forms are fixed: edits and choices `linux-input-height`
-  (28), buttons `linux-button-height` (30). Outlines are 1 px on both.
+- **Controls.** Buttons, check boxes, radio buttons, edits and number fields
+  share the scaled `win-control-height` (26 px at a 12 px body) on both
+  platforms. Drop-downs use `win-combo-height` (23 px at a 12 px body).
+  A disabled edit keeps the `input` fill so it still reads as a field; only
+  its outline turns `divider` and its text `disabled`.
 - **Rows.** Windows rows step by `win-row-pitch` (control + 8 = 34); a section
   heading takes `win-heading-pitch` (28). Linux places each label above its
   field (`FL_ALIGN_TOP_LEFT`).
 - **Spacing.** Windows main window: `win-margin` (12), `win-gap-main` (16)
   between columns, `win-section-gap` (12) between groups in the profile
-  column. Windows dialogs: `win-margin` (12) and `win-gap-dialog` (8). Linux:
-  `linux-margin` (15) outside, 10–15 px between groups (`linux-group-gap` to
-  `linux-margin`).
+  column. Win32 dialogs use `win-margin` (12) and `win-gap-dialog` (8).
+  Existing FLTK forms keep their fixed layout until Phase 4.
 - **Focus.** One signal on both platforms: a 2 px ring (`focus-width`) inside
   the focused control's edge, `accent` everywhere except on the primary
   button, where it is `text`. On an edit or drop-down the ring replaces the
@@ -454,6 +459,11 @@ and announcements carry the full message, not a duplicate glyph character.
 
 ### Size and spacing tokens
 
+Kit values are at a 12 px body. The kit scales every metric by
+`round(value × body / 12)` with a body floor of 12; Linux’s 14 px body gives
+30 px controls and a 40 px row pitch. The retained Linux main-window dimensions
+and the radius tokens are not kit metrics.
+
 | Token | Value | Use |
 | --- | --- | --- |
 | `outline` | 1px | Every control outline, on both platforms. |
@@ -461,8 +471,8 @@ and announcements carry the full message, not a duplicate glyph character.
 | `accent-rail` | 3px | The `accent` rail on a selected list row, and the bar along the top of the selected Linux tab. |
 | `checkbox` | 16px | Check box and radio size (`native_check_box_size`); the label starts 8 px after it, and the whole width is the click area. |
 | `swatch` | 16px | The square swatch in a color button. |
-| `win-control-height` | 26px | Windows native_control_height: every button and edit. Drop-downs are `win-combo-height`. In code: `native_control_height` (`dialog_layout.hpp`). |
-| `win-combo-height` | 23px | Windows drop-downs: a drop-down list's height is set by Windows from the font, so layout code can't change it; 23 px with the 12 px body font. |
+| `win-control-height` | 26px | Base height for all single-line controls except drop-downs. In code: `kit::metric(Metric::control_height)` and Win32 `native_control_height`. |
+| `win-combo-height` | 23px | Base drop-down height. FLTK uses `kit::metric(Metric::combo_height)`; Win32 sets it from the font. |
 | `win-row-pitch` | 34px | Windows: one form row (control height + 8). In code: `DialogLayout` (`dialog_layout.hpp`). |
 | `win-list-row` | 27px | Windows: one row in an item list (cooldowns, panel items, control roles). Measured from screenshots; not named in the source document. |
 | `win-profile-row` | 21px | Windows: one row in the profile list. Measured from screenshots; not named in the source document. |
@@ -475,8 +485,13 @@ and announcements carry the full message, not a duplicate glyph character.
 | `win-slot-min` | 260px | Windows main window: the narrowest a settings slot gets; below it slots 1 and 2 stack in one column. See the Layout page. |
 | `win-field-cap` | 480px | Windows: the widest a field grows. In code: `editor_layout.cpp`. |
 | `win-timing-label` | 84px | Windows: the timing label's width. In code: `editor_layout.cpp`. |
-| `linux-input-height` | 28px | Linux: edits and choices. Single source: `editor_input_height` in `editor_style.hpp`; forms and dialogs reuse it. |
-| `linux-button-height` | 30px | Linux: buttons. Single source: `editor_button_height` in `editor_style.hpp`; forms and dialogs reuse it. |
+| `menu-item` | 24px | Menu and context menu item height. |
+| `scrollbar-track` | 12px | Scrollbar track width. |
+| `scrollbar-thumb` | 6px | Scrollbar thumb width. |
+| `tooltip-max` | 360px | Maximum tooltip width. |
+| `key-chip` | 20px | Keyboard shortcut chip height. |
+| `button-min-width` | 88px | Minimum dialog action button width. |
+| `status-glyph` | 12px | Size of a status glyph. |
 | `linux-sidebar` | 240px | Linux: profiles list and sidebar panes. In code: `editor_forms.cpp`. |
 | `linux-window-width` | 1080px | Linux main window width; it fits without scrolling. In code: `editor_forms.cpp`. |
 | `linux-window-height` | 790px | Linux main window height; smaller windows scroll rather than overlap. In code: `editor_forms.cpp`. |
@@ -485,8 +500,8 @@ and announcements carry the full message, not a duplicate glyph character.
 | `win-gap-main` | 16px | Windows: between groups in the main window. In code: `DialogLayout` and `editor_layout.cpp`. |
 | `win-section-gap` | 12px | Windows: between groups in the profile column (Timing and key, Overlay bar, Visual trigger). In code: `section_gap` (`editor_layout.cpp`). |
 | `swatch-inset` | 8px | Inset of the 16 px swatch inside a color button. |
-| `linux-group-gap` | 10px | Linux: the smallest gap between groups; forms use 10–15 px. In code: `editor_group_gap` (`editor_style.hpp`). |
-| `linux-margin` | 15px | Linux: outer margin of the main window and dialogs, and the largest gap between groups. |
+| `key-chip-padding` | 6px | Horizontal padding in a keyboard shortcut chip. |
+| `button-text-pad` | 24px | Total horizontal padding to add to a dialog button’s text width. |
 | `radius-none` | 0px | Every control, focus ring and window frame (Windows sets DWMWCP_DONOTROUND). |
 | `radius-radio` | 50% | Radio buttons and their dot, nothing else. |
 
@@ -589,9 +604,8 @@ ContextMenu, Tooltip, StatusStrip, StatusText, Dialog and WindowFrame (Windows
 [ColorPicker](#colorpicker), [AppearanceRoles](#appearanceroles) and
 [Menus](#menus). One primary button per surface; Dialog has the button order
 for each kind of dialog: OK · Cancel · Apply, the Windows order Options
-already uses. New controls reuse the existing painters; new surfaces use
-`native_control_height` and `DialogLayout` (Windows) or the existing form
-builders (Linux).
+already uses. New controls reuse the existing painters. New FLTK surfaces
+use kit metrics; the Win32 editor uses `native_control_height` and `DialogLayout`.
 
 The **Screens** pages in [`design-system/`](design-system/index.html) rebuild
 four pre-refit Windows surfaces from 96 DPI screenshots, pixel for pixel, out
@@ -674,7 +688,7 @@ surface.
   neutral buttons, `text` on the primary one.
 - **Access key:** one letter (`&Browse...`), underlined when Windows shows
   keyboard cues (after Alt, or always with "Underline access keys" on).
-- **Size:** `win-control-height` on Windows; `linux-button-height` on Linux,
+- **Size:** scaled `win-control-height` on both platforms. Linux buttons are
   outlined in `linux-outline-panel`.
 
 The consumer supplies the label with its access key, whether it is the
@@ -875,8 +889,8 @@ A drop-down list painted like an Edit: square, `input` fill, 1 px `border`
 outline, text inset 8 px, with a chevron centered in a `win-chevron-zone` (26
 px) zone at its right.
 
-- **Height:** `win-combo-height` (23 px), the native combo box's own height,
-  not `win-control-height`.
+- **Height:** scaled `win-combo-height` (23 px at a 12 px body), not
+  `win-control-height`.
 - **Hover and open:** `row_hover` fill.
 - **Focused or open:** a 2 px `accent` ring (`focus-width`) in place of the 1
   px outline, as on an Edit.
@@ -906,8 +920,8 @@ A single-line text field: `input` fill in a 1 px `border` outline, text inset
   Read-only edits keep the same fill.
 - **Long values** such as an application path show their end, so the file name
   stays visible; the tooltip carries the full value.
-- **Size:** `win-control-height` on Windows, at most `win-field-cap` wide;
-  `linux-input-height` on Linux.
+- **Size:** scaled `win-control-height` on both platforms; on Win32, at most
+  `win-field-cap` wide.
 - **Label:** on Windows the row label sits to the left in `secondary`, shares
   the row height (`DialogLayout::row_label`, `SS_CENTERIMAGE`) and carries the
   field's access key (Profile &name); on Linux it sits above the field
@@ -1352,6 +1366,8 @@ takes the renderer's edit-mode outline, 2 px #E0A15A.
 
 ## Known deviations in the shipped editor
 
+Existing FLTK dialogs keep their fixed margins and gaps until Phase 4.
+
 Until v2.1 lands, the shipped editor differs from these rules here; don't copy
 any of it:
 
@@ -1377,7 +1393,7 @@ listed under [Verification](#verification).
 | Fonts | `create_native_font`, `ui_face` | `editor_style.cpp` (`apply_desktop_font`, `parse_desktop_font`, `xsettings_string`) |
 | Control painting | `native_controls.cpp` (`paint_native_button`, `paint_native_check_box`, `paint_flat_combo`, `paint_flat_frame`, menu bar); `native_theme.cpp` (`paint_focus_ring`, `paint_status_glyph`, `high_contrast_colors`) | `editor_style.hpp/.cpp` (`install_editor_style`, `EditorField`, `EditorChoice`, `draw_editor_focus`, `primary_button`); `editor_geometry.cpp` (`EditorTabs::draw`); `editor_menus.cpp` (`ContextBrowser::draw`) |
 | Applying a theme | `editor_theme.cpp`; `EditorWindow` drawing in `editor_draw.cpp` | `appearance_window.cpp` (`apply_editor_appearance`) |
-| Metrics | `dialog_layout.hpp` (`native_control_height`, `DialogLayout`), `editor_dialog_layouts.cpp` (Options, Appearance, Choose color, Keyboard shortcuts), `editor_layout.cpp`, `editor_automation_layout.cpp` | `editor_input_height`, `editor_button_height` in `editor_style.hpp`; form builders in `editor_pages.cpp`; `desktop_text_metrics` and `apply_desktop_font` for app-local text scaling |
+| Metrics | `dialog_layout.hpp` (`native_control_height`, `DialogLayout`), `editor_dialog_layouts.cpp` (Options, Appearance, Choose color, Keyboard shortcuts), `editor_layout.cpp`, `editor_automation_layout.cpp` | `kit/metrics.hpp/.cpp` for both FLTK platforms; form builders in `editor_pages.cpp`; `desktop_text_metrics` and `apply_desktop_font` for app-local text scaling |
 | Contrast checks | `contrast/appearance_contrast.cpp` (Appearance refusal and live lines, Choose color line); floors and wording from the shared `appearance_floor.cpp` | `editor_appearance.cpp` (`first_role_contrast_failure`: Text / Fill, Text / Selection where the selection sits behind text, and each painted pair) and `appearance_window.cpp` (`painted_text_pairs`, warning line, Apply refusal), with the same `appearance_floor.cpp`; on Windows also `shared_appearance_failure` through the Win32 `contrast/appearance_contrast.cpp` |
 | Status lines and text tones | `StatusKind` in the shared `status_kind.hpp`; `static_style.hpp` (`status_glyph`, `set_status_line`, `set_strip_status`, `set_text_tone`); `visual_runtime_status.hpp` (`visual_runtime_status_kind`); `EditorWindow::draw_status_line` | `StatusKind` in the shared `status_kind.hpp`; `EditorStatusMark`, `draw_editor_status_glyph`, `StatusPane`; `DaemonStatus::kind` and `save_report_kind` in `daemon_link.hpp` |
 | Keyboard shortcuts | `editor_shortcuts.cpp` (command table, `shortcut_rows` from the accelerators) | `editor_commands.cpp` (`shortcut_help`, including F1); `diagnostics_window.cpp` (`show_shortcuts_dialog`, measured browser columns) |
@@ -1425,8 +1441,10 @@ rendered checks below cover each change.
 
 - Change a token or metric at its single source; never hard-code a color,
   radius or control height in a dialog.
-- New controls reuse the painters; new surfaces use `native_control_height`
-  and `DialogLayout` (Windows) or the existing form builders (Linux).
+- New controls reuse the painters. New surfaces use kit metrics
+  ([`src/editor/fltk/kit/metrics.hpp`](../src/editor/fltk/kit/metrics.hpp)) or
+  `native_control_height` and `DialogLayout` in the Win32 editor; never a
+  local control height.
 - No `RoundRect`, rounded regions or rounded FLTK box types in editor chrome.
   The overlay preview is the only rounded editor drawing, and it follows the
   profile.

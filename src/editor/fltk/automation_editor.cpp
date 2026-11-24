@@ -199,7 +199,7 @@ struct LinuxAutomationEditor::Impl {
     page->begin();
     load_trace = button(285, 415, 160, "Load trace...");
     save_trace = button(460, 415, 160, "Save trace...");
-    validation = new ValidationOutput(645, 415, 385, editor_input_height, "Automation validation");
+    validation = new ValidationOutput(645, 415, 385, kit::metric(kit::Metric::control_height), "Automation validation");
     validation->align(FL_ALIGN_TOP_LEFT);
     validation->jump = [this] { return select_json_error(); };
     page->end();
@@ -210,24 +210,24 @@ struct LinuxAutomationEditor::Impl {
     widget.callback([](Fl_Widget *w, void *data) { static_cast<Impl *>(data)->handle(w); }, this);
   }
   Fl_Button *button(int x, int y, int width, const char *label) {
-    auto *widget = new Fl_Button(x, y, width, editor_button_height, label);
+    auto *widget = new Fl_Button(x, y, width, kit::metric(kit::Metric::control_height), label);
     bind(*widget);
     return widget;
   }
   Fl_Input *input(int x, int y, int width, const char *label, bool edit = true) {
-    auto *widget = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
+    auto *widget = new EditorField<Fl_Input>(x, y, width, kit::metric(kit::Metric::control_height), label);
     widget->align(FL_ALIGN_TOP_LEFT);
     if (edit) { widget->when(FL_WHEN_CHANGED); bind(*widget); }
     return widget;
   }
   Fl_Choice *choice(int x, int y, int width, const char *label) {
-    auto *widget = new EditorChoice(x, y, width, editor_input_height, label);
+    auto *widget = new EditorChoice(x, y, width, kit::metric(kit::Metric::combo_height), label);
     widget->align(FL_ALIGN_TOP_LEFT);
     bind(*widget);
     return widget;
   }
   Fl_Check_Button *check(int x, int y, int width, const char *label) {
-    auto *widget = new Fl_Check_Button(x, y, width, 28, label);
+    auto *widget = new Fl_Check_Button(x, y, width, kit::metric(kit::Metric::control_height), label);
     bind(*widget);
     return widget;
   }

@@ -115,7 +115,10 @@ void apply_desktop_font() {
   const auto description = desktop_font_description();
   const auto font =
       description ? parse_desktop_font(*description) : std::optional<DesktopFont>{};
-  if (!font) return;
+  if (!font) {
+    kit::set_body(FL_NORMAL_SIZE);
+    return;
+  }
   static std::array<std::string, 4> names;
   static constexpr std::array<Fl_Font, 4> faces{FL_HELVETICA, FL_HELVETICA_BOLD,
                                                 FL_HELVETICA_ITALIC, FL_HELVETICA_BOLD_ITALIC};
@@ -135,6 +138,7 @@ void apply_desktop_font() {
   // (DesignSystem.md, Density).
   const auto metrics = desktop_text_metrics(font->pixels);
   FL_NORMAL_SIZE = metrics.normal_size;
+  kit::set_body(FL_NORMAL_SIZE);
 #ifdef _WIN32
   set_windows_desktop_text_scale(metrics.scale);
 #else

@@ -9,7 +9,7 @@ A square fill inside a 1 px outline, label centered; at most one primary per sur
 - **Color button:** a `swatch` (16 px, with its own 1 px `border` outline) inset `swatch-inset` (8 px) from the left edge, then 8 px, then the left-aligned text (Fill, Background, Border, Text).
 - **Focus:** a 2 px ring inside the edge (`paint_focus_ring`): `accent` on neutral buttons, `text` on the primary one.
 - **Access key:** one letter (`&Browse...`), underlined when Windows shows keyboard cues (after Alt, or always with "Underline access keys" on).
-- **Size:** `win-control-height` on Windows; `linux-button-height` on Linux, outlined in `linux-outline-panel`.
+- **Size:** scaled `win-control-height` on both platforms. Linux buttons are outlined in `linux-outline-panel`.
 
 The consumer supplies the label with its access key, whether it is the surface's default action, its enabled state and, for a color button, the color. Real labels: Show advanced, Browse..., Choose running..., Add cooldown, Remove cooldown, Capture key, Calibrate..., Add..., Edit..., Remove, Move up, Move down, Position on window, Validate, Close.
 

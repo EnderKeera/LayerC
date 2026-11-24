@@ -1,6 +1,7 @@
 # The FLTK frontend's toolkit- and platform-independent sources. Keep the two
 # components split only to preserve the existing Linux library membership.
 set(LAYERC_EDITOR_FLTK_PORTABLE_SUPPORT_SOURCES
+    src/editor/fltk/kit/metrics.cpp
     src/editor/fltk/lease_worker.cpp
     src/editor/fltk/editor_session.cpp
     src/editor/fltk/daemon_link_report.cpp

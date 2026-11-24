@@ -35,7 +35,7 @@ class CommandButton final : public Fl_Button {
 public:
   CommandButton(int x, int y, int width, const char *label, EditorApp &app,
                 EditorCommand action)
-      : Fl_Button(x, y, width, editor_button_height, label), app_(app), action_(action) {
+      : Fl_Button(x, y, width, kit::metric(kit::Metric::control_height), label), app_(app), action_(action) {
     callback([](Fl_Widget *, void *data) {
       auto &self = *static_cast<CommandButton *>(data);
       self.app_.command(self.action_);
@@ -50,7 +50,7 @@ class SteppedField final : public EditorField<Fl_Input> {
 public:
   SteppedField(int x, int y, int width, const char *label, EditorApp &app,
                NumberStep step)
-      : EditorField<Fl_Input>(x, y, width, editor_input_height, label), app_(app), step_(step) {
+      : EditorField<Fl_Input>(x, y, width, kit::metric(kit::Metric::control_height), label), app_(app), step_(step) {
     accessibility::describe_with_tooltip(*this, step == NumberStep::duration
         ? "Up / Down or the mouse wheel step 0.1 s (Shift: 1 s)"
         : "Up / Down or the mouse wheel step 1 px");
@@ -145,7 +145,7 @@ void add_choice(Fl_Choice &choice, const std::string &name) {
 Fl_Input *FormBuilder::input(int x, int y, int width, const char *label, NumberStep step) {
   Fl_Input *field = windows_editor_keys && step != NumberStep::none
       ? static_cast<Fl_Input *>(new SteppedField(x, y, width, label, app_, step))
-      : new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
+      : new EditorField<Fl_Input>(x, y, width, kit::metric(kit::Metric::control_height), label);
   field->align(FL_ALIGN_TOP_LEFT);
   field->when(FL_WHEN_CHANGED);
   field->callback([](Fl_Widget *w, void *data) {
@@ -156,7 +156,7 @@ Fl_Input *FormBuilder::input(int x, int y, int width, const char *label, NumberS
 
 Fl_Choice *FormBuilder::choice(int x, int y, int width, const char *label,
                                const char *items) {
-  auto *field = new EditorChoice(x, y, width, editor_input_height, label);
+  auto *field = new EditorChoice(x, y, width, kit::metric(kit::Metric::combo_height), label);
   field->align(FL_ALIGN_TOP_LEFT);
   if (items) field->add(items);
   field->value(0);
@@ -167,7 +167,7 @@ Fl_Choice *FormBuilder::choice(int x, int y, int width, const char *label,
 }
 
 Fl_Check_Button *FormBuilder::check(int x, int y, int width, const char *label) {
-  auto *field = new Fl_Check_Button(x, y, width, editor_input_height, label);
+  auto *field = new Fl_Check_Button(x, y, width, kit::metric(kit::Metric::control_height), label);
   field->callback([](Fl_Widget *w, void *data) {
     static_cast<EditorApp *>(data)->field_changed(w);
   }, &app_);
@@ -269,7 +269,7 @@ void ProfilePage::build(FormBuilder &builder) {
   executable_path_ = builder.input(285, 145, windows_editor_keys ? 615 : 745,
                                    "Executable path (optional)");
   if constexpr (windows_editor_keys) {
-    browse_ = new Fl_Button(915, 145, 115, editor_button_height, "&Browse...");
+    browse_ = new Fl_Button(915, 145, 115, kit::metric(kit::Metric::control_height), "&Browse...");
     browse_->labelsize(FL_NORMAL_SIZE);
     browse_->callback([](Fl_Widget *, void *data) {
       static_cast<ProfilePage *>(data)->browse_application();
@@ -385,7 +385,7 @@ void CooldownPage::build(FormBuilder &builder) {
   remove_ = builder.button(405, 390, 110, "Remove", EditorCommand::delete_cooldown);
   remove_->deactivate();
   remove_reason_ = make_disabled_reason(cooldowns_->x(), remove_->y() + remove_->h(),
-                                        cooldowns_->w(), editor_input_height);
+                                        cooldowns_->w(), kit::metric(kit::Metric::control_height));
   cooldown_fields_ = new Fl_Group(535, 65, 495, 325);
   cooldown_fields_->begin();
   cooldown_name_ = builder.input(545, 90, 470, "Cooldown name");
@@ -563,7 +563,7 @@ void PanelPage::build(FormBuilder &builder) {
       "Place the bars directly on the running game window");
   if (on_window_edit_sessions()) {
     // Its own callback: the choice is session state, not a profile field.
-    direct_drag_ = new Fl_Check_Button(285, 400, 190, editor_input_height,
+    direct_drag_ = new Fl_Check_Button(285, 400, 190, kit::metric(kit::Metric::control_height),
                                        "Direct drag in game");
     direct_drag_->callback([](Fl_Widget *w, void *data) {
       static_cast<EditorApp *>(data)->direct_drag_changed(

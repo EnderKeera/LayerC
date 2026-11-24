@@ -901,8 +901,13 @@ void windows_editor_platform_contracts();
 #define LAYERC_WINDOWS_PLATFORM_CASE
 #endif
 
+void fltk_kit_metric_scaling();
+void fltk_kit_metrics_change_notifications();
+
 LAYERC_TEST_MAIN(
     LAYERC_WINDOWS_PLATFORM_CASE
+    LAYERC_TEST_CASE(fltk_kit_metric_scaling),
+    LAYERC_TEST_CASE(fltk_kit_metrics_change_notifications),
     LAYERC_TEST_CASE(save_report_kind_contracts),
     LAYERC_TEST_CASE(daemon_status_kind_contracts),
     LAYERC_TEST_CASE(edit_save_roundtrip_and_disconnected),

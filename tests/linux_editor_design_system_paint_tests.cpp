@@ -123,12 +123,12 @@ void linux_editor_design_system_paint_contracts() {
   layerc::test::require_fltk_editor_window();
   editor::install_editor_style();
   PaintWindow window(440, 200, "LayerE paint test fixture");
-  editor::EditorField<Fl_Input> field(20, 25, 260, editor::editor_input_height);
-  editor::EditorChoice choice(20, 80, 260, editor::editor_input_height);
+  editor::EditorField<Fl_Input> field(20, 25, 260, editor::kit::metric(editor::kit::Metric::control_height));
+  editor::EditorChoice choice(20, 80, 260, editor::kit::metric(editor::kit::Metric::combo_height));
   choice.add("Copper|Teal");
   choice.value(0);
-  Fl_Check_Button check(20, 130, 260, editor::editor_input_height, "Whole checkbox label");
-  Fl_Button apply(310, 25, 110, editor::editor_button_height, "Apply");
+  Fl_Check_Button check(20, 130, 260, editor::kit::metric(editor::kit::Metric::control_height), "Whole checkbox label");
+  Fl_Button apply(310, 25, 110, editor::kit::metric(editor::kit::Metric::control_height), "Apply");
   editor::primary_button(apply);
   window.end();
   RestoreSystem restore(window);

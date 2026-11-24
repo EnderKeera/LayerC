@@ -17,7 +17,14 @@ TOKEN_SOURCES = frozenset({NATIVE_THEME, LINUX_THEME, "src/platform/win32/native
                            COLOR_MATH, "src/editor/common/editor_color.cpp"})
 SHARED_CHROME = (NATIVE_THEME, "src/platform/win32/native_theme.cpp",
                  "src/platform/win32/native_controls.cpp")
-METRIC_SOURCES = frozenset({"src/editor/dialog_layout.hpp", "src/editor/fltk/editor_style.hpp"})
+NATIVE_METRICS = "src/editor/dialog_layout.hpp"
+KIT_METRICS = "src/editor/fltk/kit/metrics.cpp"
+METRIC_SOURCES = frozenset({NATIVE_METRICS, KIT_METRICS, "src/editor/fltk/kit/metrics.hpp"})
+KIT_SHARED_TOKENS = frozenset({
+    "outline", "focus-width", "accent-rail", "checkbox", "swatch", "swatch-inset",
+    "menu-item", "scrollbar-track", "scrollbar-thumb", "tooltip-max", "key-chip",
+    "key-chip-padding", "button-min-width", "button-text-pad", "status-glyph",
+})
 # These modules render a profile's overlay, not editor chrome. Only rounding
 # (not arbitrary colors/metrics) is exempt here.
 OVERLAY_PREVIEWS = frozenset({"src/editor/fltk/editor_preview.cpp", "src/editor/editor_preview_render.cpp"})
@@ -95,11 +102,14 @@ def visual_violations(text: str, relative: str) -> list[tuple[int, str, str]]:
             if not any(start <= match.start() < end for start, end in spans):
                 add(match.start(), "square-chrome", "rounded editor chrome; only overlay previews follow corner_radius")
 
-    widget = r"\bnew\s+(?:(?:EditorField|FocusedWidget)\s*<\s*)?(?:Fl_(?:Input|Int_Input|Float_Input|Output|Choice|Button|Return_Button|Light_Button)|EditorChoice|CommandButton)\s*>?\s*\("
+    widget = (r"\b(?:make_unique\s*<\s*)?(?:(?:EditorField|FocusedWidget)\s*<\s*)?"
+              r"(?:Fl_(?:Input|Int_Input|Float_Input|Secret_Input|Value_Input|Output|Choice|Button|"
+              r"Return_Button|Light_Button|Check_Button|Round_Button|Spinner)|EditorChoice|CommandButton)\b"
+              r"(?:\s*>){0,2}(?:\s+\w+)?\s*\(")
     for match in re.finditer(widget, code):
         args = arguments(code, match.end() - 1)
         if len(args) >= 4 and re.fullmatch(r"\d+", args[3]):
-            add(match.start(), "control-height", "use editor_input_height/editor_button_height, not a literal control height")
+            add(match.start(), "control-height", "use kit::metric, not a literal control height")
     for match in re.finditer(r"\bCreateWindow(Ex)?[AW]?\s*\(", code):
         args = arguments(code, match.end() - 1)
         height = 7 if match.group(1) else 6
@@ -214,18 +224,31 @@ def token_violations(root: Path) -> list[tuple[Path, int, str, str]]:
         if tokens.get(name) != expected:
             mismatch(json_path, name, tokens.get(name), expected)
 
-    metrics = (("src/editor/dialog_layout.hpp", "native_control_height", "win-control-height"),
-               ("src/editor/fltk/editor_style.hpp", "editor_input_height", "linux-input-height"),
-               ("src/editor/fltk/editor_style.hpp", "editor_button_height", "linux-button-height"),
-               ("src/editor/fltk/editor_style.hpp", "editor_group_gap", "linux-group-gap"))
-    for relative, constant, name in metrics:
-        path = root / relative
-        try:
-            source = code_only(path.read_text(encoding="utf-8"))
-            match = re.search(rf"\b{constant}\s*=\s*(\d+)", source)
-            actual = f"{match[1]}px" if match else None
-        except OSError:
-            actual = None
-        if actual != tokens.get(name):
-            mismatch(path, name, actual, tokens.get(name))
+    path = root / NATIVE_METRICS
+    try:
+        source = code_only(path.read_text(encoding="utf-8"))
+        match = re.search(r"\bnative_control_height\s*=\s*(\d+)", source)
+        actual = f"{match[1]}px" if match else None
+    except OSError:
+        actual = None
+    expected = tokens.get("win-control-height")
+    if actual is None or actual != expected:
+        mismatch(path, "win-control-height", actual, expected)
+
+    path = root / KIT_METRICS
+    try:
+        source = code_only(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        found.append((path, 1, "token-agreement", str(error)))
+        source = ""
+    base = {name.replace("_", "-"): f"{value}px" for name, value in re.findall(
+        r"^\s*inline constexpr int (\w+)\s*=\s*(\d+);", source, re.MULTILINE)}
+    expected_names = KIT_SHARED_TOKENS | {
+        entry["name"] for section in ("size", "spacing") for entry in data[section]["tokens"]
+        if entry["name"].startswith("win-")
+    }
+    for name in sorted(expected_names | base.keys()):
+        actual, expected = base.get(name), tokens.get(name)
+        if actual is None or expected is None or actual != expected:
+            mismatch(path, name, actual, expected)
     return found

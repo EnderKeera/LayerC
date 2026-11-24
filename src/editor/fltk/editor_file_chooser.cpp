@@ -219,40 +219,40 @@ public:
     auto *notice = new EditorStatusMark(margin, y, mark_size, fl_height());
     notice->kind(StatusKind::warning);
     message_ = line(text_x, y, text_width, wrapped_height(capture_notice, text_width), capture_notice);
-    y += message_->h() + editor_group_gap;
+    y += message_->h() + kit::metric(kit::Metric::gap_dialog);
     constexpr auto label = "&File path";
     const int input_x = margin + measured_width(label) + gap;
-    input_ = new EditorField<Fl_Input>(input_x, y, width - margin - input_x, editor_input_height, label);
+    input_ = new EditorField<Fl_Input>(input_x, y, width - margin - input_x, kit::metric(kit::Metric::control_height), label);
     input_->shortcut_label(1);
     accessibility::describe_with(*input_, *message_);
-    y += editor_input_height + gap;
+    y += kit::metric(kit::Metric::control_height) + gap;
 
     int reason_height = 0;
     for (const auto *text : reason_texts)
       reason_height = std::max(reason_height, wrapped_height(text, text_width));
     mark_ = new EditorStatusMark(margin, y, mark_size, fl_height());
     reason_ = line(text_x, y, text_width, reason_height, nullptr);
-    y += reason_height + editor_group_gap;
+    y += reason_height + kit::metric(kit::Metric::gap_dialog);
 
     int x = width - margin - actions_width;
-    primary_ = new Fl_Button(x, y, primary_width, editor_button_height, action_label_.c_str());
+    primary_ = new Fl_Button(x, y, primary_width, kit::metric(kit::Metric::control_height), action_label_.c_str());
     primary_button(*primary_);
     primary_->callback([](Fl_Widget *, void *self) {
       static_cast<FilePathDialog *>(self)->submit();
     }, this);
     x += primary_width + gap;
-    alternative_ = new Fl_Button(x, y, alternative_width, editor_button_height, open_dialog);
+    alternative_ = new Fl_Button(x, y, alternative_width, kit::metric(kit::Metric::control_height), open_dialog);
     alternative_->shortcut(FL_ALT | 'd');
     alternative_->callback([](Fl_Widget *, void *self) {
       static_cast<FilePathDialog *>(self)->alternate();
     }, this);
     x += alternative_width + gap;
-    cancel_ = new Fl_Button(x, y, cancel_width, editor_button_height, "&Cancel");
+    cancel_ = new Fl_Button(x, y, cancel_width, kit::metric(kit::Metric::control_height), "&Cancel");
     cancel_->callback([](Fl_Widget *, void *self) { static_cast<FilePathDialog *>(self)->hide(); }, this);
     input_->deactivate();
     primary_->deactivate();
     end();
-    size(width, y + editor_button_height + margin);
+    size(width, y + kit::metric(kit::Metric::control_height) + margin);
     const auto fit = [](int position, int start, int extent, int length) {
       return std::clamp(position, start, std::max(start, start + extent - length));
     };

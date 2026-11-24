@@ -1224,6 +1224,8 @@ void windows_editor_platform_exclusions();
 void profile_identity_and_browse();
 void disabled_action_reasons();
 void panel_items_fit_their_fields();
+void fltk_kit_main_control_geometry();
+void fltk_kit_dialog_control_geometry();
 
 int main() {
 #ifdef _WIN32
@@ -1234,6 +1236,8 @@ int main() {
   LAYERC_TEST_CASE(profile_identity_and_browse),
   LAYERC_TEST_CASE(disabled_action_reasons),
   LAYERC_TEST_CASE(panel_items_fit_their_fields),
+  LAYERC_TEST_CASE(fltk_kit_main_control_geometry),
+  LAYERC_TEST_CASE(fltk_kit_dialog_control_geometry),
   LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_shortcuts_columns),
   LAYERC_TEST_CASE(linux_editor_diagnostic_text_contracts),

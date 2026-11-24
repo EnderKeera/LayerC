@@ -49,15 +49,15 @@ struct LinuxVisualEditor::Impl {
 
   Impl(EditorApp &owner, Fl_Group &page) : app(owner) {
     page.begin();
-    target = new EditorChoice(290, 105, 730, editor_input_height, "Visual target cooldown");
+    target = new EditorChoice(290, 105, 730, kit::metric(kit::Metric::combo_height), "Visual target cooldown");
     target->align(FL_ALIGN_TOP_LEFT);
     summary = new EditorField<Fl_Multiline_Output>(290, 165, 730, 90, "Visual assignment");
     summary->wrap(1);
     summary->align(FL_ALIGN_TOP_LEFT);
-    enabled = new Fl_Check_Button(290, 265, 300, 30, "Visual trigger enabled");
-    isolated = new Fl_Check_Button(620, 265, 400, 30, "Isolated visual runtime");
-    calibrate = new Fl_Button(290, 310, 350, editor_button_height, "Calibrate visual...");
-    remove = new Fl_Button(660, 310, 360, editor_button_height, "Remove visual assignment");
+    enabled = new Fl_Check_Button(290, 265, 300, kit::metric(kit::Metric::control_height), "Visual trigger enabled");
+    isolated = new Fl_Check_Button(620, 265, 400, kit::metric(kit::Metric::control_height), "Isolated visual runtime");
+    calibrate = new Fl_Button(290, 310, 350, kit::metric(kit::Metric::control_height), "Calibrate visual...");
+    remove = new Fl_Button(660, 310, 360, kit::metric(kit::Metric::control_height), "Remove visual assignment");
     hint = new EditorField<Fl_Multiline_Output>(290, 370, 730, 75, "Visual availability / preservation");
     hint->wrap(1);
     hint->align(FL_ALIGN_TOP_LEFT); hint->textsize(FL_NORMAL_SIZE);

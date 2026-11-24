@@ -2,7 +2,7 @@
 [data-theme="teal"] {--accent:var(--preset-teal);--on_accent:#141414;--selection:#2c423f;--primary_hover:#72bfb5;--primary_pressed:#50968d;--accent_2:#b99bff;}
 [data-theme="plum"] {--accent:var(--preset-plum);--on_accent:#141414;--selection:#41364c;--primary_hover:#bd93e4;--primary_pressed:#946eb8;--accent_2:#60b0ff;}
 [data-theme="slate"] {--accent:var(--preset-slate);--on_accent:#141414;--selection:#393e43;--primary_hover:#9eafc1;--primary_pressed:#788898;--accent_2:#b99bff;}
-:root {--win-gap-dialog:8px;--win-margin:12px;--win-gap-main:16px;--win-section-gap:12px;--swatch-inset:8px;--linux-group-gap:10px;--linux-margin:15px;--radius-none:0px;--radius-radio:50%;--outline:1px;--focus-width:2px;--accent-rail:3px;--checkbox:16px;--swatch:16px;--win-control-height:26px;--win-combo-height:23px;--win-row-pitch:34px;--win-list-row:27px;--win-profile-row:21px;--win-heading-pitch:28px;--win-chevron-zone:26px;--win-status-strip:28px;--win-sidebar-min:200px;--win-sidebar-max:280px;--win-preview-min:280px;--win-preview-max:440px;--win-preview-from:1100px;--win-field-cap:480px;--win-timing-label:84px;--linux-input-height:28px;--linux-button-height:30px;--linux-sidebar:240px;--linux-window-width:1080px;--linux-window-height:790px;--font-windows:"Segoe UI", sans-serif;--font-linux:sans-serif;--font-windows-mono:"Cascadia Mono", Consolas, monospace;--font-linux-mono:monospace;}
+:root {--win-gap-dialog:8px;--win-margin:12px;--win-gap-main:16px;--win-section-gap:12px;--swatch-inset:8px;--radius-none:0px;--radius-radio:50%;--outline:1px;--focus-width:2px;--accent-rail:3px;--checkbox:16px;--swatch:16px;--win-control-height:26px;--win-combo-height:23px;--win-row-pitch:34px;--win-list-row:27px;--win-profile-row:21px;--win-heading-pitch:28px;--win-chevron-zone:26px;--win-status-strip:28px;--win-sidebar-min:200px;--win-sidebar-max:280px;--win-preview-min:280px;--win-preview-max:440px;--win-preview-from:1100px;--win-field-cap:480px;--win-timing-label:84px;--linux-sidebar:240px;--linux-window-width:1080px;--linux-window-height:790px;--font-windows:"Segoe UI", sans-serif;--font-linux:sans-serif;--font-windows-mono:"Cascadia Mono", Consolas, monospace;--font-linux-mono:monospace;}
 
 /* LayerE — static web renditions of the editor painters, for the component previews. */
 body { margin: 0; background: var(--background); color: var(--text); font-family: var(--font-windows); font-size: 12px; }
@@ -63,7 +63,7 @@ body { margin: 0; background: var(--background); color: var(--text); font-family
 /* Tabs (Linux) */
 .le-linux { font-family: var(--font-linux); font-size: 14px; }
 .le-tabs { display: flex; margin-bottom: -1px; }
-.le-tab { box-sizing: border-box; display: flex; align-items: center; height: var(--linux-input-height); padding: 0 var(--linux-margin); margin-right: -1px; border: var(--outline) solid var(--linux-outline-panel); border-radius: var(--radius-none); background: var(--panel); color: var(--text); }
+.le-tab { box-sizing: border-box; display: flex; align-items: center; height: calc(var(--win-control-height) * 14 / 12); padding: 0 calc(var(--win-margin) * 14 / 12); margin-right: -1px; border: var(--outline) solid var(--linux-outline-panel); border-radius: var(--radius-none); background: var(--panel); color: var(--text); }
 .le-tab.is-selected { background: var(--selection); }
 .le-pane { box-sizing: border-box; height: 72px; border: var(--outline) solid var(--linux-outline-background); background: var(--background); }
 

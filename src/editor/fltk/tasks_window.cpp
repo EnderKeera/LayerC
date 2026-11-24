@@ -19,7 +19,7 @@
 namespace layerc::editor {
 namespace {
 constexpr int height = 420, margin = 10;
-constexpr int button_height = editor_button_height;
+int button_height() noexcept { return kit::metric(kit::Metric::control_height); }
 } // namespace
 
 PickOutcome decide_pick(const std::optional<TaskCandidate> &task, const std::uint32_t own_pid,
@@ -74,25 +74,25 @@ TasksWindow::TasksWindow(Actions actions) : actions_(std::move(actions)) {
   detail_ = new Fl_Box(margin, 255, width - 2 * margin, 40, "Executable");
   detail_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
   detail_->box(FL_THIN_DOWN_BOX);
-  show_all_ = new Fl_Check_Button(margin, 300, 200, editor_input_height, "Show all windows");
+  show_all_ = new Fl_Check_Button(margin, 300, 200, kit::metric(kit::Metric::control_height), "Show all windows");
   show_all_->callback(on_refresh, this);
-  exact_path_ = new Fl_Check_Button(220, 300, 260, editor_input_height, "Match the exact path");
+  exact_path_ = new Fl_Check_Button(220, 300, 260, kit::metric(kit::Metric::control_height), "Match the exact path");
   message_ = new Fl_Box(margin, 330, width - 2 * margin, 36);
   message_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
-  const int y = height - margin - button_height;
-  auto *refresh_button = new Fl_Button(margin, y, 100, button_height, "&Refresh");
+  const int y = height - margin - button_height();
+  auto *refresh_button = new Fl_Button(margin, y, 100, button_height(), "&Refresh");
   refresh_button->callback(on_refresh, this);
-  auto *use = new Fl_Button(margin + 110, y, 170, button_height, "&Use selected task");
+  auto *use = new Fl_Button(margin + 110, y, 170, button_height(), "&Use selected task");
   use->callback(on_use, this);
-  auto *position = new Fl_Button(margin + 290, y, 170, button_height, "&Position on window");
+  auto *position = new Fl_Button(margin + 290, y, 170, button_height(), "&Position on window");
   position->callback(on_position, this);
-  auto *calibrate = new Fl_Button(margin + 470, y, 110, button_height, "&Calibrate");
+  auto *calibrate = new Fl_Button(margin + 470, y, 110, button_height(), "&Calibrate");
   calibrate->callback(on_calibrate, this);
   if (picking) {
-    auto *pick = new Fl_Button(margin + 590, y, 110, button_height, "Pick &window");
+    auto *pick = new Fl_Button(margin + 590, y, 110, button_height(), "Pick &window");
     pick->callback(on_pick, this);
   }
-  auto *close = new Fl_Button(width - margin - 100, y, 100, button_height, "Close");
+  auto *close = new Fl_Button(width - margin - 100, y, 100, button_height(), "Close");
   close->callback(on_close, this);
   window_->callback(on_close, this);
   window_->end();

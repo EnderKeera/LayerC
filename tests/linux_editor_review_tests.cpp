@@ -133,9 +133,9 @@ void popup_semantics_and_recovery() {
   bar.add("&Help/&Last", 0, callback, &invoked);
   bar.add("&View/&Size/&Small", 0, callback, &invoked);
   bar.add("&View/&Size/&Large", 0, callback, &invoked);
-  editor::EditorChoice choice(20, 80, 200, editor::editor_input_height, "Mode");
+  editor::EditorChoice choice(20, 80, 200, editor::kit::metric(editor::kit::Metric::combo_height), "Mode");
   choice.add("One|Two|Three"); choice.value(0); choice.callback(callback, &invoked);
-  Fl_Button previous(20, 150, 150, editor::editor_button_height, "Previous focus");
+  Fl_Button previous(20, 150, 150, editor::kit::metric(editor::kit::Metric::control_height), "Previous focus");
   window.end(); window.show(); previous.take_focus(); Fl::check();
   a11y::FltkTree tree;
   auto snapshot = tree.snapshot();

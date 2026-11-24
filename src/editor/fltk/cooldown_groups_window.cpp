@@ -30,41 +30,41 @@ CooldownGroupsDialog::CooldownGroupsDialog(EditorSession &session)
     static_cast<CooldownGroupsDialog *>(self)->select();
   }, this);
   const auto input = [](int y, const char *label) {
-    return new EditorField<Fl_Input>(390, y, 350, editor_input_height, label);
+    return new EditorField<Fl_Input>(390, y, 350, kit::metric(kit::Metric::control_height), label);
   };
   id = input(20, "Group ID");
   name = input(58, "Group name");
-  mode = new EditorChoice(390, 96, 350, editor_input_height, "Group mode");
+  mode = new EditorChoice(390, 96, 350, kit::metric(kit::Metric::combo_height), "Group mode");
   mode->add("Trigger propagation|Shared pool");
   duration = input(134, "Group seconds");
   charges = input(172, "Group charges");
-  recovery = new EditorChoice(390, 210, 350, editor_input_height, "Group recovery");
+  recovery = new EditorChoice(390, 210, 350, kit::metric(kit::Metric::combo_height), "Group recovery");
   recovery->add("Single|Sequential|Parallel");
-  retrigger = new EditorChoice(390, 248, 350, editor_input_height, "Group retrigger");
+  retrigger = new EditorChoice(390, 248, 350, kit::metric(kit::Metric::combo_height), "Group retrigger");
   retrigger->add("Ignore|Restart");
   auto *scroll = new EditorScroll(270, 305, 470, 110, "Group members");
   scroll->begin();
   for (std::size_t i{}; i < source_.cooldowns.size(); ++i) {
     const auto &cooldown = source_.cooldowns[i];
-    auto *check = new Fl_Check_Button(280, 310 + static_cast<int>(i) * 28, 435, 26);
+    auto *check = new Fl_Check_Button(280, 310 + static_cast<int>(i) * std::max(28, kit::metric(kit::Metric::control_height)), 435, kit::metric(kit::Metric::control_height));
     check->copy_label((cooldown.name + " (" + cooldown.id + ")").c_str());
     members.push_back(check);
   }
   scroll->end();
-  auto *add_button = new Fl_Button(15, 395, 105, editor_button_height, "Add group");
+  auto *add_button = new Fl_Button(15, 395, 105, kit::metric(kit::Metric::control_height), "Add group");
   add_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->add();
   }, this);
-  auto *remove_button = new Fl_Button(130, 395, 105, editor_button_height, "Remove group");
+  auto *remove_button = new Fl_Button(130, 395, 105, kit::metric(kit::Metric::control_height), "Remove group");
   remove_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->remove();
   }, this);
   status_ = new Fl_Box(15, 440, 725, 55,
       "Shared pools own timing and charges. Propagation groups use each member's settings.");
   status_->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  auto *cancel = new Fl_Button(510, 505, 110, editor_button_height, "Cancel");
+  auto *cancel = new Fl_Button(510, 505, 110, kit::metric(kit::Metric::control_height), "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  auto *apply_button = new Fl_Button(630, 505, 110, editor_button_height, "Apply");
+  auto *apply_button = new Fl_Button(630, 505, 110, kit::metric(kit::Metric::control_height), "Apply");
   apply_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->apply();
   }, this);
