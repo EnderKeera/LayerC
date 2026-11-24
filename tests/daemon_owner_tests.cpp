@@ -334,8 +334,11 @@ void live_owner_confirms_direct_drag_off() {
   if (!expect(fixture.live.reconcile({}).status == ServiceReconcileStatus::ok,
               "the control owner listens on its disposable pipe"))
     return;
-  NamedPipeEditorDaemonChannel client(NamedPipeEditorDaemonChannel::Role::client, pipe,
-                                      GetCurrentProcessId());
+  // The channel holds its 64 KiB read buffer inline; keep it off the case's
+  // stack so the frame stays bounded under /analyze (C6262).
+  const auto channel = std::make_unique<NamedPipeEditorDaemonChannel>(
+      NamedPipeEditorDaemonChannel::Role::client, pipe, GetCurrentProcessId());
+  auto &client = *channel;
   std::vector<LiveMessage> received;
   const auto pump = [&](const auto &done) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
