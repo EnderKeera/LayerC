@@ -107,6 +107,7 @@ if(WIN32 AND TARGET layerc_editor_fltk)
         LINK layerc_editor_fltk_support TIMEOUT 60 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_widget_tests WIN32
         SOURCES tests/linux_editor_widget_tests.cpp tests/fltk_kit_metrics_tests.cpp
+            tests/fltk_kit_layout_tests.cpp
             tests/linux_editor_items_tests.cpp tests/linux_editor_dialog_tests.cpp
             tests/editor_steady_timer_fault_tests.cpp
             tests/linux_editor_visual_contract_tests.cpp tests/linux_editor_diagnostics_tests.cpp
@@ -495,6 +496,7 @@ if(NOT WIN32)
         layerc_editor_build_runtime(layerc_fltk_accessibility_tree_tests)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp tests/fltk_kit_metrics_tests.cpp
+                tests/fltk_kit_layout_tests.cpp
                 tests/linux_editor_items_tests.cpp
                 tests/linux_editor_dialog_tests.cpp
                 tests/editor_steady_timer_fault_tests.cpp

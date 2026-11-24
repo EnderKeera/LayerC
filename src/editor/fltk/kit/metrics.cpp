@@ -90,15 +90,22 @@ std::map<MetricsSubscription, std::shared_ptr<std::function<void()>>> subscriber
 
 } // namespace
 
+int scaled_at(const int logical, const int body) noexcept {
+  const double value = static_cast<double>(logical) * std::max(body, base_body) / base_body;
+  return static_cast<int>(std::lround(std::clamp(value,
+      static_cast<double>(std::numeric_limits<int>::min()),
+      static_cast<double>(std::numeric_limits<int>::max()))));
+}
+
 int metric_at(const Metric metric, const int body) noexcept {
-  const double scaled = static_cast<double>(base_value(metric)) * std::max(body, base_body) /
-                        base_body;
-  return static_cast<int>(std::lround(std::min(scaled, static_cast<double>(std::numeric_limits<int>::max()))));
+  return scaled_at(base_value(metric), body);
 }
 
 int body() noexcept { return current_body; }
 
 int metric(const Metric value) noexcept { return metric_at(value, body()); }
+
+int scaled(const int logical) noexcept { return scaled_at(logical, body()); }
 
 void set_body(const int body) {
   if (body == current_body) return;

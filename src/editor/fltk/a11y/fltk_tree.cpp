@@ -1,5 +1,6 @@
 #include "fltk_tree.hpp"
 
+#include "../accessible_widgets.hpp"
 #include "input.hpp"
 #include "text_metrics.hpp"
 #include "window_geometry.hpp"
@@ -219,6 +220,13 @@ Snapshot FltkTree::snapshot() {
   (void)impl_->visit({nullptr, TargetKind::application, 0}, no_node, snapshot, next,
                      previous_children);
   impl_->finish(next);
+  for (const auto &[widget, id] : impl_->widgets) {
+    const auto *label = accessibility::accessible_label(*widget);
+    if (label) {
+      const auto label_id = id_for(*label);
+      if (label_id != no_node) snapshot.nodes.at(id).labelled_by = {label_id};
+    }
+  }
   return snapshot;
 }
 

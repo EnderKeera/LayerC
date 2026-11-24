@@ -10,6 +10,7 @@ set(LAYERC_EDITOR_FLTK_PORTABLE_SUPPORT_SOURCES
     src/editor/fltk/task_list.cpp)
 
 set(LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES
+    src/editor/fltk/kit/layout.cpp
     src/editor/fltk/editor_app.cpp
     src/editor/fltk/editor_style.cpp
     src/editor/fltk/editor_popup.cpp

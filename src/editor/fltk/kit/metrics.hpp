@@ -42,12 +42,14 @@ enum class Metric {
 };
 
 [[nodiscard]] int metric_at(Metric metric, int body) noexcept;
+[[nodiscard]] int scaled_at(int logical, int body) noexcept;
 
 // Current body and change subscriptions are owned by the FLTK main thread.
 using MetricsSubscription = std::size_t;
 [[nodiscard]] int body() noexcept;
 void set_body(int body);
 [[nodiscard]] int metric(Metric metric) noexcept;
+[[nodiscard]] int scaled(int logical) noexcept;
 [[nodiscard]] MetricsSubscription subscribe_metrics_changed(std::function<void()> callback);
 void unsubscribe_metrics_changed(MetricsSubscription token);
 

@@ -12,6 +12,7 @@ struct Entry {
   Fl_Widget_Tracker control;
   // Set by describe_with; the hint is read on every request, never copied.
   std::unique_ptr<Fl_Widget_Tracker> hint;
+  std::unique_ptr<Fl_Widget_Tracker> label;
   std::string name;        // empty: the widget names itself
   std::string description; // used while no hint is registered
   std::optional<a11y::Role> role; // set for controls FLTK cannot classify
@@ -43,7 +44,7 @@ Entry &entry_for(Fl_Widget &control) {
 }
 
 void drop_if_empty(const Entry &entry) {
-  if (!entry.name.empty() || !entry.description.empty() || entry.hint || entry.role)
+  if (!entry.name.empty() || !entry.description.empty() || entry.hint || entry.label || entry.role)
     return;
   std::erase_if(entries(), [&](const std::unique_ptr<Entry> &candidate) {
     return candidate.get() == &entry;
@@ -81,6 +82,15 @@ void describe_with(Fl_Widget &control, Fl_Widget &hint) {
   auto &entry = entry_for(control);
   entry.description.clear();
   entry.hint = std::make_unique<Fl_Widget_Tracker>(&hint);
+}
+
+void label_with(Fl_Widget &control, Fl_Widget &label) {
+  entry_for(control).label = std::make_unique<Fl_Widget_Tracker>(&label);
+}
+
+Fl_Widget *accessible_label(const Fl_Widget &control) {
+  const auto *entry = lookup(&control);
+  return entry && entry->label ? entry->label->widget() : nullptr;
 }
 
 void set_accessible_role(Fl_Widget &control, a11y::Role role) {

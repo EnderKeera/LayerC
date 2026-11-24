@@ -25,6 +25,9 @@ void describe_with_tooltip(Fl_Widget &control, std::string text);
 // Exported role for controls whose toolkit class does not say what they are.
 void set_accessible_role(Fl_Widget &control, a11y::Role role);
 void describe_with(Fl_Widget &control, Fl_Widget &hint);
+void label_with(Fl_Widget &control, Fl_Widget &label);
+
+[[nodiscard]] Fl_Widget *accessible_label(const Fl_Widget &control);
 
 [[nodiscard]] std::optional<std::string> accessible_name(const Fl_Widget &control);
 [[nodiscard]] std::optional<a11y::Role> accessible_role(const Fl_Widget &control);

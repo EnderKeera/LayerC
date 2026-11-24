@@ -4,6 +4,7 @@
 #include "appearance_window.hpp"
 #include "editor_app.hpp"
 #include "editor_style.hpp"
+#include "kit/layout.hpp"
 
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Check_Button.H>
@@ -11,14 +12,12 @@
 #include <FL/fl_draw.H>
 
 #include <algorithm>
-#include <array>
 #include <string>
 #include <utility>
 
 namespace layerc::editor {
 namespace {
 
-constexpr int margin = 12, gap = 8, min_button_width = 88;
 constexpr int choice_width = 110, preferred_width = 480;
 constexpr auto title = "Options — LayerE";
 constexpr auto visual_label = "Enable &visual recognition";
@@ -39,33 +38,17 @@ std::string capture_hint_with_warning(const std::string_view warning) {
   return std::string(capture_hint) + "\n" + std::string(warning);
 }
 
-int label_width(const char *text) {
-  int width = 0, height = 0;
-  const auto saved = fl_draw_shortcut;
-  fl_draw_shortcut = 2;
-  fl_measure(text, width, height, 0);
-  fl_draw_shortcut = saved;
-  return width;
-}
-
-int wrapped_height(const char *text, int width) {
-  int height = 0;
-  fl_measure(text, width, height, 0);
-  return height;
-}
-
-class OptionHint final : public Fl_Box, public PaintedTextSource {
+class OptionCheck final : public EditorField<Fl_Check_Button> {
 public:
-  using Fl_Box::Fl_Box;
-  [[nodiscard]] std::span<const PaintedText> painted_text() const noexcept override {
-    return options_painted_text;
-  }
+  using EditorField::EditorField;
 private:
   void draw() override {
-    const auto ink = fixed_ink(current_editor_tokens(), painted_text().front().ink);
-    labelcolor(fl_rgb_color(static_cast<uchar>(ink >> 16U),
-                            static_cast<uchar>(ink >> 8U), static_cast<uchar>(ink)));
-    Fl_Box::draw();
+    const auto type = labeltype();
+    labeltype(FL_NO_LABEL);
+    EditorField::draw();
+    labeltype(type);
+    const int offset = kit::check_label_offset();
+    draw_label(x() + offset, y(), w() - offset - kit::check_ring_margin(), h());
   }
 };
 
@@ -75,57 +58,26 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
                              const int work_width, Commit commit, Applied applied, Failed failed)
     : Fl_Double_Window(1, 1, title), commit_(std::move(commit)),
       applied_(std::move(applied)), failed_(std::move(failed)) {
-  fl_font(FL_HELVETICA, FL_NORMAL_SIZE);
-  const int check_indent = std::min(static_cast<int>(FL_NORMAL_SIZE), 25) + 4;
-  const int choice_x = margin + label_width(text_size_label) + gap;
-  constexpr std::array labels{"OK", "Cancel", "&Apply"};
-  std::array<int, labels.size()> button_widths{};
-  int actions_width = gap * (static_cast<int>(labels.size()) - 1);
-  for (std::size_t i = 0; i < labels.size(); ++i) {
-    button_widths[i] = std::max(min_button_width, label_width(labels[i]) + 2 * margin);
-    actions_width += button_widths[i];
-  }
-  const int minimum = std::max({actions_width + 2 * margin, choice_x + choice_width + margin,
-                                2 * margin + check_indent + gap});
-  const int width = std::clamp(
-      std::max(preferred_width, label_width(overlays_label) + check_indent + 2 * margin),
-      minimum, std::max(minimum, work_width));
-  const int row_width = width - 2 * margin;
-  int y = margin;
+  auto &form = *new kit::Form;
   const auto check = [&](const char *label, const bool checked) {
-    const int w = row_width - check_indent;
-    const int height = std::max(kit::metric(kit::Metric::control_height), wrapped_height(label, w));
-    auto *control = new EditorField<Fl_Check_Button>(margin, y, row_width, height, label);
-    control->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    auto *control = new OptionCheck(0, 0, 0, kit::metric(kit::Metric::control_height), label);
+    form.check_row(*control);
     control->value(checked);
     control->callback([](Fl_Widget *, void *data) { static_cast<OptionsWindow *>(data)->enable_apply(); },
                       this);
-    y += height;
     return control;
   };
-  const auto hint = [&](const int x, const char *text, int minimum_height = 0) -> Fl_Box & {
-    const int w = width - margin - x;
-    const int height = std::max(minimum_height, wrapped_height(text, w));
-    auto *line = new OptionHint(x, y, w, height, text);
-    line->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-    y += height + gap;
-    return *line;
-  };
-
   visual_ = check(visual_label, initial.visual_recognition);
-  accessibility::describe_with(*visual_, hint(margin + check_indent, visual_hint));
+  form.hint(*visual_, visual_hint);
   overlays_ = check(overlays_label, initial.overlay_capture_exclusion);
-  accessibility::describe_with(*overlays_, hint(margin + check_indent, overlays_hint));
+  form.hint(*overlays_, overlays_hint);
   editor_ = check(editor_label, initial.editor_capture_exclusion);
-  const int capture_width = row_width - check_indent;
-  capture_hint_ = &hint(margin + check_indent, capture_hint,
-      std::max(wrapped_height(capture_hint_with_warning(capture_exclusion_incomplete).c_str(), capture_width),
-               wrapped_height(capture_hint_with_warning(capture_exclusion_not_cleared).c_str(), capture_width)));
-  accessibility::describe_with(*editor_, *capture_hint_);
+  capture_hint_ = &form.hint(*editor_, capture_hint, {capture_hint_with_warning(capture_exclusion_incomplete),
+                                                     capture_hint_with_warning(capture_exclusion_not_cleared)});
   refresh_capture_warning();
 
-  text_size_ = new EditorChoice(choice_x, y, choice_width, kit::metric(kit::Metric::combo_height), text_size_label);
-  text_size_->shortcut_label(1);
+  text_size_ = new EditorChoice(0, 0, 0, kit::metric(kit::Metric::combo_height));
+  form.field_row(text_size_label, *text_size_, choice_width);
   for (std::size_t i = 0; i < text_scale_choices.size(); ++i) {
     const int percent = text_scale_choices[i];
     text_size_->add((std::to_string(percent) + " %").c_str());
@@ -134,44 +86,47 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   if (text_size_->value() < 0) text_size_->value(0);
   text_size_->callback([](Fl_Widget *, void *data) { static_cast<OptionsWindow *>(data)->enable_apply(); },
                        this);
-  y += text_size_->h();
-  accessibility::describe_with(*text_size_, hint(choice_x, text_size_hint));
+  form.hint(*text_size_, text_size_hint);
 
   updates_ = check(updates_label, initial.launcher_updates);
-  accessibility::describe_with(*updates_, hint(margin + check_indent, updates_hint));
-  y += gap;
+  form.hint(*updates_, updates_hint);
+  form.end();
 
-  int x = width - margin - actions_width;
-  const auto action = [&](const std::size_t i, Fl_Callback *callback) {
-    auto *button = new Fl_Button(x, y, button_widths[i], kit::metric(kit::Metric::control_height), labels[i]);
+  auto &buttons = *new kit::ButtonRow;
+  const auto action = [&](const char *label, Fl_Callback *callback) {
+    auto *button = new Fl_Button(0, 0, 0, kit::metric(kit::Metric::control_height), label);
     button->callback(callback, this);
-    x += button_widths[i] + gap;
+    buttons.action(*button);
     return button;
   };
-  auto *ok = action(0, [](Fl_Widget *, void *data) {
+  auto *ok = action("OK", [](Fl_Widget *, void *data) {
     auto &dialog = *static_cast<OptionsWindow *>(data);
     if (!dialog.apply_->active() || dialog.apply()) dialog.hide();
   });
   ok->shortcut(FL_Enter);
   primary_button(*ok);
-  auto *cancel = action(1, [](Fl_Widget *, void *data) { static_cast<OptionsWindow *>(data)->hide(); });
+  auto *cancel = action("Cancel", [](Fl_Widget *, void *data) { static_cast<OptionsWindow *>(data)->hide(); });
   cancel->shortcut(FL_Escape);
-  apply_ = action(2, [](Fl_Widget *, void *data) { (void)static_cast<OptionsWindow *>(data)->apply(); });
+  apply_ = action("&Apply", [](Fl_Widget *, void *data) { (void)static_cast<OptionsWindow *>(data)->apply(); });
   apply_->deactivate();
 
+  buttons.end();
   end();
-  size(width, y + kit::metric(kit::Metric::control_height) + margin);
+  frame_.emplace(*this, form, buttons, preferred_width, work_width, kit::DialogSizing::fixed);
   set_modal();
   apply_editor_appearance(appearance, *this);
+}
+
+void OptionsWindow::show() {
+  Fl_Double_Window::show();
+  frame_->place();
 }
 
 void OptionsWindow::refresh_capture_warning() {
   const auto warning = editor_capture_exclusion_warning();
   if (capture_warning_ == warning) return;
   capture_warning_ = warning;
-  auto text = capture_hint_with_warning(warning);
-  capture_hint_->copy_label(text.c_str());
-  accessibility::set_accessible_description(*editor_, std::move(text));
+  capture_hint_->copy_label(capture_hint_with_warning(warning).c_str());
 }
 
 void OptionsWindow::enable_apply() { apply_->activate(); }

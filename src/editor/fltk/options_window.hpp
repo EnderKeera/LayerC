@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor_appearance.hpp"
+#include "kit/layout.hpp"
 #include "platform/editor_options.hpp"
 
 #include <FL/Fl_Double_Window.H>
@@ -16,8 +17,7 @@ namespace layerc::editor {
 class EditorApp;
 class EditorChoice;
 // FLTK-dimmed labels belong to the deferred Disabled / Fill class.
-inline constexpr std::array options_painted_text{
-    PaintedText{FixedInk::subtext, PaintedGround::beneath, PaintedPurpose::options_hint, false}};
+inline constexpr auto &options_painted_text = kit::form_hint_painted_text;
 
 class OptionsWindow final : public Fl_Double_Window {
 public:
@@ -27,6 +27,7 @@ public:
 
   OptionsWindow(const EditorOptions &initial, const EditorAppearance &appearance, int work_width,
                 Commit commit, Applied applied, Failed failed);
+  void show() override;
   void refresh_capture_warning();
 
 private:
@@ -41,6 +42,7 @@ private:
   Commit commit_;
   Applied applied_;
   Failed failed_;
+  std::optional<kit::DialogFrame> frame_;
 };
 
 void show_options_dialog(EditorApp &app);

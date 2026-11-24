@@ -431,6 +431,10 @@ std::string name(const Target &target) {
   // (DesignSystem.md, Screen readers).
   if (auto registered = accessibility::accessible_name(*w); registered) return valid_utf8(*registered);
   if (!label.empty()) return valid_utf8(label);
+  if (const auto *buddy_label = accessibility::accessible_label(*w)) {
+    const auto text = clean_label(buddy_label->label());
+    if (!text.empty()) return valid_utf8(text);
+  }
   if (dynamic_cast<Fl_Window *>(w)) return "LayerE dialog";
   if (dynamic_cast<Fl_Menu_Bar *>(w)) return "Main menu";
   return valid_utf8(w->tooltip() ? w->tooltip() : "");
@@ -455,8 +459,12 @@ std::string keybinding(const Target &target) {
     const auto shortcut = accelerator(item->shortcut());
     return shortcut.empty() ? std::string() : ";;" + shortcut;
   }
-  auto *button =
-      target.kind == TargetKind::widget ? dynamic_cast<Fl_Button *>(target.widget) : nullptr;
+  if (target.kind != TargetKind::widget || !target.widget) return {};
+  if (const auto *label = accessibility::accessible_label(*target.widget)) {
+    const auto key = mnemonic(label->label());
+    if (!key.empty()) return key + ";;";
+  }
+  const auto *button = dynamic_cast<Fl_Button *>(target.widget);
   if (!button) return {};
   const auto key = mnemonic(button->label());
   const auto shortcut = accelerator(static_cast<int>(button->shortcut()));

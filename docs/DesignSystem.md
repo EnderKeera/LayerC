@@ -28,6 +28,9 @@ widgets.
 - **Kit metrics:** both FLTK editors scale one set of control and layout
   metrics from the body font. Buttons and edits share a height; drop-downs
   use the combo height ([Geometry](#geometry)).
+- **Kit dialog layout:** FLTK Options uses the shared form and button row.
+  Its side label focuses the drop-down with an access key and names it for
+  screen readers ([Dialog](#dialog)).
 
 ## Changes from v2
 
@@ -829,13 +832,15 @@ margins and `win-row-pitch` rows, and one row of buttons along the bottom.
 - **Buttons:** 12 px from the bottom and side edges, 8 px apart, every one
   `win-control-height` (26 px) and at least 88 px wide (text plus 24 px when
   longer).
-- **Layout:** code lays every dialog out with `DialogLayout` after the
-  resource template loads (`editor_dialog_layouts.cpp`), and refits it when
-  the text size or DPI changes; template sizes never reach the screen.
-  Hints sit under their control in `subtext`, indented to its label. Options
-  measures labels and wrapped hints in their own font rather than relying on
-  template widths. Resizable dialogs derive their minimum extent from the
-  same layout that places their content, including wrapped validation text.
+- **Layout:** new and migrated FLTK dialogs use the
+  [kit layout](../src/editor/fltk/kit/layout.hpp), starting with Options.
+  Win32 keeps `DialogLayout` until that editor retires; it lays out the
+  controls after the resource template loads and refits on text-size and DPI
+  changes. FLTK uses its screen scale for DPI and refits when the body font
+  changes. Hints sit under their control in `subtext`, indented to its label.
+  Options measures labels and wrapped hints in their own font. Resizable
+  dialogs derive their minimum extent from the layout that places their
+  content, including wrapped validation text.
 - **Placement:** content fitting preserves the user's position while the
   visible frame fits its monitor's work area; otherwise it moves only as far
   as needed to keep the frame on that work area. Expanding Appearance must
@@ -922,10 +927,11 @@ A single-line text field: `input` fill in a 1 px `border` outline, text inset
   stays visible; the tooltip carries the full value.
 - **Size:** scaled `win-control-height` on both platforms; on Win32, at most
   `win-field-cap` wide.
-- **Label:** on Windows the row label sits to the left in `secondary`, shares
-  the row height (`DialogLayout::row_label`, `SS_CENTERIMAGE`) and carries the
-  field's access key (Profile &name); on Linux it sits above the field
-  (`FL_ALIGN_TOP_LEFT`).
+- **Label:** in the Win32 editor and FLTK Options, the row label sits to the
+  left in `secondary`, shares the row height and carries the field's access
+  key (such as Profile &name). The FLTK side label also names its field for
+  screen readers. Other Linux forms keep their labels above the fields
+  (`FL_ALIGN_TOP_LEFT`) until they move to the kit layout.
 
 The consumer supplies the value, the label and the enabled state. Never round
 the corners or change the fill on focus: the ring is the whole focus signal.
@@ -1441,10 +1447,10 @@ rendered checks below cover each change.
 
 - Change a token or metric at its single source; never hard-code a color,
   radius or control height in a dialog.
-- New controls reuse the painters. New surfaces use kit metrics
-  ([`src/editor/fltk/kit/metrics.hpp`](../src/editor/fltk/kit/metrics.hpp)) or
-  `native_control_height` and `DialogLayout` in the Win32 editor; never a
-  local control height.
+- New controls reuse the painters. New FLTK surfaces use
+  [kit metrics](../src/editor/fltk/kit/metrics.hpp) and
+  [kit layout](../src/editor/fltk/kit/layout.hpp). In the Win32 editor, use
+  `native_control_height` and `DialogLayout`; never a local control height.
 - No `RoundRect`, rounded regions or rounded FLTK box types in editor chrome.
   The overlay preview is the only rounded editor drawing, and it follows the
   profile.

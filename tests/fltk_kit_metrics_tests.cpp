@@ -28,6 +28,11 @@ void fltk_kit_metric_scaling() {
              "kit uses the body floor, token scaling and half-away-from-zero rounding");
     }
   }
+  expect(kit::scaled_at(480, 11) == 480 && kit::scaled_at(480, 14) == 560 &&
+             kit::scaled_at(110, 14) == 128, "dialog dimensions share the kit body and its floor");
+  expect(kit::scaled_at(6, 13) == 7 && kit::scaled_at(-6, 13) == -7 &&
+             kit::scaled(110) == kit::scaled_at(110, kit::body()),
+         "dialog dimensions round half away from zero and use the current body");
 }
 
 void fltk_kit_metrics_change_notifications() {

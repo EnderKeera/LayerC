@@ -237,7 +237,12 @@ void options_store() {
 Fl_Widget *child(Fl_Group &group, const std::string_view label) {
   for (int i = 0; i < group.children(); ++i) {
     auto *widget = group.child(i);
-    if (widget->label() && label == widget->label()) return widget;
+    if (const auto *side = editor::accessibility::accessible_label(*widget);
+        side && side->label() && label == side->label()) return widget;
+    if (widget->label() && label == widget->label() &&
+        !dynamic_cast<editor::kit::RowLabel *>(widget)) return widget;
+    if (auto *nested = widget->as_group())
+      if (auto *found = child(*nested, label)) return found;
   }
   return nullptr;
 }
