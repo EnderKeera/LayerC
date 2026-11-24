@@ -13,6 +13,7 @@
 #include <FL/platform.H>
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 namespace layerc::editor {
@@ -20,6 +21,15 @@ namespace {
 
 WindowsWindowDecorator *decorator{};
 bool capture_requested{};
+std::atomic<UINT_PTR> lifetime_counter{};
+
+UINT_PTR next_lifetime_token() {
+  UINT_PTR token{};
+  while (!token) token = lifetime_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+  return token;
+}
+
+LPCWSTR lifetime_property(const ATOM atom) { return MAKEINTATOM(atom); }
 
 HWND root_of(const Fl_Window &window) {
   return GetAncestor(fl_xid(&window), GA_ROOT);
@@ -30,8 +40,11 @@ HWND root_of(const Fl_Window &window) {
 WindowsWindowDecorator::WindowsWindowDecorator()
     : WindowsWindowDecorator(platform::apply_capture_exclusion) {}
 
-WindowsWindowDecorator::WindowsWindowDecorator(SetAffinity set_affinity)
-    : set_affinity_(set_affinity) {
+WindowsWindowDecorator::WindowsWindowDecorator(SetAffinity set_affinity, ReadAffinity read_affinity,
+                                               SetFrameColors set_frame_colors)
+    : set_affinity_(set_affinity), read_affinity_(read_affinity),
+      set_frame_colors_(set_frame_colors ? set_frame_colors : platform::set_window_frame_colors),
+      lifetime_atom_(GlobalAddAtomW(L"LayerC.Editor.CaptureLifetime")) {
   decorator = this;
   Fl::add_system_handler(before_paint, this);
   Fl::add_check(before_wait, this);
@@ -41,14 +54,24 @@ WindowsWindowDecorator::~WindowsWindowDecorator() {
   Fl::remove_check(before_wait, this);
   Fl::remove_system_handler(before_paint);
   prune();
-  for (const auto &[root, state] : decorated_)
+  for (const auto &[root, state] : decorated_) {
     if (state.affinity != Affinity::untouched) (void)set_affinity_(root, false);
+    RemovePropW(root, lifetime_property(lifetime_atom_));
+  }
+  // The property is integer data and the window manager drops it with the
+  // window. A crash leaks one reference to the same named atom.
+  if (lifetime_atom_) GlobalDeleteAtom(lifetime_atom_);
   capture_requested = false;
   decorator = nullptr;
 }
 
 void WindowsWindowDecorator::prune() {
-  std::erase_if(decorated_, [](const auto &entry) { return IsWindow(entry.first) == FALSE; });
+  std::erase_if(decorated_, [this](const auto &entry) {
+    const auto &[root, state] = entry;
+    return !IsWindow(root) || GetWindowThreadProcessId(root, nullptr) != GetCurrentThreadId() ||
+           !state.token || reinterpret_cast<UINT_PTR>(GetPropW(root, lifetime_property(lifetime_atom_))) !=
+                               state.token;
+  });
 }
 
 int WindowsWindowDecorator::before_paint(void *event, void *data) {
@@ -59,7 +82,7 @@ int WindowsWindowDecorator::before_paint(void *event, void *data) {
       restore_windows_screen_text_scale(window->screen_num());
       auto &self = *static_cast<WindowsWindowDecorator *>(data);
       self.prune();
-      self.decorate(root, false);
+      (void)self.find_or_enroll(root, false);
       self.update_warning();
     }
   }
@@ -75,35 +98,55 @@ void WindowsWindowDecorator::before_wait(void *data) {
   for (auto *window = Fl::first_window(); window; window = Fl::next_window(window)) {
     const auto root = root_of(*window);
     if (root == nullptr) continue;
-    auto [entry, added] = self.decorated_.try_emplace(root);
-    if (added) self.reconcile_affinity(root, entry->second);
+    if (!self.decorated_.contains(root)) (void)self.enroll(root);
   }
   self.update_warning();
 }
 
-void WindowsWindowDecorator::decorate(const HWND root, const bool recheck_affinity) {
-  if (root == nullptr) return;
-  auto &state = decorated_[root];
+WindowsWindowDecorator::WindowState &
+WindowsWindowDecorator::find_or_enroll(const HWND root, const bool recheck_affinity) {
+  const auto entry = decorated_.find(root);
+  if (entry == decorated_.end()) return enroll(root);
+  auto &state = entry->second;
+  decorate(root, state);
+  if (recheck_affinity || state.affinity != Affinity::verified) reconcile_affinity(root, state);
+  return state;
+}
+
+WindowsWindowDecorator::WindowState &WindowsWindowDecorator::enroll(const HWND root) {
+  auto &state = decorated_.try_emplace(root).first->second;
+  const auto token = next_lifetime_token();
+  if (!lifetime_atom_ || GetWindowThreadProcessId(root, nullptr) != GetCurrentThreadId() ||
+      !SetPropW(root, lifetime_property(lifetime_atom_), reinterpret_cast<HANDLE>(token))) {
+    if (capture_requested) state.affinity = Affinity::failed;
+  } else {
+    state.token = token;
+    reconcile_affinity(root, state);
+  }
+  decorate(root, state);
+  return state;
+}
+
+void WindowsWindowDecorator::decorate(const HWND root, WindowState &state) {
   if (state.caption_generation != generation_) {
     state.caption_generation = generation_;
     if ((GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) {
       const auto toolbar = current_editor_toolbar_colors();
       platform::set_dark_title_bar(root);
-      platform::set_window_frame_colors(root, platform::native_color_ref(toolbar.fill),
-                                        platform::native_color_ref(current_editor_tokens().divider),
-                                        platform::native_color_ref(toolbar.text));
+      set_frame_colors_(root, platform::native_color_ref(toolbar.fill),
+                        platform::native_color_ref(current_editor_tokens().divider),
+                        platform::native_color_ref(toolbar.text));
     }
   }
-  if (recheck_affinity || state.affinity != Affinity::verified)
-    reconcile_affinity(root, state);
 }
 
 void WindowsWindowDecorator::reconcile_affinity(const HWND root, WindowState &state) {
+  if (!state.token) return;
   if (!capture_requested && state.affinity == Affinity::untouched) return;
   const DWORD desired = capture_requested ? platform::capture_exclusion_affinity : WDA_NONE;
-  const auto matches = [root, desired] {
+  const auto matches = [this, root, desired] {
     DWORD affinity{};
-    return GetWindowDisplayAffinity(root, &affinity) && affinity == desired;
+    return read_affinity_(root, &affinity) && affinity == desired;
   };
   if (matches() || (set_affinity_(root, capture_requested) && matches()))
     state.affinity = capture_requested ? Affinity::verified : Affinity::untouched;
@@ -131,8 +174,30 @@ void WindowsWindowDecorator::refresh() {
   ++generation_;
   prune();
   for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
-    decorate(root_of(*window), true);
+    if (const auto root = root_of(*window)) (void)find_or_enroll(root, true);
   update_warning();
+}
+
+bool WindowsWindowDecorator::verify(Fl_Window &window) {
+  prune();
+  const auto root = root_of(window);
+  const bool verified = root && find_or_enroll(root, true).affinity == Affinity::verified;
+  update_warning();
+  return verified;
+}
+
+void WindowsWindowDecorator::adopt_for_test(const HWND root, const bool failed,
+                                             const bool token_matches) {
+  const auto token = next_lifetime_token();
+  if (token_matches)
+    SetPropW(root, lifetime_property(lifetime_atom_), reinterpret_cast<HANDLE>(token));
+  decorated_.insert_or_assign(root, WindowState{token, generation_,
+      failed ? Affinity::failed : Affinity::verified});
+  update_warning();
+}
+
+bool verify_editor_window_capture(Fl_Window &window) {
+  return decorator && decorator->verify(window);
 }
 
 void refresh_editor_window_chrome() {

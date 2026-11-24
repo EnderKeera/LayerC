@@ -27,7 +27,12 @@ constexpr auto editor_label = "Hide the &editor from screen capture";
 constexpr auto text_size_label = "&Text size";
 constexpr auto updates_label = "Install &updates when LayerC starts";
 constexpr auto visual_hint = "Watches configured screen regions only while a profile needs visual matching.";
-constexpr auto capture_hint = "Screenshots, screen sharing and Magnifier cannot see a hidden window.";
+constexpr auto overlays_hint = "Screenshots, screen sharing and Magnifier cannot see a hidden window.";
+constexpr auto capture_hint =
+    "This setting hides the editor's own windows. The editor asks before opening the Windows file dialog "
+    "or calibration. "
+    "Screen capture can show the Windows file dialog, calibration, File Explorer (Open profiles folder), "
+    "and input-method candidate windows.";
 constexpr auto text_size_hint = "Adds to the Windows text size setting.";
 constexpr auto updates_hint = "The launcher checks GitHub for a signed release before it starts LayerD.";
 
@@ -112,13 +117,12 @@ OptionsWindow::OptionsWindow(const EditorOptions &initial, const EditorAppearanc
   visual_ = check(visual_label, initial.visual_recognition);
   accessibility::describe_with(*visual_, hint(margin + check_indent, visual_hint));
   overlays_ = check(overlays_label, initial.overlay_capture_exclusion);
-  y += gap;
+  accessibility::describe_with(*overlays_, hint(margin + check_indent, overlays_hint));
   editor_ = check(editor_label, initial.editor_capture_exclusion);
   const int capture_width = row_width - check_indent;
   capture_hint_ = &hint(margin + check_indent, capture_hint,
       std::max(wrapped_height(capture_hint_with_warning(capture_exclusion_incomplete).c_str(), capture_width),
                wrapped_height(capture_hint_with_warning(capture_exclusion_not_cleared).c_str(), capture_width)));
-  accessibility::describe_with(*overlays_, *capture_hint_);
   accessibility::describe_with(*editor_, *capture_hint_);
   refresh_capture_warning();
 

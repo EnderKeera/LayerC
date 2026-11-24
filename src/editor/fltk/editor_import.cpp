@@ -1,38 +1,17 @@
 #include "editor_app.hpp"
 #include "export_selection_window.hpp"
 #include "appearance_window.hpp"
+#include "editor_file_chooser.hpp"
 
 #include <FL/Fl.H>
-
-#include "layerc/platform/text.hpp"
-
-#include <FL/Fl_Native_File_Chooser.H>
 #include <FL/fl_ask.H>
 #include <variant>
 
 namespace layerc::editor {
-namespace {
-std::optional<std::filesystem::path> choose_file(bool save, const char *title, const char *filter) {
-  // Start where the user last chose a file, else in their home directory,
-  // never in the process's incidental working directory.
-  static std::string directory;
-  if (directory.empty()) directory = file_chooser_start_directory();
-  Fl_Native_File_Chooser chooser;
-  chooser.title(title);
-  if (!directory.empty()) chooser.directory(directory.c_str());
-  chooser.type(save ? Fl_Native_File_Chooser::BROWSE_SAVE_FILE : Fl_Native_File_Chooser::BROWSE_FILE);
-  chooser.filter(filter);
-  if (save) chooser.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
-  if (chooser.show() != 0 || !chooser.filename() || !*chooser.filename()) return std::nullopt;
-  auto chosen = platform::path_from_utf8(chooser.filename());
-  if (!chosen) return std::nullopt;
-  directory = platform::path_to_utf8(chosen->parent_path()).value_or("");
-  return chosen;
-}
-}
 void EditorApp::import_profiles() {
-  const auto source = choose_file(false, "Import JSON or LayerC profile pack",
-                                 "LayerC profiles\t*.{json,layercprofile}");
+  const auto source = choose_editor_file({*this, EditorFileRequest::Mode::open,
+      "Import JSON or LayerC profile pack", "Import", "LayerC profiles", {"json", "layercprofile"},
+      EditorFileRequest::DirectoryMemory::profiles});
   if (!source) return;
   auto result = session.plan_import(*source);
   auto *plan = std::get_if<ImportPlan>(&result);
@@ -91,8 +70,11 @@ void EditorApp::export_profile(const bool pack) {
     if (!dialog.selection) { report(StatusKind::information, "Export canceled. No files changed."); return; }
     rows = std::move(*dialog.selection);
   }
-  const auto destination = choose_file(true, pack ? "Export complete profile pack" : "Export base JSON only",
-                                       pack ? "LayerC profile pack\t*.layercprofile" : "JSON\t*.json");
+  const auto destination = pack
+      ? choose_editor_file({*this, EditorFileRequest::Mode::save, "Export complete profile pack",
+          "Export", "LayerC profile pack", {"layercprofile"}, EditorFileRequest::DirectoryMemory::profiles})
+      : choose_editor_file({*this, EditorFileRequest::Mode::save, "Export base JSON only",
+          "Export", "JSON", {"json"}, EditorFileRequest::DirectoryMemory::profiles});
   if (!destination) return;
   const auto outcome = pack ? session.export_pack(*destination, rows)
                             : session.export_json(*destination, *selected);

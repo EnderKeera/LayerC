@@ -130,6 +130,7 @@ if(WIN32 AND TARGET layerc_editor_fltk)
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_settings_tests WIN32
         SOURCES tests/windows_fltk_settings_tests.cpp tests/windows_fltk_interface_controls.cpp
+            tests/windows_fltk_file_prompt_tests.cpp
         LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
     layerc_add_test(layerc_windows_fltk_startup_tests WIN32
         SOURCES tests/windows_fltk_startup_tests.cpp

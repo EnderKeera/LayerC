@@ -67,6 +67,10 @@ remain open.
   release at launch, with user-disableable updates, then start `layerd` and exit.
   `layerd`, `layere`, `layercal`, and `layerw` never access the network or link
   an HTTP client.
+- **Screen capture privacy (Windows FLTK editor):** Hide the editor from screen
+  capture applies to the editor's own windows. The editor asks before opening
+  the Windows file dialog or calibration while the setting is on. Capture can
+  show those separate windows, File Explorer, and input-method candidate windows.
 - **Monotonic timing:** cooldowns and timers use monotonic clocks.
 - **Bounded work:** visual sampling and automation have explicit resource and
   execution caps.

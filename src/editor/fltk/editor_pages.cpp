@@ -19,7 +19,7 @@
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
-#include <FL/Fl_Native_File_Chooser.H>
+#include "editor_file_chooser.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -327,19 +327,16 @@ void ProfilePage::set_enabled_value(const bool enabled) {
 }
 
 void ProfilePage::browse_application() {
-  std::optional<std::string> chosen;
+  std::optional<std::filesystem::path> path;
   if (choose_application_) {
-    chosen = choose_application_();
+    if (const auto chosen = choose_application_()) path = platform::path_from_utf8(*chosen);
   } else {
-    Fl_Native_File_Chooser chooser(Fl_Native_File_Chooser::BROWSE_FILE);
-    chooser.title("Choose the game application");
-    chooser.filter("Applications\t*.exe");
-    if (chooser.show() == 0 && chooser.filename() && *chooser.filename())
-      chosen = chooser.filename();
+    path = choose_editor_file({app_, EditorFileRequest::Mode::open, "Choose the game application",
+                              "Set application", "Applications", {"exe"}});
   }
-  if (!chosen) return;
-  const auto path = platform::path_from_utf8(*chosen);
   if (!path) return;
+  const auto chosen = platform::path_to_utf8(*path);
+  if (!chosen) return;
   std::error_code file_error;
   if (!std::filesystem::is_regular_file(*path, file_error)) return;
   const auto name = platform::path_to_utf8(path->filename());

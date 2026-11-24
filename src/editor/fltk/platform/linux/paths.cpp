@@ -53,6 +53,7 @@ std::optional<RoleContrastFailure> shared_appearance_failure(const EditorAppeara
 std::optional<ContrastPalette> platform_contrast_palette() { return std::nullopt; }
 
 void refresh_editor_window_chrome() {}
+bool verify_editor_window_capture(Fl_Window &) { return false; }
 
 bool editor_options_supported() noexcept { return false; }
 

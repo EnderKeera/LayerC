@@ -26,6 +26,7 @@ set(LAYERC_EDITOR_FLTK_PORTABLE_GUI_SOURCES
     src/editor/fltk/editor_forms.cpp
     src/editor/fltk/editor_geometry.cpp
     src/editor/fltk/editor_import.cpp
+    src/editor/fltk/editor_file_chooser.cpp
     src/editor/fltk/cooldown_groups_window.cpp
     src/editor/fltk/export_selection_window.cpp
     src/editor/fltk/editor_commands.cpp

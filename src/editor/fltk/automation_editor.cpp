@@ -3,6 +3,7 @@
 #include "automation_trace_client.hpp"
 #include <exception>
 #include "editor_app.hpp"
+#include "editor_file_chooser.hpp"
 #include "automation_graph.hpp"
 #include "automation_simulator.hpp"
 
@@ -19,9 +20,6 @@
 #include <FL/Fl_Multiline_Output.H>
 #include "editor_scroll.hpp"
 #include <FL/fl_draw.H>
-#include "layerc/platform/text.hpp"
-
-#include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Output.H>
 #include <FL/fl_ask.H>
 
@@ -45,17 +43,6 @@ std::string display_lines(std::string text) {
 void append_choice(Fl_Choice &choice, const std::string_view label) {
   const auto index = choice.add(("__item_" + std::to_string(choice.size())).c_str());
   choice.replace(index, std::string(label).c_str());
-}
-std::optional<std::filesystem::path> trace_destination(const bool save) {
-  Fl_Native_File_Chooser chooser;
-  chooser.title(save ? "Save automation trace" : "Load automation trace");
-  if (const auto start = file_chooser_start_directory(); !start.empty())
-    chooser.directory(start.c_str());
-  chooser.type(save ? Fl_Native_File_Chooser::BROWSE_SAVE_FILE : Fl_Native_File_Chooser::BROWSE_FILE);
-  chooser.filter("LayerC trace\t*.layerctrace");
-  if (save) chooser.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
-  if (chooser.show() || !chooser.filename() || !*chooser.filename()) return std::nullopt;
-  return platform::path_from_utf8(chooser.filename());
 }
 class ValidationOutput final : public EditorField<Fl_Output> {
 public:
@@ -552,7 +539,10 @@ struct LinuxAutomationEditor::Impl {
     fl_message_title("Save simulator trace");
     if (save && fl_choice("Trace files may contain user-authored strings or maps. Save?",
                           "Cancel", "Save", nullptr) != 1) return;
-    const auto destination = trace_destination(save);
+    const auto destination = choose_editor_file({app,
+        save ? EditorFileRequest::Mode::save : EditorFileRequest::Mode::open,
+        save ? "Save automation trace" : "Load automation trace", save ? "Save" : "Load",
+        "LayerC trace", {"layerctrace"}, EditorFileRequest::DirectoryMemory::traces});
     if (!destination) return;
     if (save) {
       const bool saved = write_trace_file(*destination, trace.export_text());

@@ -45,6 +45,7 @@ namespace layerc::editor {
 [[nodiscard]] bool confirm_items_profile_upgrade();
 
 class EditorApp;
+struct EditorFileRequest;
 struct SimulatorPanelPreview;
 class PanelPreview final : public Fl_Widget {
 public:
@@ -95,6 +96,7 @@ private:
   std::unique_ptr<TasksWindow> tasks_window;     // demand-created
   // Declared last: it releases its widget trackers before the widgets go.
   std::unique_ptr<EditorAccessibility> accessibility;
+  friend std::optional<std::filesystem::path> choose_editor_file(const EditorFileRequest &request);
 
 public:
   void build(std::optional<AppearanceLoad> startup_appearance = std::nullopt);

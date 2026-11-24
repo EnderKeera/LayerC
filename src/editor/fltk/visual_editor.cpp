@@ -3,8 +3,10 @@
 #include "accessible_widgets.hpp"
 #include "editor_app.hpp"
 #include "platform/calibration_service.hpp"
+#ifdef _WIN32
+#include "platform/editor_options.hpp"
+#endif
 #include "profile_edit.hpp"
-#include "layerc/platform/profile_visual_assets.hpp"
 
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
@@ -200,6 +202,13 @@ struct LinuxVisualEditor::Impl {
     auto seed = CalibrationModel::open(session.document().profile(), cooldown,
                                        session.document().visual());
     if (!seed) { app.report(StatusKind::failure, "Unavailable: the selected cooldown no longer exists."); return; }
+#ifdef _WIN32
+    if (editor_capture_exclusion_requested()) {
+      fl_message_title("Open calibration");
+      if (fl_choice("Calibration opens in a separate window that screen capture can show.",
+                    "Cancel", "Open calibration", nullptr) != 1) return;
+    }
+#endif
     const auto chooser = [&] {
       fl_message_title("Shared observation");
       const auto answer = fl_choice("Other cooldowns share this observation. Update all or clone for this cooldown?",

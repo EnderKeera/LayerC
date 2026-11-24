@@ -3,6 +3,7 @@
 // regressions live in this target; remote AT-SPI behaviour is covered by the
 // disposable GUI walkthrough.
 #include "editor_app.hpp"
+#include "editor_file_chooser.hpp"
 #include "a11y/fltk_semantics.hpp"
 #include "profile_edit.hpp"
 #include "automation_graph.hpp"
@@ -13,6 +14,11 @@
 #include "linux_editor_test_access.hpp"
 #include "editor_test_environment.hpp"
 #include "platform/calibration_service.hpp"
+#include "platform/editor_options.hpp"
+#ifdef _WIN32
+#include "platform/win32/window_chrome.hpp"
+#include "platform/win32/window_settings.hpp"
+#endif
 #include "platform/services.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/calibration_readiness.hpp"
@@ -689,6 +695,116 @@ Widget &visual_control(editor::EditorApp &app, const std::string_view label) {
   expect(widget != nullptr, "the visual page owns the named control");
   return *widget;
 }
+void editor_file_chooser_routing() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app;
+#ifdef _WIN32
+  editor::WindowsWindowDecorator decorator;
+#endif
+  show(app);
+  using editor::FilePromptStage;
+  unsigned native{}, prompts{};
+  bool prerequisite = true;
+  std::string title;
+  editor::set_native_file_presenter_for_test([&](const auto &request, const std::string &directory) {
+    ++native;
+    expect(prerequisite && request.title == title, "the native presenter receives the requested action after its prerequisite");
+    if (title == "Choose the game application")
+      expect(directory.empty(), "Browse application does not remember a directory");
+    return std::nullopt;
+  });
+  editor::set_file_prompt_observer_for_test([&](const auto &view, const auto stage) {
+    ++prompts;
+    expect(stage == FilePromptStage::shown_and_verified && view.window.label() &&
+               title == view.window.label() && prerequisite,
+           "the correct privacy prompt follows the action's other dialogs");
+    view.cancel.do_callback();
+  });
+  struct ResetSeams {
+    ~ResetSeams() {
+      editor::set_native_file_presenter_for_test({});
+      editor::set_file_prompt_observer_for_test({});
+    }
+  } reset;
+  const auto run = [&](std::string name, const auto &choose) {
+    title = std::move(name);
+    const auto previous = native, prompted = prompts;
+    choose();
+    if (editor::editor_capture_exclusion_requested())
+      expect(native == previous && prompts == prompted + 1,
+             "routing with exclusion on cannot reach the native presenter without the privacy prompt");
+    else
+      expect(native == previous + 1 && prompts == prompted,
+             "routing with exclusion off calls the native presenter directly");
+  };
+  const auto routes = [&] {
+    run("Import JSON or LayerC profile pack", [&] { app.import_profiles(); });
+    run("Export base JSON only", [&] { app.export_profile(false); });
+    run("Export complete profile pack", [&] {
+      prerequisite = false;
+      Answer selection("Export", [&] { prerequisite = true; });
+      app.export_profile(true);
+      expect(selection.delivered(), "Export pack shows the profile checklist first");
+    });
+#ifdef _WIN32
+    tab(app, editor::EditorAppTestAccess::profile_tab(app));
+    if (auto *browse = find_button(*app.main_window(), "&Browse..."))
+      run("Choose the game application", [&] { browse->do_callback(); });
+    else expect(false, "the Windows Profile page has the native Browse action");
+#endif
+    app.command(editor::EditorCommand::automation_page);
+    run("Load automation trace", [&] { automation_control<Fl_Button>(app, "Load trace...").do_callback(); });
+    auto &view = automation_control<Fl_Choice>(app, "Automation view");
+    view.value(1); view.do_callback();
+    automation_control<Fl_Button>(app, "Add event").do_callback();
+    run("Save automation trace", [&] {
+      prerequisite = false;
+      Answer consent("Save", [&] { prerequisite = true; });
+      automation_control<Fl_Button>(app, "Save trace...").do_callback();
+      expect(consent.delivered() && consent.title() == "Save simulator trace",
+             "Save trace warns about user-authored strings before opening file choice");
+    });
+  };
+  routes();
+#ifdef _WIN32
+  editor::set_editor_capture_exclusion(true);
+  routes();
+  editor::set_editor_capture_exclusion(false);
+#endif
+}
+
+#ifdef _WIN32
+void calibration_confirms_separate_window_only_when_exclusion_requested() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app;
+  editor::WindowsWindowDecorator decorator;
+  show(app);
+  app.command(editor::EditorCommand::visual_page);
+  auto &calibrate = visual_control<Fl_Button>(app, "Calibrate visual...");
+  {
+    editor::set_editor_capture_exclusion(true);
+    Answer cancel("Cancel", [&] {
+      auto *modal = Fl::modal();
+      expect(modal && find_button(*modal, "Open calibration") &&
+                 find_control(*modal, "Calibration opens in a separate window that screen capture can show."),
+             "calibration names the separate capturable window before proceeding");
+    });
+    calibrate.do_callback();
+    expect(cancel.delivered() && cancel.title() == "Open calibration" &&
+               editor::EditorAppTestAccess::tasks_window(app) == nullptr,
+           "Cancel prevents calibration target selection and launch");
+  }
+  editor::set_editor_capture_exclusion(false);
+  {
+    Answer unexpected("Cancel");
+    calibrate.do_callback();
+    const auto *window = editor::EditorAppTestAccess::tasks_window(app);
+    expect(!unexpected.delivered() && window && window->shown(),
+           "exclusion off proceeds into the ordinary calibration target selection without asking");
+  }
+}
+#endif
+
 void visual_page_history_and_cancel() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
@@ -1188,6 +1304,10 @@ int main() {
   LAYERC_TEST_CASE(automation_history_and_invalid_properties),
   LAYERC_TEST_CASE(automation_json_and_simulator_lifetime),
   LAYERC_TEST_CASE(automation_trace_disconnect),
+  LAYERC_TEST_CASE(editor_file_chooser_routing),
+#ifdef _WIN32
+  LAYERC_TEST_CASE(calibration_confirms_separate_window_only_when_exclusion_requested),
+#endif
   LAYERC_TEST_CASE(visual_page_history_and_cancel),
   LAYERC_TEST_CASE(visual_remove_refuses_nested_selection_change),
   LAYERC_TEST_CASE(calibration_mask_coalesced_pointer_strokes)

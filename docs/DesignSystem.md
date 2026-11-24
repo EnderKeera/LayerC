@@ -843,6 +843,32 @@ above are the source of truth. The Screens pages show it in place.
 Preview:
 [`components/Dialog/preview.html`](design-system/components/Dialog/preview.html).
 
+### FilePathDialog
+
+When capture exclusion is requested, the Windows FLTK editor offers a
+typed path before opening the separate Windows file dialog. Use the request
+title as the caption. The warning names what screen capture can show and
+offers the two ways to choose a file; a warning mark leads the measured
+wrapped text. The warning describes the empty File path input. Do not put a
+start directory or example containing a user path anywhere in the dialog.
+
+- **Layout:** use the editor's input and button heights. Keep the warning
+  and inline reason rows in place, including when there is no reason. Right
+  align the request action (primary) · Open file dialog... · Cancel.
+- **Refusal:** until capture exclusion is verified, typing and the primary
+  action are off. On refusal, keep the reason visible and use it for the
+  disabled action's tooltip and both disabled controls' accessible
+  descriptions. Focus Cancel on refusal and File path on verification.
+- **Interaction:** all actions and File path have access keys. Enter invokes
+  the enabled primary; Esc cancels. Opening the Windows file dialog requires
+  explicit consent. An invalid path gets an inline reason led by the `no`
+  glyph; the reason and its announcement never repeat the path, and the
+  announcement carries no glyph character. Replacing a file keeps the path in the
+  same dialog and uses Replace (primary) · Back · Cancel.
+
+No static preview: the Windows dialog's verified and refused states depend
+on capture exclusion at runtime.
+
 ### DropDown
 
 A drop-down list painted like an Edit: square, `input` fill, 1 px `border`

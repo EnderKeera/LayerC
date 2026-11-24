@@ -38,6 +38,7 @@
 void editor_tooltips_keys_and_menu();
 void stepped_fields_and_preview_nudge();
 void show_evidence_tooltip(void *);
+void file_prompt_and_capture_lifetime_contracts();
 
 namespace layerc::editor {
 DaemonHub &product_daemon_hub() {
@@ -76,6 +77,12 @@ private:
   layerc::test::TempDirectory directory_{"LayerC-FltkSettingsTests"};
   layerc::test::ScopedEnvironment settings_, profiles_;
 };
+
+constexpr auto expected_capture_hint =
+    "This setting hides the editor's own windows. The editor asks before opening the Windows file dialog "
+    "or calibration. "
+    "Screen capture can show the Windows file dialog, calibration, File Explorer (Open profiles folder), "
+    "and input-method candidate windows.";
 
 void appearance_mapping() {
   for (const auto theme : {editor::EditorTheme::copper, editor::EditorTheme::teal,
@@ -252,7 +259,7 @@ void options_dialog_actions_and_descriptions() {
   constexpr std::array hints{
       std::pair{"Enable &visual recognition", "Watches configured screen regions only while a profile needs visual matching."},
       std::pair{"Hide cooldown &overlays from screen capture and streams", "Screenshots, screen sharing and Magnifier cannot see a hidden window."},
-      std::pair{"Hide the &editor from screen capture", "Screenshots, screen sharing and Magnifier cannot see a hidden window."},
+      std::pair{"Hide the &editor from screen capture", expected_capture_hint},
       std::pair{"&Text size", "Adds to the Windows text size setting."},
       std::pair{"Install &updates when LayerC starts", "The launcher checks GitHub for a signed release before it starts LayerD."},
   };
@@ -385,8 +392,7 @@ void capture_exclusion_failure_and_recovery() {
              warning() == editor::capture_exclusion_incomplete,
          "successful affinity on the main window does not hide the dialog's refusal");
   const auto visible_warning = [&](std::string_view text) {
-    const std::string hint = "Screenshots, screen sharing and Magnifier cannot see a hidden window.\n" +
-                             std::string(text);
+    const auto hint = std::string(expected_capture_hint) + "\n" + std::string(text);
     return child(dialog, hint) && editor::accessibility::accessible_description(*capture) == hint;
   };
   expect(visible_warning(warning()) && std::string_view(status->value()).starts_with(warning()),
@@ -407,8 +413,7 @@ void capture_exclusion_failure_and_recovery() {
   dialog.refresh_capture_warning();
   expect(std::string_view(status->value()) == "Unrelated outcome." &&
              !visible_warning(editor::capture_exclusion_incomplete) &&
-             editor::accessibility::accessible_description(*capture) ==
-                 "Screenshots, screen sharing and Magnifier cannot see a hidden window.",
+             editor::accessibility::accessible_description(*capture) == expected_capture_hint,
          "verified recovery clears the fault and restores the capture hint");
 
   AffinityProbe::result = AffinityProbe::Result::deny_clear;
@@ -1156,5 +1161,10 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(dpi_changes_keep_text_scale),
       LAYERC_TEST_CASE(editor_tooltips_keys_and_menu),
       LAYERC_TEST_CASE(stepped_fields_and_preview_nudge),
+      {"file_prompt_and_capture_lifetime_contracts", [] {
+         const SettingsFixture fixture;
+         if (expect(fixture.ready(), "isolate registry and profile store"))
+           file_prompt_and_capture_lifetime_contracts();
+       }},
   });
 }
