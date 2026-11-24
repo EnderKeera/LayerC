@@ -32,10 +32,6 @@ inline constexpr std::string_view live_edit_session_inactive =
     "edit session is not active";
 inline constexpr std::string_view live_release_proof_capability =
     "release-proof-v1";
-// When a silent session has surely ended: the lease, plus LayerD's 250 ms
-// check cadence, rounded up. Editors wait this long before treating Direct
-// drag as off after they stop a session they could not confirm.
-inline constexpr std::chrono::milliseconds live_edit_lease_release{2000};
 // LayerD's acknowledgement text for an editor's Direct drag off request, sent
 // with the request's session and revision once every bar is click-through.
 inline constexpr std::string_view live_direct_drag_off_ack = "direct drag off";

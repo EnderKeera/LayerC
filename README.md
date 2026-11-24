@@ -48,17 +48,19 @@ remain open.
   synthesizes them. XTest is linked only into a Linux test binary. The only
   exceptions are two Windows editor modes that you start yourself. **Pick
   window** captures the mouse until your next left click picks the window
-  under it; a key other than a modifier, a capture loss or the end of the edit
-  cancels it, and a key other than Esc then reaches the editor. **Direct drag**
-  asks for consent first. Then, during Position on window, LayerD's visible
-  panels take the clicks that land on them. Direct drag ends when you turn it
-  off, press Esc in any editor window, menu or dialog, start Pick window, lose
-  pointer capture during a drag, or end the edit. The editor reports it off
-  only once LayerD confirms every panel is click-through again; if the
-  request cannot be sent or LayerD does not confirm within a second, the
-  edit ends and LayerD's edit lease makes the panels click-through within two
-  seconds. Pick window starts only after that. Neither mode installs hooks or
-  synthesizes input.
+  under it; Esc (FLTK editor: any key other than a modifier), a capture loss
+  or the end of the edit cancels it. In the FLTK editor, a key other than Esc
+  then reaches the editor. **Direct drag** asks for consent first. Then,
+  during Position on window, LayerD's visible panels take the clicks that
+  land on them. Direct drag ends when you turn it off, press Esc in the
+  editor's own windows, menus and dialogs (Win32 editor: its main window),
+  start Pick window, lose pointer capture during a drag, or end the edit.
+  The editor reports it off only once LayerD confirms every panel is
+  click-through again; if the request cannot be sent or LayerD does not
+  confirm within a second, the edit ends and the panels may take clicks
+  until LayerD responds. Pick window starts only once LayerD has confirmed
+  this, reconnected or exited. Neither mode installs hooks or synthesizes
+  input.
 - **No anti-cheat bypass:** no injection, hooks, game-memory reads, drivers, or
   administrator elevation.
 - **No telemetry or network:** exceptions are the optional same-package Game
@@ -331,13 +333,13 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_launcher_win_tests` | Windows launcher: CNG signature verification, default-OFF update preference and opt-in/out, per-user registration/autostart in disposable HKCU keys, and the Start menu shortcut (v2.6b) |
 | `layerc_capture_integration_tests` | Interactive WGC/DD integration; registered only with `LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON` |
 | `layerc_overlay_tests` | HWND attachment, GDI rendering, capture exclusion, `lctest` matching, and Direct drag: mouse-up completes one drag, capture loss ends the mode, and only the active mode makes the overlay a pointer target |
-| `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC, and peer authentication |
-| `layerc_daemon_runtime_tests` | Daemon maintenance/input demand plus independently composed Windows runtime owners: input dispatch, idle/quiesced resources, automation lifecycle/trace, live-control startup/fault recovery, and a Direct drag off acknowledged with its session and revision only after every panel is click-through again |
+| `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC and peer authentication, with live-channel tests for dropping frames from a retired connection, refusing sends while disconnected, resetting the connection, and detecting the peer process exiting |
+| `layerc_daemon_runtime_tests` | Daemon maintenance/input demand and Windows runtime owners: input dispatch, idle/quiesced resources, automation lifecycle/trace and live-control fault recovery; a Direct drag off is acknowledged only after every panel is click-through, and an ended or expired edit hides its panels before replying. Live-edit tests also cover rejecting old-session requests after reconnect and advertising release proof |
 | `layerc_bundle_tests` | Deterministic bundle export/import and SHA-256 asset deduplication |
 | `layerc_isolated_visual_tests` | `layerw` protocol, bounds, authentication, and quarantine behavior |
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |
-| `layerc_editor_tests` | Editor dialogs, v2 contrast/focus/glyph and contrast-theme seams, layout and accessibility contracts, schema helpers, automation palette, and the desktop-identity decision for disabling IME in tests |
-| `layerc_editor_live_edit_tests` | Editor live-edit session: package authentication, pending target expiry, reconnect and target loss, anchor revisions and throttling, ordered Direct drag end notifications, Direct drag off confirmed only by LayerD's answer to the newest request, an unconfirmed or unsent request ending the session without another heartbeat, the lease wait before Direct drag counts as settled, heartbeats, and committed-profile publication |
+| `layerc_editor_tests` | Win32 editor dialogs, contrast/focus/glyph and contrast-theme seams, layout and accessibility contracts, schema helpers, automation palette, the desktop-identity decision for disabling IME in tests, and Pick window cancelling when an edit ends or refusing to start without Direct drag release proof |
+| `layerc_editor_live_edit_tests` | Editor live-edit session: package authentication, target expiry and loss, anchor ordering/throttling, heartbeats and committed profiles; a Direct drag off needs the newest matching answer, and an unconfirmed or unsent off ends the edit without another heartbeat. A retired session's release obligation survives supersession, transport reset and session replacement; it settles only on a matching release reply, a fresh capable connection, or peer exit |
 | `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
 | `layerc_windows_fltk_accessibility_tests` | FLTK editor (`layere_fltk.exe`, built but not shipped): a real `IUIAutomation` client reads a fixture window's names, roles, descriptions and reading order, edits and invokes through Value/Invoke, checks read-only refusal, text ranges, text/selection/value/focus events and status notifications, and sees providers disconnect on close |
 | `layerc_windows_fltk_notification_tests` | FLTK editor: a real UI Automation client receives child-list and accessible-name changes, but not announcements made before it connected |
@@ -352,9 +354,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_windows_fltk_settings_tests` | FLTK editor settings in a disposable settings key: the shared appearance record and legacy migration, Options actions and descriptions, verified capture exclusion on existing and new windows, and refusal, partial coverage and recovery through an affinity seam; typed-path validation and inline replacement, explicit Alt+D consent when typing is refused, capture verdicts scoped to window lifetime, and unreadable appearance records preserved unless replacement is confirmed; text scale at startup, by shortcut and across DPI changes, contrast-theme mapping and desktop listener registration across multiple listeners (including recreation after the last closes), Appearance floors set aside under a contrast theme, title-bar decoration, tooltips and menu keys, and stepped fields with preview nudging |
 | `layerc_windows_fltk_startup_tests` | FLTK editor startup: the guard name is the logon-session name shared with the Win32 editor; two owners contend on a disposable mutex in one process; a fixture lookup restores a minimized window with an injected executable match; profile-recovery failure text, product line and window titles |
 | `layerc_windows_fltk_calibration_tests` | FLTK visual calibration with a disposable store and settings key: the FLTK pump runs timeouts and restores the owner window, hiding the owner ends the helper without quitting the editor, an unavailable owner is refused before target resolution or launch, failure text matches the Win32 editor, and the platform service accepts and reports a result |
-| `layerc_windows_fltk_position_tests` | FLTK Position on window against a fixture edit service: begin, toggle and preview drag with Direct Drag off by default, incoming anchors and accepted edits, ending Direct drag on capture loss, Escape or Pick window, an Escape key press in Options, an open menu and the main window ending Direct drag while Options and the menu still close, the end of the edit by LayerD or a profile switch cancelling an armed Pick window and its capture, turning Direct drag off waiting for LayerD's confirmation before it is reported off, turned on again or followed by Pick window, an unconfirmed or unsent off ending the edit with Pick window waiting out LayerD's lease, end reasons and expiry, and ending the edit when the profile is switched or closed |
+| `layerc_windows_fltk_position_tests` | FLTK Position on window against a fixture edit service: begin, toggle and preview drag with Direct drag off by default, incoming anchors and accepted edits, ending Direct drag on capture loss, Escape or Pick window, and Escape still closing Options and menus. Ending the edit or switching profiles cancels an armed Pick window. Pick is refused while Direct drag release is unproven, even after the edit ends and time passes, and allowed when release is confirmed |
 | `layerc_windows_fltk_on_window_tests` | On-window edit session over the daemon hub: authenticated begin and shutdown, the latest profile awaited before expiry or refusal, coalesced profiles with throttled anchors and Direct Drag, the target window closing during an edit, and peer events including Direct drag ending without ending the edit |
-| `layerc_windows_fltk_daemon_link_tests` | FLTK daemon hub against a fake `layerd` on a private pipe: the lazy worker and absent status, reloads that start `layerd` once without claiming success or wait for a committed acknowledgement, `layerd` error text, reply deadlines, refused clients without a launch, a busy pipe, one held connection for status, reload, trace and edit, trace subscribe, push, unsubscribe and retries, edit heartbeats and expiry, LayerD's answer confirming a Direct drag off and keeping the edit while an unanswered off ends it without another heartbeat, the exact image allowlist, and visual and automation retry replies |
+| `layerc_windows_fltk_daemon_link_tests` | FLTK daemon hub against a fake LayerD on a private pipe: lazy startup, held connections for status/reload/trace/edit, deadlines, refusal and retry replies, trace subscriptions and edit heartbeats. Direct drag publication covers newly queued enables and matching off replies; an unsent off resets the pipe and stays unproven until a fresh capable handshake. The hub polls pending releases, carries them across session discard, reconnects without launching LayerD or settles on peer exit, and stops heartbeats even when waking the worker for an end fails |
 | `layerc_windows_fltk_trace_relay_tests` | Automation trace relay: one reset per fresh subscription, in-order roots, overflow that keeps the newest roots and reports a gap, packet budgets, reconnect gaps, failure after three attempts, invalid packets, replaced subscriptions, and whether `layerd` may still hold an unsubscribed one |
 | `layerc_windows_fltk_smoke` | `layere_fltk --smoke` with an isolated profile directory and settings key: takes the single-instance guard, recovers the store, opens the editor window and its UI Automation tree, then closes |
 

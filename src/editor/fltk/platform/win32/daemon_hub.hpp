@@ -26,6 +26,7 @@ struct DaemonHubEnvironment {
   std::function<bool()> signal_reload;
   // Bounds one request, from connecting through LayerD's reply.
   std::chrono::milliseconds reply_timeout{std::chrono::seconds(2)};
+  bool product{};
 };
 
 // LayerD's live-edit pipe, the sibling launch, and its named reload event.
@@ -34,6 +35,7 @@ struct DaemonHubEnvironment {
 class DaemonHub;
 // The editor process's one hub over product_daemon_hub_environment().
 [[nodiscard]] DaemonHub &product_daemon_hub();
+[[nodiscard]] DaemonHub *product_daemon_hub_if_created() noexcept;
 
 // The Windows editor's link to LayerD. One owned worker holds the
 // authenticated live-edit pipe and answers status and reload requests; it
@@ -81,6 +83,7 @@ public:
   void edit_anchor(std::uint64_t session, std::string panel_id, double x, double y,
                    bool final);
   void edit_direct_drag(std::uint64_t session, bool enabled);
+  [[nodiscard]] bool direct_drag_released() const;
   void end_edit(std::uint64_t session, bool notify) noexcept;
   [[nodiscard]] std::vector<OnWindowEditEvent> take_edit_events(std::uint64_t session);
   void set_edit_listener(std::function<void()> listener);
@@ -90,6 +93,7 @@ public:
   struct State;
 
 private:
+  friend struct DaemonHubTestAccess;
   DaemonHubEnvironment environment_;
   std::shared_ptr<State> state_;
 };

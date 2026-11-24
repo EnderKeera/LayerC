@@ -4,7 +4,6 @@
 // anchors. With Direct Drag the user drags the bars in game instead; LayerD's
 // final anchor commits once, locally, and is never echoed back.
 #include "editor_app.hpp"
-#include "layerc/core/live_edit.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
@@ -43,15 +42,15 @@ std::string end_text(const Event &event) {
     return event.text.empty() ? "LayerD ended the on-window edit session."
                               : "LayerD ended editing: " + event.text;
   case Event::EndReason::connection_lost:
-    return "Live editor connection lost; normal overlays restored.";
+    return "On-window editing ended — the LayerD connection closed.";
   case Event::EndReason::target_closed: return "Edit target closed or minimized.";
   case Event::EndReason::unavailable: return "On-window editing is unavailable: " + event.text;
   case Event::EndReason::direct_drag_unsent:
-    return "Direct drag could not reach LayerD, so on-window editing ended. LayerD makes "
-           "the bars click-through again within two seconds.";
+    return "On-window editing ended — Direct drag off could not reach LayerD. "
+           "Pick window waits until LayerD confirms its panels are click-through.";
   case Event::EndReason::direct_drag_unconfirmed:
-    return "LayerD did not confirm that Direct drag turned off, so on-window editing "
-           "ended. LayerD makes the bars click-through again within two seconds.";
+    return "On-window editing ended — LayerD did not confirm Direct drag off. "
+           "Pick window waits until LayerD confirms its panels are click-through.";
   }
   return "On-window editing ended.";
 }
@@ -252,16 +251,13 @@ void EditorApp::direct_drag_changed(const bool enabled) {
 }
 
 void EditorApp::forget_direct_drag() {
-  // Without LayerD's confirmation, its lease ends Direct drag within this bound.
-  if (direct_drag_disarming_ || (panel_page_ && panel_page_->direct_drag_enabled()))
-    direct_drag_release_by_ = std::chrono::steady_clock::now() + core::live_edit_lease_release;
   direct_drag_disarming_ = false;
   direct_drag_lost_ = false;
 }
 
 bool EditorApp::direct_drag_settled() const {
   return !direct_drag_disarming_ && !(panel_page_ && panel_page_->direct_drag_enabled()) &&
-         std::chrono::steady_clock::now() >= direct_drag_release_by_;
+         on_window_direct_drag_released();
 }
 
 bool EditorApp::cancel_direct_drag() {

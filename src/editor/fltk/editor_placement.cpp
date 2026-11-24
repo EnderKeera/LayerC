@@ -29,8 +29,8 @@ void EditorApp::show_tasks(const std::string &reason, const TaskRequest request)
         .pick_starting = [this]() -> std::optional<std::string> {
           (void)cancel_direct_drag();
           if (direct_drag_settled()) return std::nullopt;
-          return "Pick window waits until LayerD has turned Direct drag off. Choose Pick "
-                 "window again in a moment.";
+          return "Pick window unavailable — LayerD has not confirmed its panels are "
+                 "click-through. Choose the window from the list, or try again.";
         },
         .watch_capture = {},
     });

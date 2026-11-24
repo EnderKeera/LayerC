@@ -21,6 +21,10 @@
 
 namespace layerc::editor {
 
+#ifdef _WIN32
+void set_on_window_release_for_test(std::function<bool()> released);
+#endif
+
 struct EditorAppTestAccess {
   static Fl_Timeout_Handler steady_timeout_handler() { return &SteadyTimeout::handle; }
   // The FLTK check that re-arms timeouts whose OS wake was refused.
@@ -213,11 +217,6 @@ struct EditorAppTestAccess {
   static void position_on(EditorApp &app, const TaskCandidate &task) { app.position_on(task); }
   static void on_window_ready(EditorApp &app) { app.on_window_ready(); }
   static void acknowledge_direct_drag_notice(EditorApp &app) { app.direct_drag_notice_shown_ = true; }
-#ifdef _WIN32
-  // Skips the wait for LayerD's lease after an edit ended without confirming
-  // that Direct drag is off.
-  static void expire_direct_drag_lease(EditorApp &app) { app.direct_drag_release_by_ = {}; }
-#endif
   static void set_direct_drag_confirmation(EditorApp &app, std::function<int()> confirm) {
     app.confirm_direct_drag_for_test_ = std::move(confirm);
   }

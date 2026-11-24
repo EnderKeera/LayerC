@@ -16,6 +16,7 @@ namespace {
 
 constexpr wchar_t notify_class[] = L"LayerC.LayerE.FLTK.OnWindowEdit";
 constexpr UINT events_message = WM_APP + 1;
+thread_local std::function<bool()> release_for_test;
 
 class HubOnWindowEdit final : public OnWindowEdit {
 public:
@@ -106,6 +107,16 @@ private:
 } // namespace
 
 bool on_window_edit_sessions() noexcept { return true; }
+
+bool on_window_direct_drag_released() {
+  if (release_for_test) return release_for_test();
+  const auto *hub = product_daemon_hub_if_created();
+  return !hub || hub->direct_drag_released();
+}
+
+void set_on_window_release_for_test(std::function<bool()> released) {
+  release_for_test = std::move(released);
+}
 
 std::unique_ptr<OnWindowEdit> make_on_window_edit(std::function<void()> ready) {
   auto edit = std::make_unique<HubOnWindowEdit>(product_daemon_hub(), std::move(ready));

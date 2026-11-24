@@ -41,6 +41,19 @@ struct Request final {
   std::atomic<bool> request_sent{};
 };
 
+void open_connection(const DaemonHubEnvironment &environment,
+                     std::unique_ptr<LiveEditSession> &session,
+                     PipeLiveEditTransport *&transport,
+                     std::optional<DirectDragRelease> &carried);
+void carry_session_release(DaemonHub::State &state, LiveEditSession &session,
+                           std::optional<DirectDragRelease> &carried);
+void reconnect_for_release(const DaemonHubEnvironment &environment,
+                           std::unique_ptr<LiveEditSession> &session,
+                           PipeLiveEditTransport *&transport,
+                           std::optional<DirectDragRelease> &carried);
+void publish_drag_release(DaemonHub::State &state, std::uint64_t swapped_seq,
+                          const LiveEditSession *session, bool carried);
+
 std::optional<std::string> start_worker_locked(
     const std::shared_ptr<DaemonHub::State> &state,
     const DaemonHubEnvironment &environment);
@@ -62,6 +75,12 @@ struct DaemonHub::State {
   std::deque<HubEditCommand> edit_commands;
   std::uint64_t edit_current{};
   std::uint64_t next_edit_id{};
+  std::uint64_t drag_enable_seq{};
+  std::uint64_t drag_released_seq{};
+  std::optional<std::pair<std::uint64_t, bool>> unqueued_end;
+  std::function<void()> before_release_publish_for_test;
+  std::function<void(DirectDragRelease &)> on_release_carried_for_test;
+  bool fail_edit_wake_for_test{};
   std::vector<OnWindowEditEvent> edit_events;
   std::function<void()> edit_listener;
   HANDLE wake_event{};

@@ -15,8 +15,10 @@
 #include <FL/Fl_Window.H>
 #include <FL/platform.H>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <windows.h>
 
@@ -264,18 +266,18 @@ void end_reasons_and_expiry() {
     return {.reason = reason, .panel_id = {}, .text = std::move(text)};
   };
   const std::array<EndCase, 9> cases{{
-      {ended(Reason::connection_lost), "Live editor connection lost; normal overlays restored.", Kind::warning},
+      {ended(Reason::connection_lost), "On-window editing ended — the LayerD connection closed.", Kind::warning},
       {ended(Reason::daemon_error, "rejected"), "LayerD ended editing: rejected", Kind::failure},
       {ended(Reason::daemon_ended), "LayerD ended the on-window edit session.", Kind::information},
       {ended(Reason::daemon_ended, "finished"), "LayerD ended editing: finished", Kind::information},
       {ended(Reason::target_closed), "Edit target closed or minimized.", Kind::information},
       {ended(Reason::unavailable, "missing pipe"), "On-window editing is unavailable: missing pipe", Kind::failure},
       {ended(Reason::direct_drag_unsent),
-          "Direct drag could not reach LayerD, so on-window editing ended. LayerD makes "
-          "the bars click-through again within two seconds.", Kind::warning},
+          "On-window editing ended — Direct drag off could not reach LayerD. "
+          "Pick window waits until LayerD confirms its panels are click-through.", Kind::warning},
       {ended(Reason::direct_drag_unconfirmed),
-          "LayerD did not confirm that Direct drag turned off, so on-window editing "
-          "ended. LayerD makes the bars click-through again within two seconds.", Kind::warning},
+          "On-window editing ended — LayerD did not confirm Direct drag off. "
+          "Pick window waits until LayerD confirms its panels are click-through.", Kind::warning},
       {{.kind = Event::Kind::expired, .panel_id = {}, .text = {}},
           "Live editing is unavailable: LayerD did not expose the live-edit "
           "service. Exit the older LayerD from its tray icon, then try Position on window again.", Kind::failure},
@@ -394,10 +396,11 @@ void direct_drag_terminal_paths() {
       chooser = window;
   auto *const pick = chooser ? find_pick_button(*chooser) : nullptr;
   if (!expect(tasks && pick, "the editor opens a chooser with Pick window")) return;
+  constexpr std::string_view refused =
+      "Pick window unavailable — LayerD has not confirmed its panels are "
+      "click-through. Choose the window from the list, or try again.";
   pick->do_callback();
-  expect(ended_off(6) && !Fl::grab() && tasks->shown() &&
-             status() == "Pick window waits until LayerD has turned Direct drag off. "
-                         "Choose Pick window again in a moment.",
+  expect(ended_off(6) && !Fl::grab() && tasks->shown() && status() == refused,
          "choosing Pick window ends Direct drag but waits for LayerD's confirmation");
   pick->do_callback();
   expect(ended_off(6) && !Fl::grab() && tasks->shown(),
@@ -410,8 +413,11 @@ void direct_drag_terminal_paths() {
              app.main_window()->shown() && app.placement_active(),
          "Esc then cancels only the pick");
 
-  // An off LayerD never confirms ends the edit; Pick then waits out LayerD's
-  // lease before it takes the pointer.
+  struct Release {
+    bool confirmed{};
+    Release() { editor::set_on_window_release_for_test([this] { return confirmed; }); }
+    ~Release() { editor::set_on_window_release_for_test({}); }
+  } release;
   expect(enable(), "Direct drag turns on before an unconfirmed off");
   drag->value(0);
   drag->do_callback();
@@ -422,10 +428,15 @@ void direct_drag_terminal_paths() {
              fixture.edit.end == std::vector<bool>{false},
          "an unconfirmed off ends the edit");
   pick->do_callback();
-  expect(!Fl::grab() && tasks->shown(), "Pick window waits out LayerD's lease");
-  Access::expire_direct_drag_lease(app);
+  expect(!Fl::grab() && tasks->shown() && status() == refused,
+         "Pick window refuses an unproven release even after its edit ends");
+  std::this_thread::sleep_for(std::chrono::milliseconds(2100));
   pick->do_callback();
-  expect(Fl::grab() == app.main_window(), "after the lease Pick window takes the pointer");
+  expect(!Fl::grab() && tasks->shown() && status() == refused,
+         "time alone never makes an unproven release safe for Pick window");
+  release.confirmed = true;
+  pick->do_callback();
+  expect(Fl::grab() == app.main_window(), "only release proof lets Pick window take the pointer");
   expect(send_escape(app.main_window()) == 1 && !Fl::grab(), "Esc cancels that pick");
   fixture.start();
   fixture.started();

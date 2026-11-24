@@ -13,10 +13,14 @@ std::optional<std::string> enqueue_edit_locked(
     const DaemonHubEnvironment &environment, HubEditCommand command) {
   if (auto failure = start_worker_locked(state, environment)) return failure;
   state->edit_commands.push_back(std::move(command));
-  if (SetEvent(state->wake_event) == FALSE) {
+  const auto &queued = state->edit_commands.back();
+  if (state->fail_edit_wake_for_test || SetEvent(state->wake_event) == FALSE) {
+    if (queued.kind == HubEditCommand::Kind::end) return std::nullopt;
     state->edit_commands.pop_back();
     return "The LayerD link wake event failed.";
   }
+  if (queued.kind == HubEditCommand::Kind::direct_drag && queued.flag)
+    ++state->drag_enable_seq;
   return std::nullopt;
 }
 
@@ -118,11 +122,15 @@ void DaemonHub::end_edit(const std::uint64_t session, const bool notify) noexcep
     if (session == 0 || session != state_->edit_current) return;
     state_->edit_current = 0;
     state_->edit_events.clear();
-    (void)enqueue_edit_locked(
-        state_, environment_,
-        {.kind = HubEditCommand::Kind::end, .id = session, .flag = notify});
+    try {
+      if (!enqueue_edit_locked(state_, environment_,
+                              {.kind = HubEditCommand::Kind::end, .id = session, .flag = notify}))
+        return;
+    } catch (...) {
+    }
+    state_->unqueued_end.emplace(session, notify);
+    (void)SetEvent(state_->wake_event);
   } catch (...) {
-    // Closing the pipe at shutdown also ends LayerD's edit session.
   }
 }
 

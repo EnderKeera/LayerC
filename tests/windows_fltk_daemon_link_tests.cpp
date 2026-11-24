@@ -1,4 +1,4 @@
-#include "platform/win32/daemon_hub.hpp"
+#include "platform/win32/daemon_hub_internal.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -28,6 +28,24 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+namespace layerc::editor {
+struct DaemonHubTestAccess {
+  static void before_release_publish(DaemonHub &hub, std::function<void()> callback) {
+    std::lock_guard lock(hub.state_->mutex);
+    hub.state_->before_release_publish_for_test = std::move(callback);
+  }
+  static void on_release_carried(DaemonHub &hub,
+                                 std::function<void(DirectDragRelease &)> callback) {
+    std::lock_guard lock(hub.state_->mutex);
+    hub.state_->on_release_carried_for_test = std::move(callback);
+  }
+  static void fail_edit_wake(DaemonHub &hub) {
+    std::lock_guard lock(hub.state_->mutex);
+    hub.state_->fail_edit_wake_for_test = true;
+  }
+};
+} // namespace layerc::editor
 
 namespace {
 using namespace std::chrono_literals;
@@ -87,9 +105,7 @@ public:
         diagnostics_json_(test_diagnostics_json()) {}
 
   ~FakeLayerD() {
-    if (stop_event_ != nullptr) (void)SetEvent(stop_event_);
-    if (work_event_ != nullptr) (void)SetEvent(work_event_);
-    if (thread_.joinable()) thread_.join();
+    stop();
     if (work_event_ != nullptr) CloseHandle(work_event_);
     if (stop_event_ != nullptr) CloseHandle(stop_event_);
   }
@@ -97,8 +113,14 @@ public:
   FakeLayerD(const FakeLayerD &) = delete;
   FakeLayerD &operator=(const FakeLayerD &) = delete;
 
+  void stop() {
+    if (stop_event_ != nullptr) (void)SetEvent(stop_event_);
+    if (thread_.joinable()) thread_.join();
+  }
+
   [[nodiscard]] bool start() {
-    if (stop_event_ == nullptr || work_event_ == nullptr) return false;
+    if (stop_event_ == nullptr || work_event_ == nullptr || !ResetEvent(stop_event_)) return false;
+    ready_ = false;
     thread_ = std::thread([this] { serve(); });
     std::unique_lock lock(mutex_);
     return ready_cv_.wait_for(lock, 2s, [this] { return ready_; }) && pipe_ready_;
@@ -118,6 +140,20 @@ public:
   [[nodiscard]] std::size_t handshakes() {
     std::lock_guard lock(mutex_);
     return handshake_count_;
+  }
+
+  void release_proof_capability(bool capable) { release_proof_ = capable; }
+
+  [[nodiscard]] bool pause_reads(bool pause) {
+    std::unique_lock lock(mutex_);
+    pause_reads_requested_ = pause;
+    return SetEvent(work_event_) != FALSE &&
+           request_cv_.wait_for(lock, 2s, [&] { return reads_paused_ == pause; });
+  }
+
+  void hold_off_ack(bool hold) {
+    hold_off_ack_ = hold;
+    (void)SetEvent(work_event_);
   }
 
   [[nodiscard]] bool wait_for_trace_subscribes(
@@ -220,7 +256,8 @@ private:
         ++handshake_count_;
       }
       reply(channel, message, core::LiveMessageType::acknowledgement,
-            core::package_identity("LayerD") + ";test");
+            core::package_identity("LayerD") + ";" +
+                (release_proof_ ? std::string(core::live_release_proof_capability) : "test"));
       return;
     }
     if (message.type == core::LiveMessageType::diagnostics_request) {
@@ -282,9 +319,11 @@ private:
       request_cv_.notify_all();
       // Like LayerD, answer an applied Direct drag off; a silent LayerD never does.
       if (message.type == core::LiveMessageType::set_direct_drag && !message.direct_drag &&
-          mode_ != ReplyMode::silent)
-        reply(channel, message, core::LiveMessageType::acknowledgement,
-              std::string(core::live_direct_drag_off_ack));
+          mode_ != ReplyMode::silent) {
+        if (hold_off_ack_) held_off_ = message;
+        else reply(channel, message, core::LiveMessageType::acknowledgement,
+                   std::string(core::live_direct_drag_off_ack));
+      }
       if (message.type == core::LiveMessageType::begin_edit) {
         reply(channel, message, core::LiveMessageType::acknowledgement);
         (void)channel.send({.type = core::LiveMessageType::anchor_changed,
@@ -321,13 +360,28 @@ private:
     while (WaitForSingleObject(stop_event_, 0) != WAIT_OBJECT_0) {
       std::deque<std::string> trace_packets;
       bool disconnect{};
+      bool reads_paused{};
       {
         std::lock_guard lock(mutex_);
-        disconnect = std::exchange(disconnect_requested_, false);
-        trace_packets.swap(pending_trace_packets_);
+        reads_paused = reads_paused_ = pause_reads_requested_;
+        if (!reads_paused) {
+          disconnect = std::exchange(disconnect_requested_, false);
+          trace_packets.swap(pending_trace_packets_);
+        }
+      }
+      request_cv_.notify_all();
+      if (reads_paused) {
+        const HANDLE handles[]{stop_event_, work_event_};
+        if (WaitForMultipleObjects(2, handles, FALSE, INFINITE) != WAIT_OBJECT_0 + 1) break;
+        continue;
       }
       const bool was_connected = channel->connected();
       if (disconnect) channel->disconnect_peer();
+      if (!hold_off_ack_ && held_off_) {
+        reply(*channel, *held_off_, core::LiveMessageType::acknowledgement,
+              std::string(core::live_direct_drag_off_ack));
+        held_off_.reset();
+      }
       for (auto &packet : trace_packets) {
         core::LiveMessage message;
         message.type = core::LiveMessageType::automation_trace_event;
@@ -370,6 +424,11 @@ private:
   std::condition_variable request_cv_;
   bool ready_{};
   bool pipe_ready_{};
+  bool pause_reads_requested_{};
+  bool reads_paused_{};
+  std::atomic<bool> release_proof_{true};
+  std::atomic<bool> hold_off_ack_{};
+  std::optional<core::LiveMessage> held_off_;
   std::size_t diagnostics_count_{};
   std::size_t handshake_count_{};
   std::size_t trace_subscribe_count_{};
@@ -980,19 +1039,24 @@ void hub_edit_direct_drag_off_needs_an_answer() {
   for (const auto mode : {ReplyMode::acknowledge, ReplyMode::silent}) {
     const bool answers = mode == ReplyMode::acknowledge;
     FakeLayerD server(mode);
+    server.hold_off_ack(true);
     if (!expect(server.start(), "private fake LayerD listens")) return;
     std::atomic<unsigned> starts{}, signals{};
     editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
     const auto id = begin_on_desktop(hub);
     if (!expect(!wait_for_edit_event(hub, id, Event::Kind::anchor).empty(),
                 "the edit starts")) return;
+    expect(hub.direct_drag_released(), "a session that has not enabled Direct drag is released");
     hub.edit_direct_drag(id, true);
+    expect(!hub.direct_drag_released(), "an enqueued enable makes Direct drag unreleased");
     hub.edit_direct_drag(id, false);
     if (!expect(server.wait_for_edit_packets(Type::set_direct_drag, 2, 1s),
                 "both Direct drag requests reach LayerD")) return;
+    expect(!hub.direct_drag_released(), "sending off does not release before its answer");
     if (answers) {
+      server.hold_off_ack(false);
       const auto events = wait_for_edit_event(hub, id, Event::Kind::direct_drag_off);
-      expect(!events.empty() && events.back().kind == Event::Kind::direct_drag_off &&
+      expect(hub.direct_drag_released() && !events.empty() && events.back().kind == Event::Kind::direct_drag_off &&
                  std::ranges::none_of(events, [](const Event &event) {
                    return event.kind == Event::Kind::ended;
                  }),
@@ -1009,9 +1073,138 @@ void hub_edit_direct_drag_off_needs_an_answer() {
                 "the hub tells LayerD the edit ended")) return;
     const auto packets = server.edit_packets().size();
     std::this_thread::sleep_for(350ms);
-    expect(server.edit_packets().size() == packets,
-           "no heartbeat follows, so LayerD's lease runs out");
+    expect(server.edit_packets().size() == packets && !hub.direct_drag_released(),
+           "no heartbeat or release proof follows an unanswered off");
   }
+}
+
+bool until(const auto &condition, const std::chrono::milliseconds timeout = 2s) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!condition()) {
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(5ms);
+  }
+  return true;
+}
+
+void hub_enable_enqueued_during_release_publication() {
+  using Kind = editor::OnWindowEditEvent::Kind;
+  using layerc::test::expect;
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!expect(server.start(), "private fake LayerD listens")) return;
+  std::atomic<unsigned> starts{}, signals{};
+  std::atomic<bool> queued{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = begin_on_desktop(hub);
+  if (!expect(!wait_for_edit_event(hub, id, Kind::anchor).empty(), "the edit starts")) return;
+  editor::DaemonHubTestAccess::before_release_publish(hub, [&] {
+    hub.edit_direct_drag(id, true);
+    queued = true;
+  });
+  expect(hub.status().running && queued &&
+             server.wait_for_edit_packets(core::LiveMessageType::set_direct_drag, 1, 1s) &&
+             !hub.direct_drag_released(),
+         "publication cannot release an enable queued after the worker swapped commands");
+}
+
+void hub_unsent_off_keeps_idle_session_until_capable_reconnect() {
+  using Type = core::LiveMessageType;
+  using Event = editor::OnWindowEditEvent;
+  using layerc::test::expect;
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!expect(server.start(), "private fake LayerD listens")) return;
+  std::atomic<unsigned> starts{}, signals{}, carries{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  editor::DaemonHubTestAccess::on_release_carried(hub, [&](editor::DirectDragRelease &) { ++carries; });
+  const auto id = begin_on_desktop(hub);
+  if (!expect(!wait_for_edit_event(hub, id, Event::Kind::anchor).empty(), "the edit starts")) return;
+  hub.edit_direct_drag(id, true);
+  if (!expect(server.wait_for_edit_packets(Type::set_direct_drag, 1, 1s) && server.pause_reads(true),
+              "LayerD receives the enable, then stops draining the pipe")) return;
+  server.release_proof_capability(false);
+  // Final anchors neither coalesce nor throttle. Fill the pipe and queue,
+  // then use smaller frames to fill the space that would fit the short off.
+  const std::string panel(core::max_live_message_bytes * 3U / 4U, 'p');
+  for (unsigned index = 0; index < 8; ++index) hub.edit_anchor(id, panel, .5, .5, true);
+  for (auto size = panel.size() / 2U; size != 0; size /= 2U)
+    hub.edit_anchor(id, panel.substr(0, size), .5, .5, true);
+  // A heartbeat is even shorter than an off; give the worker several
+  // intervals to fill any space left below the smallest anchor frame.
+  std::this_thread::sleep_for(750ms);
+  hub.edit_direct_drag(id, false);
+  const auto events = wait_for_edit_event(hub, id, Event::Kind::ended);
+  if (!expect(!events.empty() && events.back().kind == Event::Kind::ended &&
+                  events.back().reason == Event::EndReason::direct_drag_unsent &&
+                  !hub.direct_drag_released(),
+              "a full channel makes off unsent without treating the drag as released")) return;
+  const bool reconnected = server.pause_reads(false) && server.wait_for_disconnect(2s) &&
+                          until([&] { return server.handshakes() >= 2; }) && hub.status().running;
+  expect(carries == 0, "the idle worker polls a pending release without discarding its session");
+  if (!expect(reconnected, "the reset closes the pipe and the idle hub authenticates again")) return;
+  expect(!hub.direct_drag_released(), "an ack without release-proof-v1 does not release");
+  server.release_proof_capability(true);
+  expect(server.disconnect_client() && until([&] { return hub.direct_drag_released(); }, 3s) &&
+             server.handshakes() >= 3 && starts == 0,
+         "only the fresh capable handshake releases the drag after an unsent off");
+}
+
+void hub_discarded_drag_release_uses_reconnect_or_peer_exit() {
+  using Kind = editor::OnWindowEditEvent::Kind;
+  using layerc::test::expect;
+  for (const bool peer_exits : {false, true}) {
+    FakeLayerD server(ReplyMode::silent_trace_unsubscribe);
+    if (!expect(server.start(), "private fake LayerD listens")) return;
+    std::atomic<unsigned> starts{}, signals{}, carries{};
+    std::atomic<bool> exited{};
+    editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals, 800ms));
+    editor::DaemonHubTestAccess::on_release_carried(hub, [&](editor::DirectDragRelease &release) {
+      if (peer_exits) release.probe = [&] { return exited.load(); };
+      ++carries;
+    });
+    const auto id = begin_on_desktop(hub);
+    if (!expect(!wait_for_edit_event(hub, id, Kind::anchor).empty(), "the edit starts")) return;
+    hub.edit_direct_drag(id, true);
+    if (!expect(server.wait_for_edit_packets(core::LiveMessageType::set_direct_drag, 1, 1s),
+                "the first connection carried an enable")) return;
+    const auto trace = hub.subscribe_trace();
+    if (!expect(wait_for_trace_update(hub, trace).has_value(), "trace subscribes while editing")) return;
+    hub.unsubscribe_trace(trace);
+    if (!expect(server.wait_for_trace_unsubscribes(1, 1s), "trace unsubscribe awaits an answer")) return;
+    server.stop();
+    if (!expect(until([&] { return carries.load() != 0; }), "discarding the connection carries its armed release")) return;
+    expect(!until([&] { return hub.direct_drag_released(); }, 350ms),
+           "a carried release keeps Pick unavailable with no session or live pipe");
+    if (peer_exits) {
+      exited = true;
+      expect(until([&] { return hub.direct_drag_released(); }) && server.handshakes() == 1 && starts == 0,
+             "the carried peer-exit probe releases without a handshake or launch");
+    } else {
+      expect(server.start() && until([&] { return hub.direct_drag_released(); }) &&
+                 server.handshakes() >= 2 && starts == 0,
+             "a discarded armed release reconnects to the existing pipe without launching LayerD");
+    }
+  }
+}
+
+void hub_end_survives_wake_failure() {
+  using Type = core::LiveMessageType;
+  using Kind = editor::OnWindowEditEvent::Kind;
+  using layerc::test::expect;
+  FakeLayerD server(ReplyMode::acknowledge);
+  if (!expect(server.start(), "private fake LayerD listens")) return;
+  std::atomic<unsigned> starts{}, signals{};
+  editor::DaemonHub hub(make_environment(server.pipe_name(), starts, signals));
+  const auto id = begin_on_desktop(hub);
+  if (!expect(!wait_for_edit_event(hub, id, Kind::anchor).empty() &&
+                  server.wait_for_edit_packets(Type::heartbeat, 1, 1s),
+              "the edit is sending heartbeats before the wake failure")) return;
+  editor::DaemonHubTestAccess::fail_edit_wake(hub);
+  hub.end_edit(id, true);
+  if (!expect(server.wait_for_edit_packets(Type::end_edit, 1, 1s),
+              "an end whose wake failed still ends the driver session")) return;
+  const auto count = server.edit_packets().size();
+  std::this_thread::sleep_for(350ms);
+  expect(server.edit_packets().size() == count, "a failed end wake leaves no more heartbeats");
 }
 
 void hub_edit_expires_without_server() {
@@ -1132,6 +1325,10 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(status_reload_and_trace_continue_on_one_held_connection),
     LAYERC_TEST_CASE(hub_edit_heartbeats_and_multiplexes),
     LAYERC_TEST_CASE(hub_edit_direct_drag_off_needs_an_answer),
+    LAYERC_TEST_CASE(hub_enable_enqueued_during_release_publication),
+    LAYERC_TEST_CASE(hub_unsent_off_keeps_idle_session_until_capable_reconnect),
+    LAYERC_TEST_CASE(hub_discarded_drag_release_uses_reconnect_or_peer_exit),
+    LAYERC_TEST_CASE(hub_end_survives_wake_failure),
     LAYERC_TEST_CASE(hub_edit_expires_without_server),
     LAYERC_TEST_CASE(hub_edit_disconnect_and_shutdown),
     LAYERC_TEST_CASE(editor_image_allowlist_is_exact))

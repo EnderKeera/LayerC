@@ -5,6 +5,7 @@
 namespace layerc::editor {
 
 bool on_window_edit_sessions() noexcept { return false; }
+bool on_window_direct_drag_released() { return true; }
 
 std::unique_ptr<OnWindowEdit> make_on_window_edit(std::function<void()>) { return nullptr; }
 

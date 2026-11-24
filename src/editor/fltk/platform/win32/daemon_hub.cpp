@@ -438,17 +438,6 @@ bool skip_unsent_trace(const std::shared_ptr<DaemonHub::State> &state,
   return !state->trace.current(request.trace_id);
 }
 
-void open_connection(const DaemonHubEnvironment &environment,
-                     std::unique_ptr<LiveEditSession> &session,
-                     PipeLiveEditTransport *&transport) {
-  auto owned_transport = std::make_unique<PipeLiveEditTransport>(
-      environment.pipe_name, environment.expected_server_process_id);
-  transport = owned_transport.get();
-  session = std::make_unique<LiveEditSession>(std::move(owned_transport));
-  const auto seed = (GetTickCount64() << 16U) | GetCurrentProcessId();
-  session->seed_revision(static_cast<ProfileRevision>(seed));
-}
-
 HubEditDriver make_edit_driver(const std::shared_ptr<DaemonHub::State> &state) {
   return HubEditDriver([state](const std::uint64_t id, OnWindowEditEvent event) {
     std::function<void()> listener;
@@ -467,9 +456,11 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
   std::unique_ptr<LiveEditSession> session;
   PipeLiveEditTransport *transport{};
   std::optional<ActiveDemand> active;
+  std::optional<DirectDragRelease> carried;
   auto edit = make_edit_driver(state);
   // A closed connection ends the edit session with it.
   const auto discard = [&](std::string reason = "LayerD's live pipe closed.") {
+    if (session) daemon_hub_detail::carry_session_release(*state, *session, carried);
     edit.connection_discarded(std::move(reason));
     discard_session(state, session, transport);
   };
@@ -493,17 +484,21 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       }
       started = true;
     }
-    if (!session) open_connection(environment, session, transport);
+    if (!session) daemon_hub_detail::open_connection(environment, session, transport, carried);
     return session.get();
   };
   bool poll_now{};
 
   for (;;) {
     std::deque<HubEditCommand> commands;
+    std::optional<std::pair<std::uint64_t, bool>> unqueued_end;
+    std::uint64_t swapped_seq{};
     {
       std::lock_guard lock(state->mutex);
       if (state->stopping) break;
       commands.swap(state->edit_commands);
+      swapped_seq = state->drag_enable_seq;
+      unqueued_end = std::exchange(state->unqueued_end, {});
       if (!active && !state->queue.empty()) {
         auto request = std::move(state->queue.front());
         state->queue.pop_front();
@@ -517,15 +512,27 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       }
     }
     for (auto &command : commands) edit.apply(std::move(command), session.get(), open);
-    // A new or changed session is polled at once rather than after a wait.
-    if (!commands.empty()) poll_now = true;
+    if (unqueued_end)
+      edit.apply({.kind = HubEditCommand::Kind::end, .id = unqueued_end->first,
+                  .flag = unqueued_end->second}, session.get(), open);
+    const bool reconnecting = !session && carried.has_value();
+    if (reconnecting)
+      daemon_hub_detail::reconnect_for_release(environment, session, transport, carried);
+    const auto publish_release = [&] {
+      daemon_hub_detail::publish_drag_release(*state, swapped_seq, session.get(), carried.has_value());
+    };
+    publish_release();
+    if (!commands.empty() || unqueued_end || (reconnecting && session)) poll_now = true;
 
     if (!active) {
-      if (session && transport != nullptr && (session->connected() || edit.live())) {
+      if (session && (session->connected() || edit.live() || session->release_pending())) {
         if (!poll_now) {
-          const auto waited = wait_for_work(
-              state, transport, edit.live() ? edit.wait_timeout(*session) : INFINITE);
+          const auto waited = wait_for_work(state, transport, edit.wait_timeout(*session));
           if (waited.kind == WaitResult::Kind::wake) continue;
+          {
+            std::lock_guard lock(state->mutex);
+            if (state->stopping || !state->edit_commands.empty() || state->unqueued_end) continue;
+          }
           if (waited.kind == WaitResult::Kind::failed) {
             discard("LayerD live-pipe wait failed (" + win32_reason(waited.error) + ").");
             continue;
@@ -533,12 +540,13 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
         }
         poll_now = false;
         const auto step = session->poll({});
+        publish_release();
         edit.apply_step(step, *session);
         if (step.authentication_rejected) {
           discard("LayerD refused live-pipe package authentication.");
         } else if (!step.protocol_errors.empty()) {
           discard("LayerD sent an invalid live-edit protocol message.");
-        } else if (!session->connected() && !edit.live()) {
+        } else if (!session->connected() && !edit.live() && !session->release_pending()) {
           discard();
         } else if (session->authenticated()) {
           (void)route_forwarded(state, step, nullptr);
@@ -547,7 +555,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
       }
       poll_now = false;
       if (session) discard();
-      if (wait_for_work(state, nullptr, INFINITE).kind ==
+      if (wait_for_work(state, nullptr, carried ? HubEditDriver::reconnect_ms : INFINITE).kind ==
           WaitResult::Kind::failed) {
         std::lock_guard lock(state->mutex);
         fail_worker_locked(*state, "The LayerD link worker could not wait for requests.");
@@ -594,7 +602,8 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
 
     if (!active->presence_probed) {
       // A session waiting for LayerD keeps reconnecting on its own.
-      if (session && !session->connected() && !edit.live()) discard();
+      if (session && !session->connected() && !edit.live() && !session->release_pending())
+        discard();
       if (!session) {
         if (environment.pipe_name.empty()) {
           fail_unreachable(state, request, environment,
@@ -615,13 +624,14 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
           active.reset();
           continue;
         }
-        open_connection(environment, session, transport);
+        daemon_hub_detail::open_connection(environment, session, transport, carried);
       }
       active->presence_probed = true;
     }
 
     poll_now = false;
     const auto step = session->poll({});
+    publish_release();
     edit.apply_step(step, *session);
     if (step.authentication_rejected) {
       fail_unreachable(state, request, environment,
@@ -733,7 +743,7 @@ void process_worker(const std::shared_ptr<DaemonHub::State> &state,
     const auto waited = wait_for_work(
         state, transport,
         std::min(remaining_timeout(request->deadline),
-                 edit.live() ? edit.wait_timeout(*session) : INFINITE));
+                 edit.wait_timeout(*session)));
     if (waited.kind == WaitResult::Kind::failed) {
       fail_closed(state, request,
                   "LayerD live-pipe wait failed (" +
@@ -884,13 +894,9 @@ DaemonHubEnvironment product_daemon_hub_environment() {
   return {.pipe_name = layerc::platform::live_edit_pipe_name,
           .expected_server_process_id = 0,
           .start_daemon = [] { return start_daemon(); },
-          .signal_reload = [] { return layerc::platform::signal_profile_reload(); }};
+          .signal_reload = [] { return layerc::platform::signal_profile_reload(); },
+          .product = true};
 }
-
-DaemonHub::DaemonHub(DaemonHubEnvironment environment)
-    : environment_(std::move(environment)), state_(std::make_shared<State>()) {}
-
-DaemonHub::~DaemonHub() { shutdown(); }
 
 DaemonStatus DaemonHub::status() {
   const auto request =

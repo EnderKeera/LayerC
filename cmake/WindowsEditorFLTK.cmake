@@ -38,6 +38,7 @@ add_library(layerc_editor_fltk_support STATIC
     src/editor/fltk/platform/win32/daemon_hub.cpp
     src/editor/fltk/platform/win32/daemon_hub_edit.cpp
     src/editor/fltk/platform/win32/daemon_hub_edit_requests.cpp
+    src/editor/fltk/platform/win32/daemon_hub_release.cpp
     src/editor/fltk/platform/win32/product_daemon_hub.cpp
     src/editor/fltk/platform/win32/daemon_link.cpp
     src/editor/fltk/platform/win32/automation_trace_client.cpp)

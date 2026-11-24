@@ -14,6 +14,7 @@ namespace layerc::editor {
 // Whether this platform edits bars on a game window through LayerD's edit
 // session. Linux has no such channel: positioning publishes the live draft.
 [[nodiscard]] bool on_window_edit_sessions() noexcept;
+[[nodiscard]] bool on_window_direct_drag_released();
 
 struct OnWindowEditBegin {
   // LayerD's canonical key for the saved profile file.
@@ -51,7 +52,7 @@ struct OnWindowEditEvent {
     // The session could not start; text names why.
     unavailable,
     // A Direct Drag request could not be sent, or LayerD did not confirm it
-    // turned off in time; the session stopped so LayerD's lease ends it.
+    // turned off in time; the session stopped without release confirmation.
     direct_drag_unsent,
     direct_drag_unconfirmed,
   };
