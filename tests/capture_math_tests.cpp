@@ -344,6 +344,32 @@ void wgc_refusal_releases_before_runtime_teardown() {
   }
   DestroyWindow(window);
 }
+
+// A size check that fails with a successful HRESULT has no system text: the
+// diagnostic must not end in an empty ": " suffix.
+void wgc_zero_size_target_has_complete_diagnostic() {
+  using layerc::test::expect;
+  const HWND window = CreateWindowExW(
+      WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC",
+      L"LayerC WGC zero-size target", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
+      GetModuleHandleW(nullptr), nullptr);
+  expect(window != nullptr, "the zero-size target window must be created");
+  ShowWindow(window, SW_SHOWNOACTIVATE);
+  layerc::capture::WindowCaptureSession session(
+      window, {.allow_desktop_duplication = false});
+  const bool started = session.start();
+  const auto polled = session.poll(layerc::core::MonotonicClock::now(), true);
+  const auto &diagnostic = polled.result.diagnostic;
+  std::cout << "WGC zero-size target: started=" << started << " diagnostic="
+            << diagnostic << '\n';
+  expect(started || !diagnostic.empty(),
+         "a refused zero-size start reports a diagnostic");
+  expect(!diagnostic.ends_with(": ") && !diagnostic.ends_with(':') &&
+             diagnostic.find(": ;") == std::string::npos,
+         "a capture diagnostic never ends in an empty system-text suffix");
+  session.stop();
+  DestroyWindow(window);
+}
 #endif
 
 int main() {
@@ -352,6 +378,8 @@ int main() {
 #if defined(_WIN32)
       {"wgc_refusal_releases_before_runtime_teardown",
        wgc_refusal_releases_before_runtime_teardown},
+      {"wgc_zero_size_target_has_complete_diagnostic",
+       wgc_zero_size_target_has_complete_diagnostic},
 #endif
   });
 }

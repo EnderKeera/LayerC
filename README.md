@@ -310,7 +310,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_core_tests` | Profiles, UTF-8, cooldowns, automation, live edit, visual-profile logic, and update manifests |
 | `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b) |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
-| `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds; on Windows, a refused WGC start releases its WinRT objects before runtime teardown |
+| `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds; on Windows, a refused WGC start releases its WinRT objects before runtime teardown, and a zero-size target reports a complete diagnostic |
 | `layerc_template_png_tests` | Shared template PNG codec (every color type, depth, and Adam7), deterministic canonical encoding, and bundle-import asset canonicalization |
 | `layerc_automation_persistence_tests` | Shared per-profile automation persistence: debounced checkpoints, retried write faults, state-load repair, and values that outlive sessions |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |

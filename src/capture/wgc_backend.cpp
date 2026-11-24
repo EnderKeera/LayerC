@@ -3,7 +3,6 @@
 #include "wgc_abi.hpp"
 
 #include <algorithm>
-#include <cstddef>
 #include <cstring>
 #include <mutex>
 
@@ -194,8 +193,12 @@ public:
         result = access->GetInterface(IID_PPV_ARGS(&texture));
       if (SUCCEEDED(result))
         result = newest->get_ContentSize(&content);
-      if (FAILED(result) || content.width <= 0 || content.height <= 0) {
+      if (FAILED(result)) {
         slot_.set_error("WGC frame surface failed: " + hresult_message(result));
+        return slot_.unavailable(slot_.last_error());
+      }
+      if (content.width <= 0 || content.height <= 0) {
+        slot_.set_error("WGC frame has no content size");
         return slot_.unavailable(slot_.last_error());
       }
       if (content.width != pool_size_.width ||
@@ -288,8 +291,10 @@ private:
 
     wgc_abi::SizeInt32 size{};
     result = item_->get_Size(&size);
-    if (FAILED(result) || size.width <= 0 || size.height <= 0)
+    if (FAILED(result))
       return {"WGC target size is unavailable", result};
+    if (size.width <= 0 || size.height <= 0)
+      return {"WGC target window has no capturable size"};
 
     ComPtr<wgc_abi::CaptureFramePoolStatics2> pool_factory;
     result = runtime_->get_factory(
@@ -332,7 +337,10 @@ private:
   }
 
   bool fail(const char *prefix, const HRESULT result) {
-    slot_.set_error(std::string(prefix) + ": " + hresult_message(result));
+    // A successful HRESULT has no system text to append.
+    slot_.set_error(SUCCEEDED(result)
+                        ? std::string(prefix)
+                        : std::string(prefix) + ": " + hresult_message(result));
     stop();
     return false;
   }
