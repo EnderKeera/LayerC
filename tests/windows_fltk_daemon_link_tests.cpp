@@ -392,7 +392,11 @@ private:
         if (const auto *message = std::get_if<core::LiveMessage>(&result))
           handle(*channel, *message);
       }
-      if (was_connected && !channel->connected()) {
+      // One poll can drop the peer and accept the next client at once, so
+      // connected() alone would miss that disconnect.
+      const bool changed = channel->take_connection_changed();
+      if (was_connected && (changed || !channel->connected())) {
+        held_off_.reset();
         {
           std::lock_guard lock(mutex_);
           ++disconnects_;
