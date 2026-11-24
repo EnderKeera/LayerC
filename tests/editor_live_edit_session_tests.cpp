@@ -47,10 +47,20 @@ struct Fixture {
     message.text = std::move(text);
     receive(message);
   }
-  void authenticate() {
+  void queue_ack(std::string_view capabilities = "baseline,release-proof-v1,trace") {
     receive(core::LiveMessageType::acknowledgement,
-            core::package_identity("LayerD") + ";handshake");
+            core::package_identity("LayerD") + ";" + std::string(capabilities));
+  }
+  void authenticate(std::string_view capabilities = "baseline,release-proof-v1,trace") {
+    queue_ack(capabilities);
     (void)session.poll({});
+  }
+  core::EditSessionId begin_armed() {
+    authenticate();
+    expect(session.request_begin(target, {}, 2000) == editor::LiveEditBegin::started &&
+               session.send_direct_drag(true),
+           "the fixture begins an armed edit");
+    return session.session_id();
   }
   [[nodiscard]] std::vector<core::LiveMessage>
   sent(const core::LiveMessageType type) const {
@@ -257,8 +267,7 @@ void daemon_ends_direct_drag() {
 
 // layer57 L57-01: Direct drag counts as off only once LayerD confirms the
 // newest off request. A request that cannot be sent, or an off LayerD never
-// confirms, stops the session so no heartbeat keeps LayerD's lease alive, and
-// the editor waits out that lease before treating the bars as click-through.
+// confirms, stops the session so no heartbeat keeps LayerD's lease alive.
 void direct_drag_off_needs_confirmation() {
   const auto any_panel = [](std::string_view) { return true; };
   const auto off_ack = [](const core::ProfileRevision revision,
@@ -282,8 +291,6 @@ void direct_drag_off_needs_confirmation() {
   const auto heartbeats = [](const Fixture &fixture) {
     return fixture.sent(core::LiveMessageType::heartbeat).size();
   };
-  const auto release = static_cast<ULONGLONG>(core::live_edit_lease_release.count());
-
   {
     Fixture fixture;
     const auto id = started(fixture);
@@ -326,14 +333,6 @@ void direct_drag_off_needs_confirmation() {
     expect(ended.direct_drag_ended && fixture.session.direct_drag_settled(),
            "LayerD ending Direct drag itself settles it");
 
-    expect(fixture.session.send_direct_drag(true), "Direct drag turns on before the edit ends");
-    (void)fixture.session.end(true);
-    expect(!fixture.session.editing() && !fixture.session.direct_drag_settled(),
-           "ending the edit with Direct drag on waits for LayerD's lease");
-    fixture.now += release - 1;
-    expect(!fixture.session.direct_drag_settled(), "the wait lasts the whole lease bound");
-    fixture.now += 1;
-    expect(fixture.session.direct_drag_settled(), "after the lease bound Direct drag is settled");
   }
 
   {
@@ -354,13 +353,11 @@ void direct_drag_off_needs_confirmation() {
                fixture.sent(core::LiveMessageType::end_edit).size() == ends + 1,
            "an off LayerD never confirms stops the session and tells LayerD");
     const auto beats = heartbeats(fixture);
-    const auto stopped = fixture.now;
     fixture.now += 4 * editor::LiveEditSession::heartbeat_interval_ms;
     (void)fixture.session.poll(any_panel);
-    expect(heartbeats(fixture) == beats && !fixture.session.direct_drag_settled(),
-           "no heartbeat keeps LayerD's lease alive, and Direct drag is not yet settled");
-    fixture.now = stopped + release;
-    expect(fixture.session.direct_drag_settled(), "the lease bound settles Direct drag");
+    expect(heartbeats(fixture) == beats && fixture.session.release_pending() &&
+               !fixture.session.direct_drag_settled(),
+           "no heartbeat follows an unconfirmed off, and Pick still needs proof");
   }
 
   for (const bool enabling : {true, false}) {
@@ -369,19 +366,210 @@ void direct_drag_off_needs_confirmation() {
     if (!enabling)
       expect(fixture.session.send_direct_drag(true), "Direct drag turns on before a lost off");
     fixture.transport->accept_send = false;
-    const auto stopped = fixture.now;
     expect(!fixture.session.send_direct_drag(enabling) && !fixture.session.editing() &&
-               !fixture.session.direct_drag_disarming() &&
-               !fixture.session.direct_drag_settled(),
-           "a Direct drag request that cannot be sent stops the session");
+               !fixture.session.direct_drag_disarming() && fixture.session.release_pending() &&
+               !fixture.session.direct_drag_settled() && !fixture.session.authenticated() &&
+               fixture.transport->resets == 1,
+           "an unsent Direct drag request stops the session and resets for proof");
     fixture.transport->accept_send = true;
     const auto beats = heartbeats(fixture);
     fixture.now += 4 * editor::LiveEditSession::heartbeat_interval_ms;
     (void)fixture.session.poll(any_panel);
     expect(heartbeats(fixture) == beats, "no heartbeat follows the unsent request");
-    fixture.now = stopped + release;
-    expect(fixture.session.direct_drag_settled(), "the lease bound settles an unsent request");
   }
+}
+
+void release_requires_matching_proof() {
+  for (const auto proof : {core::LiveMessageType::end_edit, core::LiveMessageType::error}) {
+    Fixture fixture;
+    const auto id = fixture.begin_armed();
+    expect(fixture.session.end(false) && fixture.session.release_pending() &&
+               !fixture.session.direct_drag_settled(),
+           "an armed explicit end needs proof even when notification was not requested");
+    const auto ends = fixture.sent(core::LiveMessageType::end_edit);
+    expect(ends.size() == 1 && ends.front().edit_session == id,
+           "the release obligation overrides a silent end only for a possibly armed session");
+    fixture.receive(core::LiveMessageType::end_edit, {}, id + 1);
+    fixture.receive(core::LiveMessageType::error, "unknown panel id", id);
+    (void)fixture.session.poll({});
+    expect(fixture.session.release_pending() && !fixture.session.direct_drag_settled(),
+           "a foreign id or other error text does not prove release");
+    fixture.receive(proof, std::string(core::live_edit_session_inactive), id);
+    (void)fixture.session.poll({});
+    expect(!fixture.session.release_pending() && fixture.session.direct_drag_settled(),
+           "a capable peer's end or exact inactive reply for the retired id proves release");
+  }
+  for (const bool retire_first : {false, true}) {
+    Fixture incapable;
+    incapable.authenticate("release-proof-v10");
+    const auto id = incapable.begin_armed();
+    if (retire_first) (void)incapable.session.end(true);
+    incapable.receive(core::LiveMessageType::end_edit, {}, id);
+    (void)incapable.session.poll({});
+    expect(!incapable.session.editing() && incapable.session.release_pending() &&
+               !incapable.session.direct_drag_settled(),
+           "an end from a peer without the exact capability does not prove release");
+  }
+}
+
+void superseded_session_keeps_its_release() {
+  Fixture fixture;
+  const auto a = fixture.begin_armed();
+  const auto previous = fixture.sent_count();
+  (void)fixture.session.request_begin(second_target, {}, 2000);
+  const auto b = fixture.session.session_id();
+  if (expect(fixture.sent_count() == previous + 2,
+             "replacement sends both the end and the begin")) {
+    const auto &sent = fixture.transport->sent;
+    expect(sent[previous].type == core::LiveMessageType::end_edit &&
+               sent[previous].edit_session == a &&
+               sent[previous + 1].type == core::LiveMessageType::begin_edit &&
+               sent[previous + 1].edit_session == b,
+           "end_edit(A) precedes begin_edit(B)");
+  }
+  fixture.receive(core::LiveMessageType::error, "edit target or profile is invalid", b);
+  const auto refused = fixture.session.poll({});
+  expect(refused.ended && !fixture.session.editing() && fixture.session.release_pending(),
+         "a refused replacement does not release the predecessor");
+  fixture.receive(core::LiveMessageType::error, std::string(core::live_edit_session_inactive), b);
+  (void)fixture.session.poll({});
+  expect(fixture.session.release_pending(), "proof for B cannot release A");
+  fixture.receive(core::LiveMessageType::end_edit, {}, a);
+  (void)fixture.session.poll({});
+  expect(fixture.session.direct_drag_settled(), "the matching proof releases A");
+}
+
+void release_needs_a_fresh_capable_connection() {
+  Fixture fixture;
+  const auto id = fixture.begin_armed();
+  fixture.transport->changed = true;
+  fixture.queue_ack("release-proof-v10");
+  const auto change = fixture.session.poll({});
+  expect(change.ended && change.ended->reason == editor::LiveEditEndReason::connection_lost &&
+             change.authenticating && change.authenticated_now && !change.session_acknowledged &&
+             fixture.session.release_pending() && !fixture.session.direct_drag_settled(),
+         "a change retires the old edit before handling an incapable new ack in the same poll");
+  expect(fixture.sent(core::LiveMessageType::end_edit).empty(),
+         "connection change never sends the old id to the successor");
+  fixture.receive(core::LiveMessageType::end_edit, {}, id);
+  fixture.authenticate();
+  expect(fixture.session.release_pending(), "frames on the already authenticated link do not prove reconnect");
+  fixture.transport->changed = true;
+  fixture.queue_ack();
+  const auto fresh = fixture.session.poll({});
+  expect(fresh.authenticated_now && !fixture.session.release_pending() && fixture.session.direct_drag_settled(),
+         "a fresh capable acknowledgement proves release after reconnect");
+}
+
+void release_deadline_only_resets() {
+  Fixture fixture;
+  (void)fixture.begin_armed();
+  (void)fixture.session.end(true);
+  expect(fixture.session.next_due() == 2000, "the pending release schedules its 2000 ms deadline");
+  fixture.now += 1999;
+  (void)fixture.session.poll({});
+  expect(fixture.transport->resets == 0 && fixture.session.next_due() == 1,
+         "the connection is not reset before the deadline");
+  ++fixture.now;
+  (void)fixture.session.poll({});
+  expect(fixture.transport->resets == 1 && !fixture.session.authenticated() &&
+             fixture.session.release_pending() && !fixture.session.direct_drag_settled() &&
+             fixture.session.next_due() == 100,
+         "the deadline resets rather than settles and schedules disconnected polls at 100 ms");
+  fixture.now += 1999;
+  (void)fixture.session.poll({});
+  expect(fixture.transport->resets == 1 && fixture.session.next_due() == 1,
+         "the reset is not repeated inside the next interval");
+  ++fixture.now;
+  (void)fixture.session.poll({});
+  expect(fixture.transport->resets == 2 && fixture.session.release_pending(),
+         "a second full interval resets again while unproven");
+  fixture.now += 10000;
+  (void)fixture.session.poll({});
+  expect(!fixture.session.direct_drag_settled(), "ten seconds of clock alone never settles release");
+}
+
+void failed_end_and_peer_exit() {
+  Fixture fixture;
+  bool exited{};
+  fixture.transport->exit_probe = [&] { return exited; };
+  (void)fixture.begin_armed();
+  fixture.transport->accept_send = false;
+  expect(fixture.session.end(true) && fixture.transport->resets == 1 &&
+             fixture.session.release_pending() && !fixture.session.direct_drag_settled(),
+         "a failed end send while armed resets and retains the release obligation");
+  fixture.transport->exit_probe = {};
+  (void)fixture.session.poll({});
+  exited = true;
+  expect(fixture.session.direct_drag_settled(), "the retained peer-exit probe proves release");
+  (void)fixture.session.poll({});
+  expect(!fixture.session.release_pending() && !fixture.session.next_due(),
+         "process exit latches release and stops scheduling retries");
+}
+
+void internal_retirement_notifies_layerd() {
+  for (const bool armed : {false, true}) {
+    for (const bool error : {false, true}) {
+      Fixture fixture;
+      fixture.authenticate();
+      (void)fixture.session.request_begin(target, {}, 2000);
+      const auto id = fixture.session.session_id();
+      if (armed) (void)fixture.session.send_direct_drag(true);
+      if (error) {
+        fixture.receive(core::LiveMessageType::error, "stale edit revision", id);
+      } else {
+        fixture.usable = false;
+        fixture.now += editor::LiveEditSession::heartbeat_interval_ms;
+      }
+      const auto step = fixture.session.poll({});
+      const auto ends = fixture.sent(core::LiveMessageType::end_edit);
+      expect(step.ended && step.ended->reason == (error ? editor::LiveEditEndReason::daemon_error
+                                                        : editor::LiveEditEndReason::target_closed) &&
+                 ends.size() == 1 && ends.front().edit_session == id &&
+                 fixture.session.release_pending() == armed,
+             "an internal unproven retirement sends end_edit for armed and unarmed edits (R1/R7)");
+    }
+  }
+  Fixture fixture;
+  const auto id = fixture.begin_armed();
+  fixture.receive(core::LiveMessageType::error, std::string(core::live_edit_session_inactive), id);
+  const auto step = fixture.session.poll({});
+  expect(step.ended && !fixture.session.editing() && fixture.session.direct_drag_settled() &&
+             fixture.sent(core::LiveMessageType::end_edit).empty(),
+         "a capable current session's exact inactive error proves release without another end");
+}
+
+void release_moves_between_session_objects() {
+  for (const bool exit_proof : {false, true}) {
+    bool exited{};
+    Fixture source;
+    Fixture destination;
+    source.transport->exit_probe = [&] { return exited; };
+    (void)source.begin_armed();
+    (void)source.session.end(true);
+    auto moved = source.session.take_release();
+    if (!expect(moved && !source.session.release_pending() && !source.session.take_release(),
+                "taking release moves the obligation out of the original session")) continue;
+    destination.session.adopt_release(std::move(*moved));
+    expect(destination.session.release_pending() && !destination.session.direct_drag_settled(),
+           "the adopted obligation blocks Pick on the new session");
+    if (exit_proof) exited = true;
+    else destination.queue_ack();
+    (void)destination.session.poll({});
+    expect(!destination.session.release_pending() && destination.session.direct_drag_settled(),
+           "an adopting session can settle on either fresh authentication or the retained probe");
+  }
+}
+
+void session_ids_do_not_repeat_within_a_tick() {
+  Fixture first;
+  Fixture second;
+  const auto a = first.begin_armed();
+  const auto b = second.begin_armed();
+  (void)first.session.request_begin(target, {}, 2000);
+  const auto c = first.session.session_id();
+  expect(a != 0 && b != 0 && c != 0 && a != b && b != c && a != c,
+         "the same HWND gets distinct nonzero ids within and across sessions at one tick");
 }
 
 void end_and_pending_sends() {
@@ -522,6 +710,14 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(handshake_and_authentication),
                  LAYERC_TEST_CASE(anchor_ordering),
                  LAYERC_TEST_CASE(daemon_ends_direct_drag),
                  LAYERC_TEST_CASE(direct_drag_off_needs_confirmation),
+                 LAYERC_TEST_CASE(release_requires_matching_proof),
+                 LAYERC_TEST_CASE(superseded_session_keeps_its_release),
+                 LAYERC_TEST_CASE(release_needs_a_fresh_capable_connection),
+                 LAYERC_TEST_CASE(release_deadline_only_resets),
+                 LAYERC_TEST_CASE(failed_end_and_peer_exit),
+                 LAYERC_TEST_CASE(internal_retirement_notifies_layerd),
+                 LAYERC_TEST_CASE(release_moves_between_session_objects),
+                 LAYERC_TEST_CASE(session_ids_do_not_repeat_within_a_tick),
                  LAYERC_TEST_CASE(end_and_pending_sends),
                  LAYERC_TEST_CASE(heartbeat_cadence_and_target_loss),
                  LAYERC_TEST_CASE(committed_publish_and_forwarding))

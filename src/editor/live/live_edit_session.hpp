@@ -26,6 +26,8 @@ public:
   [[nodiscard]] virtual bool take_connection_changed() = 0;
   [[nodiscard]] virtual bool connected() const = 0;
   [[nodiscard]] virtual bool send(const layerc::core::LiveMessage &message) = 0;
+  virtual void reset() = 0;
+  [[nodiscard]] virtual std::function<bool()> peer_exit_probe() const = 0;
 };
 
 // The editor's client end of the LayerD live-edit named pipe. Tests name a
@@ -39,6 +41,8 @@ public:
   [[nodiscard]] bool take_connection_changed() override;
   [[nodiscard]] bool connected() const override;
   [[nodiscard]] bool send(const layerc::core::LiveMessage &message) override;
+  void reset() override;
+  [[nodiscard]] std::function<bool()> peer_exit_probe() const override;
   // The pipe's pending I/O events, for an owner that blocks between polls.
   [[nodiscard]] std::size_t wait_handles(std::span<HANDLE> output) const noexcept {
     return channel_.wait_handles(output);
@@ -128,6 +132,10 @@ struct LiveEditStep {
 // session: the handshake, session lifecycle, heartbeat, anchor ordering and
 // the coalesced live-profile send. It performs the protocol sends itself and
 // stamps revisions; it never touches windows or dialogs.
+struct DirectDragRelease {
+  std::function<bool()> probe;
+};
+
 class LiveEditSession final {
 public:
   using Clock = std::function<ULONGLONG()>;
@@ -168,12 +176,14 @@ public:
   [[nodiscard]] bool direct_drag_disarming() const noexcept {
     return disarm_revision_ != 0;
   }
-  // No bar can still take clicks for Direct drag: it is not on, nothing awaits
-  // LayerD's confirmation, and the lease of a session that ended while it might
-  // have been on has run out.
-  [[nodiscard]] bool direct_drag_settled() const {
-    return !armed_ && disarm_revision_ == 0 && clock_() >= release_by_;
+  [[nodiscard]] bool release_pending() const noexcept {
+    return reconnect_proof_needed_ || !releasing_.empty();
   }
+  [[nodiscard]] bool direct_drag_settled() const {
+    return !may_be_armed() && (!release_pending() || release_peer_exited());
+  }
+  [[nodiscard]] std::optional<DirectDragRelease> take_release();
+  void adopt_release(DirectDragRelease release);
   [[nodiscard]] bool live_profile_pending() const noexcept {
     return pending_live_profile_;
   }
@@ -191,8 +201,7 @@ public:
   [[nodiscard]] LiveEditBegin request_begin(HWND target,
                                             LiveEditBeginPayload payload,
                                             ULONGLONG await_ms);
-  // Sends end_edit for an active session when asked, and always retires the
-  // session, its pending target and any coalesced live-profile send.
+  // Ends locally; tells LayerD when asked or when Direct drag may still be on.
   [[nodiscard]] bool end(bool notify_daemon);
   // Coalesces one live-profile send; the next poll reports live_profile_due.
   void request_live_profile();
@@ -215,6 +224,7 @@ public:
   static constexpr ULONGLONG live_profile_interval_ms = 33;
   // How long LayerD has to confirm Direct drag is off before the session stops.
   static constexpr ULONGLONG direct_drag_ack_ms = 1000;
+  static constexpr ULONGLONG release_reset_ms = 2000;
 
 private:
   friend struct LiveEditSessionTestAccess;
@@ -224,9 +234,17 @@ private:
   void handle_message(const layerc::core::LiveMessage &message,
                       LiveEditStep &step,
                       const std::function<bool(std::string_view)> &panel_known);
-  // Ending a session while Direct drag might be on starts the lease wait
-  // that direct_drag_settled() observes.
-  void retire_session() noexcept;
+  [[nodiscard]] bool may_be_armed() const noexcept {
+    return armed_ || disarm_revision_ != 0;
+  }
+  [[nodiscard]] bool release_peer_exited() const {
+    return release_probe_ && release_probe_();
+  }
+  void clear_release();
+  void require_reconnect_proof();
+  void reset_for_release();
+  void finish_session(bool notify_daemon, bool force_reset = false);
+  void retire_session(bool proven);
 
   std::unique_ptr<LiveEditTransport> transport_;
   Clock clock_;
@@ -242,8 +260,12 @@ private:
   ULONGLONG live_profile_due_{};
   layerc::core::ProfileRevision disarm_revision_{};
   ULONGLONG disarm_deadline_{};
-  // Survives the session: until then a bar may still take clicks.
-  ULONGLONG release_by_{};
+  std::vector<layerc::core::EditSessionId> releasing_;
+  std::function<bool()> peer_exit_probe_;
+  std::function<bool()> release_probe_;
+  ULONGLONG release_deadline_{};
+  bool reconnect_proof_needed_{};
+  bool release_proof_capable_{};
   // LayerD may have Direct drag on: an on request went out, and neither its
   // off confirmation nor LayerD's own end has arrived.
   bool armed_{};

@@ -29,8 +29,8 @@ bool live_publish_allowed(const ProfileDocument &document) {
 }
 
 constexpr std::wstring_view direct_drag_unsent_status =
-    L"Direct drag could not reach LayerD, so on-window editing ended. LayerD "
-    L"makes the bars click-through again within two seconds.";
+    L"On-window editing ended — Direct drag off could not reach LayerD. "
+    L"Pick window waits until LayerD confirms its panels are click-through.";
 
 } // namespace
 
@@ -270,21 +270,22 @@ void EditorWindow::poll_live_channel() {
       break;
     case LiveEditEndReason::connection_lost:
       end_edit_on_window(
-          L"Live editor connection lost; normal overlays restored.", false);
+          L"On-window editing ended — the LayerD connection closed.", false);
       break;
     case LiveEditEndReason::target_closed:
       end_edit_on_window(L"Edit target closed or minimized.", false);
       break;
     case LiveEditEndReason::direct_drag_unconfirmed:
-      end_edit_on_window(L"LayerD did not confirm that Direct drag turned off, so "
-                         L"on-window editing ended. LayerD makes the bars "
-                         L"click-through again within two seconds.",
-                         false);
+      end_edit_on_window(
+          L"On-window editing ended — LayerD did not confirm Direct drag off. "
+          L"Pick window waits until LayerD confirms its panels are click-through.",
+          false);
       break;
     }
   }
   if (step.begin_ready) begin_edit_on_window(*step.begin_ready);
   if (step.pending_expired) {
+    cancel_picker();
     set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
     themed_message_box(shell_.window,
                 L"LayerD did not expose the live-edit service. Exit the "
@@ -428,6 +429,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
 
 void EditorWindow::end_edit_on_window(const std::wstring_view status,
                                       const bool notify_daemon) {
+  cancel_picker();
   // A cancelled gesture is discarded, never committed.
   panel_preview_.finish_drag();
   if (GetCapture() == panel_preview_.window) ReleaseCapture();

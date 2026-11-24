@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -72,13 +73,15 @@ struct EditorWindowTestAccess {
   }
   static FakeLiveEditTransport &bind_drag(EditorWindow &editor,
                                           const HWND owner, const HWND list,
-                                          const HWND preview) {
+                                          const HWND preview, const HWND status,
+                                          LiveEditSession::Clock clock) {
     editor.shell_.instance = GetModuleHandleW(nullptr);
     editor.shell_.window = owner;
     editor.panel_preview_.list = list;
     editor.panel_preview_.window = preview;
     editor.panel_preview_.controls_panel = 0;
-    auto &transport = LiveEditSessionTestAccess::install(editor.live_edit_);
+    editor.shell_.status = status;
+    auto &transport = LiveEditSessionTestAccess::install(editor.live_edit_, std::move(clock));
     transport.changed = false;
     LiveEditSessionTestAccess::authenticate(editor.live_edit_);
     LiveEditSessionTestAccess::begin_session(editor.live_edit_, preview, 42);
@@ -87,9 +90,15 @@ struct EditorWindowTestAccess {
   static void unbind_drag(EditorWindow &editor) {
     editor.end_edit_on_window({}, false);
     editor.shell_.window = nullptr;
+    editor.shell_.status = nullptr;
     editor.panel_preview_.list = nullptr;
     editor.panel_preview_.window = nullptr;
   }
+  static LiveEditSession &session(EditorWindow &editor) { return editor.live_edit_; }
+  static void poll(EditorWindow &editor) { editor.poll_live_channel(); }
+  static void begin_picker(EditorWindow &editor) { editor.begin_picker(); }
+  static bool picking(const EditorWindow &editor) { return editor.task_picker_.picking(); }
+  static void direct_drag_off(EditorWindow &editor) { editor.set_direct_drag_enabled(false); }
   static void receive_anchor(EditorWindow &editor,
                              const layerc::core::LiveMessage &message) {
     if (auto *transport = dynamic_cast<FakeLiveEditTransport *>(
@@ -166,7 +175,8 @@ INT_PTR CALLBACK fixture_dialog_proc(HWND, UINT, WPARAM, LPARAM) {
 
 class PromptAnswer final {
 public:
-  explicit PromptAnswer(const bool cancel) : cancel_(cancel) {
+  explicit PromptAnswer(const bool cancel, std::function<void()> before_answer = {})
+      : cancel_(cancel), before_answer_(std::move(before_answer)) {
     active_ = this;
     timer_ = SetTimer(nullptr, 0, 10, &on_timer);
     expect(timer_ != 0, "the disposable prompt responder should start");
@@ -187,10 +197,13 @@ private:
               GetDlgItem(window, IDC_PROMPT_TEXT) == nullptr)
             return TRUE;
           ++active_->count_;
+          if (active_->before_answer_) active_->before_answer_();
           // Messages go only to this test's own modal prompt, not input/game
           // windows. No input synthesis, hooks, or production data are used.
-          const int id = active_->cancel_ ? IDC_PROMPT_BUTTON3
-                                         : IDC_PROMPT_BUTTON2;
+          const int preferred = active_->cancel_ ? IDC_PROMPT_BUTTON3
+                                                : IDC_PROMPT_BUTTON2;
+          const int id = IsWindowVisible(GetDlgItem(window, preferred))
+                             ? preferred : IDC_PROMPT_BUTTON1;
           SendMessageW(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0);
           return FALSE;
         },
@@ -201,6 +214,7 @@ private:
   UINT_PTR timer_{};
   bool cancel_{};
   int count_{};
+  std::function<void()> before_answer_;
 };
 
 layerc::editor::EditorProfileSnapshot
@@ -511,8 +525,10 @@ public:
     preview_ = CreateWindowExW(0, L"STATIC", L"Preview", WS_CHILD,
                                 100, 0, 400, 300, owner_, nullptr,
                                 instance, nullptr);
-    if (!expect(owner_ != nullptr && list_ != nullptr && preview_ != nullptr,
-                "drag fixture owns its hidden shell/list/preview"))
+    status_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD, 0, 300, 500, 24,
+                              owner_, nullptr, instance, nullptr);
+    if (!expect(owner_ != nullptr && list_ != nullptr && preview_ != nullptr && status_ != nullptr,
+                "drag fixture owns its hidden shell/list/preview/status"))
       return;
     SendMessageW(list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ability"));
     SendMessageW(list_, LB_SETITEMDATA, 0, 0);
@@ -552,7 +568,8 @@ public:
     automation.profile_id = profile.id;
     document().start_draft(std::move(profile), layerc::editor::DraftOrigin::fresh,
                            std::move(visual), std::move(automation));
-    EditorWindowTestAccess::bind_drag(*editor_, owner_, list_, preview_);
+    transport_ = &EditorWindowTestAccess::bind_drag(*editor_, owner_, list_, preview_,
+                                                   status_, [this] { return now; });
     ready_ = true;
   }
   ~DragFixture() {
@@ -566,16 +583,123 @@ public:
   layerc::editor::ProfileDocument &document() {
     return EditorWindowTestAccess::document(*editor_);
   }
+  HWND owner() const noexcept { return owner_; }
   HWND preview() const noexcept { return preview_; }
   HWND other_owned_child() const noexcept { return list_; }
+  layerc::editor::FakeLiveEditTransport &transport() { return *transport_; }
+  std::wstring status() const {
+    wchar_t buffer[512]{};
+    GetWindowTextW(status_, buffer, static_cast<int>(std::size(buffer)));
+    return buffer;
+  }
   layerc::editor::EditorProfileSnapshot current() { return snapshot(document()); }
+  ULONGLONG now{1000};
 private:
   std::unique_ptr<layerc::editor::EditorWindow> editor_;
   HWND owner_{};
   HWND list_{};
   HWND preview_{};
+  HWND status_{};
+  layerc::editor::FakeLiveEditTransport *transport_{};
   bool ready_{};
 };
+
+void pick_ends_with_on_window_edit() {
+  using layerc::core::LiveMessageType;
+  using layerc::editor::LiveEditEndReason;
+  using layerc::editor::LiveEditSession;
+  for (const auto reason : {LiveEditEndReason::connection_lost,
+                            LiveEditEndReason::daemon_ended,
+                            LiveEditEndReason::direct_drag_unconfirmed,
+                            LiveEditEndReason::daemon_error,
+                            LiveEditEndReason::target_closed}) {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    auto &session = EditorWindowTestAccess::session(editor);
+    EditorWindowTestAccess::begin_picker(editor);
+    if (!expect(EditorWindowTestAccess::picking(editor) && GetCapture() == fixture.owner(),
+                "Pick holds capture before the edit ends")) return;
+    switch (reason) {
+    case LiveEditEndReason::connection_lost:
+      fixture.transport().online = false;
+      fixture.transport().changed = true;
+      break;
+    case LiveEditEndReason::daemon_ended:
+      fixture.transport().inbox.emplace_back(layerc::core::LiveMessage{
+          .type = LiveMessageType::end_edit, .edit_session = session.session_id()});
+      break;
+    case LiveEditEndReason::direct_drag_unconfirmed:
+      expect(session.send_direct_drag(false), "the fixture queues an off without a reply");
+      fixture.now += LiveEditSession::direct_drag_ack_ms;
+      break;
+    case LiveEditEndReason::daemon_error:
+      fixture.transport().inbox.emplace_back(layerc::core::LiveMessage{
+          .type = LiveMessageType::error, .edit_session = session.session_id(),
+          .text = "unknown panel id"});
+      break;
+    case LiveEditEndReason::target_closed:
+      EditorWindowTestAccess::begin_drag_session(editor, nullptr);
+      fixture.now += LiveEditSession::heartbeat_interval_ms;
+      break;
+    }
+    EditorWindowTestAccess::poll(editor);
+    expect(!session.editing() && !EditorWindowTestAccess::picking(editor) && GetCapture() == nullptr,
+           "polling an end of edit cancels Pick and releases shell capture");
+    if (reason == LiveEditEndReason::connection_lost)
+      expect(fixture.status() == L"On-window editing ended — the LayerD connection closed.",
+             "the connection-lost status does not claim the overlays are restored");
+    if (reason == LiveEditEndReason::direct_drag_unconfirmed)
+      expect(fixture.status() == L"On-window editing ended — LayerD did not confirm Direct drag off. "
+                                 L"Pick window waits until LayerD confirms its panels are click-through.",
+             "the unconfirmed status says Pick waits for proof");
+    if (EditorWindowTestAccess::picking(editor)) EditorWindowTestAccess::begin_picker(editor);
+  }
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    auto &session = EditorWindowTestAccess::session(editor);
+    (void)session.end(false);
+    fixture.transport().online = false;
+    fixture.transport().changed = true;
+    EditorWindowTestAccess::poll(editor);
+    expect(session.request_begin(fixture.preview(), {}, 1) ==
+               layerc::editor::LiveEditBegin::awaiting_daemon,
+           "the pending edit waits without launching a daemon");
+    EditorWindowTestAccess::begin_picker(editor);
+    if (!expect(EditorWindowTestAccess::picking(editor) && GetCapture() == fixture.owner(),
+                "Pick holds capture before the pending edit expires")) return;
+    ++fixture.now;
+    const PromptAnswer answer(false, [&] {
+      expect(!EditorWindowTestAccess::picking(editor) && GetCapture() != fixture.owner(),
+             "pending edit expiry cancels Pick before answering the modal prompt");
+    });
+    EditorWindowTestAccess::poll(editor);
+    expect(answer.count() == 1 && !EditorWindowTestAccess::picking(editor) && GetCapture() == nullptr,
+           "pending edit expiry releases capture and shows its prompt once");
+  }
+}
+
+void pick_refused_until_layerd_release() {
+  DragFixture fixture;
+  if (!fixture.ready()) return;
+  auto &editor = fixture.editor();
+  auto &session = EditorWindowTestAccess::session(editor);
+  expect(session.send_direct_drag(true), "the fake accepts Direct drag on");
+  fixture.transport().accept_send = false;
+  EditorWindowTestAccess::direct_drag_off(editor);
+  expect(!session.editing() && session.release_pending() &&
+             fixture.status() == L"On-window editing ended — Direct drag off could not reach LayerD. "
+                                 L"Pick window waits until LayerD confirms its panels are click-through.",
+         "an unsent off ends editing and its status says Pick waits for proof");
+  fixture.now += 10000;
+  EditorWindowTestAccess::begin_picker(editor);
+  expect(!EditorWindowTestAccess::picking(editor) && GetCapture() == nullptr &&
+             fixture.status() == L"Pick window unavailable — LayerD has not confirmed its panels "
+                                 L"are click-through. Choose the window from the list, or try again.",
+         "Pick refusal keeps capture free and gives the window-list alternative while release is pending");
+}
 
 layerc::core::LiveMessage anchor_message(
     const layerc::core::ProfileRevision revision, const double x, const double y,
@@ -598,6 +722,8 @@ void editor_drag_transaction_contracts() {
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
                                 .dwICC = ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
+  pick_ends_with_on_window_edit();
+  pick_refused_until_layerd_release();
   // 1. A remote non-final is a visible projection, never a document edit.
   {
     DragFixture fixture;

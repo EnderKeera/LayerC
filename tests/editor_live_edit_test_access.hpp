@@ -17,6 +17,8 @@ public:
   bool online{true};
   bool changed{true};
   bool accept_send{true};
+  unsigned resets{};
+  std::function<bool()> exit_probe;
 
   [[nodiscard]] std::vector<layerc::core::LiveMessageResult> poll() override {
     auto drained = std::move(inbox);
@@ -35,6 +37,16 @@ public:
     return true;
   }
 
+  void reset() override {
+    ++resets;
+    changed = changed || online;
+    online = false;
+    inbox.clear();
+  }
+  [[nodiscard]] std::function<bool()> peer_exit_probe() const override {
+    return exit_probe;
+  }
+
   [[nodiscard]] std::vector<layerc::core::LiveMessage>
   sent_of(const layerc::core::LiveMessageType type) const {
     std::vector<layerc::core::LiveMessage> matches;
@@ -49,10 +61,11 @@ public:
 // controller without a daemon.
 struct LiveEditSessionTestAccess {
   // Replaces the session's transport, handing the fake to the session.
-  static FakeLiveEditTransport &install(LiveEditSession &session) {
+  static FakeLiveEditTransport &install(
+      LiveEditSession &session, LiveEditSession::Clock clock = [] { return ::GetTickCount64(); }) {
     auto owned = std::make_unique<FakeLiveEditTransport>();
     auto *raw = owned.get();
-    session = LiveEditSession(std::move(owned));
+    session = LiveEditSession(std::move(owned), std::move(clock));
     return *raw;
   }
   static void begin_session(LiveEditSession &session, const HWND target,
@@ -65,13 +78,14 @@ struct LiveEditSessionTestAccess {
     session.direct_drag_notice_shown_ = false;
   }
   static void clear_session(LiveEditSession &session) {
-    session.retire_session();
+    session.retire_session(false);
   }
   [[nodiscard]] static LiveEditTransport *transport_of(LiveEditSession &session) {
     return session.transport_.get();
   }
   static void authenticate(LiveEditSession &session) {
     session.authenticated_ = true;
+    session.release_proof_capable_ = true;
   }
 };
 

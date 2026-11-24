@@ -1,7 +1,9 @@
 #include "live_edit_session.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <exception>
 #include <utility>
 
 namespace layerc::editor {
@@ -10,10 +12,22 @@ namespace {
 using layerc::core::LiveMessage;
 using layerc::core::LiveMessageType;
 
-[[nodiscard]] layerc::core::EditSessionId next_session_id(const HWND target) {
-  return (static_cast<std::uint64_t>(GetTickCount64()) << 16U) ^
-         (static_cast<std::uint64_t>(GetCurrentProcessId()) << 1U) ^
-         reinterpret_cast<std::uintptr_t>(target);
+[[nodiscard]] layerc::core::EditSessionId next_session_id() {
+  static std::atomic<layerc::core::EditSessionId> next{1};
+  const auto id = next.fetch_add(1, std::memory_order_relaxed);
+  if (id == 0) std::terminate();
+  return id;
+}
+
+[[nodiscard]] bool has_release_proof_capability(std::string_view capabilities) {
+  while (!capabilities.empty()) {
+    const auto comma = capabilities.find(',');
+    if (capabilities.substr(0, comma) == layerc::core::live_release_proof_capability)
+      return true;
+    if (comma == std::string_view::npos) break;
+    capabilities.remove_prefix(comma + 1);
+  }
+  return false;
 }
 
 void stamp_revision(LiveMessage &message,
@@ -42,6 +56,12 @@ bool PipeLiveEditTransport::send(const LiveMessage &message) {
   return channel_.send(message);
 }
 
+void PipeLiveEditTransport::reset() { channel_.reset_connection(); }
+
+std::function<bool()> PipeLiveEditTransport::peer_exit_probe() const {
+  return channel_.peer_exit_probe();
+}
+
 LiveEditSession::LiveEditSession(std::unique_ptr<LiveEditTransport> transport,
                                  Clock clock, TargetUsable target_usable)
     : transport_(std::move(transport)), clock_(std::move(clock)),
@@ -59,11 +79,58 @@ bool LiveEditSession::send(const LiveMessage &message) {
   return transport_->send(message);
 }
 
-void LiveEditSession::retire_session() noexcept {
-  // Without a confirmed off, LayerD keeps Direct drag until it sees the end or
-  // the lease expires; either is over by the lease release bound.
-  if (session_id_ != 0 && (armed_ || disarm_revision_ != 0))
-    release_by_ = clock_() + static_cast<ULONGLONG>(layerc::core::live_edit_lease_release.count());
+void LiveEditSession::clear_release() {
+  releasing_.clear();
+  reconnect_proof_needed_ = false;
+  release_probe_ = {};
+  release_deadline_ = 0;
+}
+
+void LiveEditSession::require_reconnect_proof() {
+  if (!release_pending()) return;
+  releasing_.clear();
+  reconnect_proof_needed_ = true;
+}
+
+void LiveEditSession::reset_for_release() {
+  transport_->reset();
+  authenticated_ = false;
+  release_proof_capable_ = false;
+  require_reconnect_proof();
+  release_deadline_ = clock_() + release_reset_ms;
+}
+
+std::optional<DirectDragRelease> LiveEditSession::take_release() {
+  if (!release_pending()) return std::nullopt;
+  DirectDragRelease release{std::move(release_probe_)};
+  clear_release();
+  return release;
+}
+
+void LiveEditSession::adopt_release(DirectDragRelease release) {
+  if (!release_pending()) release_deadline_ = clock_() + release_reset_ms;
+  reconnect_proof_needed_ = true;
+  release_probe_ = std::move(release.probe);
+}
+
+void LiveEditSession::finish_session(const bool notify_daemon, const bool force_reset) {
+  const bool potentially_armed = session_id_ != 0 && may_be_armed();
+  const bool should_send = session_id_ != 0 && authenticated_ &&
+                           (notify_daemon || potentially_armed);
+  const bool send_failed = should_send && !send({.type = LiveMessageType::end_edit,
+                                               .revision = revision_,
+                                               .edit_session = session_id_});
+  retire_session(false);
+  if (force_reset || (potentially_armed && send_failed)) reset_for_release();
+}
+
+void LiveEditSession::retire_session(const bool proven) {
+  if (session_id_ != 0 && may_be_armed() && !proven) {
+    if (!release_pending()) release_deadline_ = clock_() + release_reset_ms;
+    if (peer_exit_probe_) release_probe_ = peer_exit_probe_;
+    if (authenticated_ && connected()) releasing_.push_back(session_id_);
+    else reconnect_proof_needed_ = true;
+  }
   armed_ = false;
   disarm_revision_ = 0;
   disarm_deadline_ = 0;
@@ -87,7 +154,12 @@ void LiveEditSession::handle_message(
         step.authentication_rejected = true;
         return;
       }
+      if (!connected()) return;
       authenticated_ = true;
+      release_proof_capable_ = has_release_proof_capability(
+          std::string_view(message.text).substr(expected.size()));
+      peer_exit_probe_ = transport_->peer_exit_probe();
+      if (reconnect_proof_needed_ && release_proof_capable_) clear_release();
       step.authenticated_now = true;
       return;
     }
@@ -109,19 +181,22 @@ void LiveEditSession::handle_message(
     step.session_acknowledged = true;
     return;
   }
-  if (message.type == LiveMessageType::error) {
-    if (session_id_ != 0 && message.edit_session == session_id_) {
-      step.ended = LiveEditEnd{LiveEditEndReason::daemon_error, message.text};
-      retire_session();
+  if (message.type == LiveMessageType::error ||
+      message.type == LiveMessageType::end_edit) {
+    const bool ended = message.type == LiveMessageType::end_edit;
+    const bool proven = release_proof_capable_ &&
+                        (ended || message.text == layerc::core::live_edit_session_inactive);
+    if (proven && std::erase(releasing_, message.edit_session) != 0) {
+      if (!release_pending()) clear_release();
       return;
     }
-    step.forwarded.push_back(message);
-    return;
-  }
-  if (message.type == LiveMessageType::end_edit) {
     if (session_id_ != 0 && message.edit_session == session_id_) {
-      step.ended = LiveEditEnd{LiveEditEndReason::daemon_ended, message.text};
-      retire_session();
+      step.ended = LiveEditEnd{ended ? LiveEditEndReason::daemon_ended
+                                    : LiveEditEndReason::daemon_error, message.text};
+      if (proven || ended) retire_session(proven);
+      else finish_session(true);
+    } else if (!ended) {
+      step.forwarded.push_back(message);
     }
     return;
   }
@@ -163,28 +238,33 @@ void LiveEditSession::handle_message(
 LiveEditStep LiveEditSession::poll(
     const std::function<bool(std::string_view panel_id)> &panel_known) {
   LiveEditStep step;
-  for (auto &result : transport_->poll()) {
-    if (const auto *error =
-            std::get_if<layerc::core::LiveProtocolError>(&result)) {
-      step.protocol_errors.push_back(*error);
-      continue;
-    }
-    handle_message(std::get<LiveMessage>(result), step, panel_known);
-  }
+  auto results = transport_->poll();
   if (transport_->take_connection_changed()) {
     authenticated_ = false;
+    release_proof_capable_ = false;
     // A reconnect can arrive inside one poll interval, so any session is
     // retired here: it was negotiated with a daemon this editor no longer has.
     if (session_id_ != 0) {
       step.ended = LiveEditEnd{LiveEditEndReason::connection_lost, {}};
-      retire_session();
+      retire_session(false);
     }
+    require_reconnect_proof();
+    peer_exit_probe_ = {};
     if (transport_->connected()) {
       step.authenticating = true;
       (void)send({.type = LiveMessageType::handshake,
                   .revision = revision_,
                   .text = layerc::core::package_identity("LayerE")});
     }
+  }
+
+  for (const auto &result : results) {
+    if (const auto *error =
+            std::get_if<layerc::core::LiveProtocolError>(&result)) {
+      step.protocol_errors.push_back(*error);
+      continue;
+    }
+    handle_message(std::get<LiveMessage>(result), step, panel_known);
   }
 
   // An off request LayerD never confirmed: stop the session, so no heartbeat
@@ -209,12 +289,13 @@ LiveEditStep LiveEditSession::poll(
   if (authenticated_ && session_id_ != 0 &&
       clock_() - last_heartbeat_send_ >= heartbeat_interval_ms) {
     last_heartbeat_send_ = clock_();
-    (void)send({.type = LiveMessageType::heartbeat,
-                .revision = revision_,
-                .edit_session = session_id_});
     if (!target_usable_(target_)) {
       step.ended = LiveEditEnd{LiveEditEndReason::target_closed, {}};
-      retire_session();
+      (void)end(true);
+    } else {
+      (void)send({.type = LiveMessageType::heartbeat,
+                  .revision = revision_,
+                  .edit_session = session_id_});
     }
   }
 
@@ -222,6 +303,11 @@ LiveEditStep LiveEditSession::poll(
     pending_live_profile_ = false;
     live_profile_due_ = 0;
     step.live_profile_due = true;
+  }
+
+  if (release_pending()) {
+    if (release_peer_exited()) clear_release();
+    else if (clock_() >= release_deadline_) reset_for_release();
   }
 
   // Poll at frame rate only while a session exchanges drags and heartbeats;
@@ -238,11 +324,12 @@ LiveEditStep LiveEditSession::poll(
 LiveEditBegin LiveEditSession::request_begin(const HWND target,
                                              LiveEditBeginPayload payload,
                                              const ULONGLONG await_ms) {
+  if (editing()) (void)end(true);
   if (transport_->connected() && authenticated_) {
     pending_target_ = nullptr;
     pending_deadline_ = 0;
     target_ = target;
-    session_id_ = next_session_id(target);
+    session_id_ = next_session_id();
     peer_revision_ = 0;
     direct_drag_notice_shown_ = false;
     advance_revision();
@@ -273,16 +360,16 @@ std::optional<ULONGLONG> LiveEditSession::next_due() const {
     consider(last_heartbeat_send_ + heartbeat_interval_ms);
   if (pending_live_profile_) consider(live_profile_due_);
   if (session_id_ != 0 && disarm_revision_ != 0) consider(disarm_deadline_);
+  if (release_pending()) {
+    consider(release_deadline_);
+    if (!connected()) consider(now + 100);
+  }
   return due;
 }
 
 bool LiveEditSession::end(const bool notify_daemon) {
-  const bool was_active = session_id_ != 0;
-  if (notify_daemon && was_active)
-    (void)send({.type = LiveMessageType::end_edit,
-                .revision = revision_,
-                .edit_session = session_id_});
-  retire_session();
+  const bool was_active = editing();
+  finish_session(notify_daemon);
   return was_active;
 }
 
@@ -327,11 +414,8 @@ bool LiveEditSession::send_direct_drag(const bool enabled) {
              .revision = revision_,
              .edit_session = session_id_,
              .direct_drag = enabled})) {
-    // A lost request could leave bars taking clicks while heartbeats keep
-    // LayerD's lease alive: stop the session instead. LayerD's state is now
-    // unknown, so the lease wait applies.
     armed_ = true;
-    (void)end(true);
+    finish_session(true, true);
     return false;
   }
   if (enabled) {
