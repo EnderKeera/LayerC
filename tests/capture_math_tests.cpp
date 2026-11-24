@@ -329,6 +329,8 @@ void wgc_refusal_releases_before_runtime_teardown() {
       CreateWindowExW(0, L"STATIC", L"LayerC WGC refusal target", 0, 0, 0, 0, 0,
                       HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
   expect(window != nullptr, "the message-only target window must be created");
+  if (window == nullptr)
+    return;
   // Repeated sessions each initialize and uninitialize the WinRT runtime.
   for (int attempt = 0; attempt < 3; ++attempt) {
     layerc::capture::WindowCaptureSession session(
@@ -354,6 +356,8 @@ void wgc_zero_size_target_has_complete_diagnostic() {
       L"LayerC WGC zero-size target", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
       GetModuleHandleW(nullptr), nullptr);
   expect(window != nullptr, "the zero-size target window must be created");
+  if (window == nullptr)
+    return;
   ShowWindow(window, SW_SHOWNOACTIVATE);
   layerc::capture::WindowCaptureSession session(
       window, {.allow_desktop_duplication = false});
