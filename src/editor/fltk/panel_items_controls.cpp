@@ -153,6 +153,12 @@ void PanelItemsControls::show(const core::GameProfile &profile,
   select();
 }
 
+void PanelItemsControls::clear_reason() {
+  reason_->hide();
+  for (auto *button : {add_, edit_, remove_})
+    accessibility::describe_with_tooltip(*button, "");
+}
+
 std::optional<std::size_t> PanelItemsControls::selected() const {
   const auto row = items_->value();
   if (row < 1 || row > items_->size()) return std::nullopt;

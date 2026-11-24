@@ -119,6 +119,7 @@ void PanelPreview::draw() {
     const auto caption = "Positioning on " +
         (target.title.empty() ? std::string("window") : target.title) +
         " (" + std::to_string(target.width) + "x" + std::to_string(target.height) + ")";
+    fl_color(labelcolor());
     fl_draw(caption.c_str(), frame.x + 4, frame.y + 14);
   }
   if (app_.session.has_document()) {

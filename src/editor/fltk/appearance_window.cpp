@@ -3,6 +3,7 @@
 #include "diagnostics_window.hpp"
 #include "editor_color.hpp"
 #include "editor_style.hpp"
+#include "options_window.hpp"
 #include "profile_mutations.hpp"
 #include "platform/editor_appearance_store.hpp"
 #include "platform/window_chrome.hpp"
@@ -122,6 +123,7 @@ SystemRoleColors system_role_set() {
     colors.control[index] = system_role_colors(static_cast<EditorRole>(index), false);
   }
   colors.verbose = current_editor_tokens().verbose;
+  colors.foreground = rgb_of(FL_FOREGROUND_COLOR);
   return colors;
 }
 
@@ -169,6 +171,7 @@ void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_
     paint(widget, *colors, label,
           editor_style_contrast_palette() ||
               !appearance.overrides[static_cast<std::size_t>(*role)].text.has_value());
+    if (widget == preview) widget->labelcolor(fl(colors->text));
     // Fl_Tabs fills each unselected tab with its page's selection colour and
     // only the selected tab with its own: neutral pages keep the accent tint
     // on the selected tab alone.
@@ -199,9 +202,16 @@ struct PairScope {
   const Fl_Widget *preview{};
   bool preset{};
   std::vector<PaintedTextPair> pairs;
-  void add(const EditorRole text, const TextInk ink, const PaintedSurface ground) {
-    const PaintedTextPair pair{text, ink, ground};
+  void add(const PaintedTextPair &pair) {
     if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end()) pairs.push_back(pair);
+  }
+  void add(const EditorRole text, const TextInk ink, const PaintedSurface ground) {
+    add({text, ink, ground});
+  }
+  void add(const PaintedText &text, const PaintedSurface ground) {
+    add({ground.role, TextInk::role_text, ground, text.ink, text.purpose, false});
+    if (text.dimmed_variant)
+      add({ground.role, TextInk::role_text, ground, text.ink, text.purpose, true});
   }
 };
 
@@ -213,6 +223,11 @@ void collect_pairs(Fl_Widget &widget, PairScope &scope, const PaintedSurface gro
   PaintedSurface beneath = ground;
   if (role && paints_surface(widget))
     beneath = {*role, dynamic_cast<Fl_Input_ *>(&widget) != nullptr, SurfacePart::fill};
+  const auto *painter = dynamic_cast<const PaintedTextSource *>(&widget);
+  if (painter)
+    for (const auto &text : painter->painted_text())
+      scope.add(text, text.ground == PaintedGround::own_fill && role
+                          ? PaintedSurface{*role, false, SurfacePart::fill} : ground);
   // All primary buttons use the same accent palette, checked separately.
   const bool primary = is_primary_button(widget);
   if (role && !primary) {
@@ -228,7 +243,10 @@ void collect_pairs(Fl_Widget &widget, PairScope &scope, const PaintedSurface gro
       scope.add(*role, TextInk::role_text, beneath);
     }
     const char *label = widget.label();
-    if (label != nullptr && *label != '\0' && widget.labeltype() != FL_NO_LABEL &&
+    // A painting box draws its label in its fixed ink (declared above); a
+    // painting browser still draws its caption in the Labels text.
+    const bool label_painted = painter && dynamic_cast<Fl_Box *>(&widget);
+    if (!label_painted && label != nullptr && *label != '\0' && widget.labeltype() != FL_NO_LABEL &&
         !widget.as_window()) {
       if (tabs) {
         // FLTK 1.4 Fl_Tabs::draw_tab: the selected tab on the tabs' selection
@@ -387,6 +405,7 @@ public:
         for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
           if (window != &root_ && window != this && appearance_document_window(*window))
             collect_pairs(*window, scope, background);
+        for (const auto &hint : options_painted_text) scope.add(hint, background);
         failure_ = first_role_contrast_failure(staged, system_role_set(), scope.pairs);
         if (!failure_) failure_ = primary_contrast_failure(*apply_, staged);
         if (!failure_) failure_ = shared_appearance_failure(staged);
@@ -438,7 +457,11 @@ private:
         else
           focus = accent;
       }
-      if (failure_->ground && !staged.overrides[static_cast<std::size_t>(failure_->role)].text) {
+      if (failure_->purpose) {
+        selected = *failure_->ground;
+        focus = fill;
+      } else if (failure_->ground &&
+                 !staged.overrides[static_cast<std::size_t>(failure_->role)].text) {
         const auto &ground = staged.overrides[static_cast<std::size_t>(*failure_->ground)];
         const bool on_selection = failure_->ground_part == SurfacePart::selection;
         if (on_selection ? ground.selection.has_value() : ground.fill.has_value()) {

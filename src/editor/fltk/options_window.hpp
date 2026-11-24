@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor_appearance.hpp"
 #include "platform/editor_options.hpp"
 
 #include <FL/Fl_Double_Window.H>
@@ -14,7 +15,9 @@ namespace layerc::editor {
 
 class EditorApp;
 class EditorChoice;
-struct EditorAppearance;
+// FLTK-dimmed labels belong to the deferred Disabled / Fill class.
+inline constexpr std::array options_painted_text{
+    PaintedText{FixedInk::subtext, PaintedGround::beneath, PaintedPurpose::options_hint, false}};
 
 class OptionsWindow final : public Fl_Double_Window {
 public:

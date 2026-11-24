@@ -59,6 +59,8 @@ struct EditorTokens {
   std::uint32_t yes{}, no{}, warning{}, accent_2{}, on_status{};
   bool operator==(const EditorTokens &) const = default;
 };
+enum class FixedInk : std::uint8_t { secondary, subtext };
+[[nodiscard]] std::uint32_t fixed_ink(const EditorTokens &tokens, FixedInk ink) noexcept;
 [[nodiscard]] EditorTokens editor_tokens(const EditorAppearance &appearance) noexcept;
 // Body text size and this app's scale, from the desktop's pixel size: the
 // scale leaves the base size alone when the desktop asks for more than 14 px.
@@ -87,16 +89,34 @@ struct DesktopTextMetrics {
 // `system_roles` (FLTK's own colours) with the overrides applied, and only
 // pairs with at least one overridden colour: untouched desktop colours never
 // refuse.
+enum class PaintedGround : std::uint8_t { own_fill, beneath };
+enum class PaintedPurpose : std::uint8_t {
+  empty_list_title, empty_list_hint, disabled_reason, options_hint
+};
+struct PaintedText {
+  FixedInk ink;
+  PaintedGround ground;
+  PaintedPurpose purpose;
+  bool dimmed_variant;
+};
+class PaintedTextSource {
+public:
+  [[nodiscard]] virtual std::span<const PaintedText> painted_text() const noexcept = 0;
+protected:
+  ~PaintedTextSource() = default;
+};
+
 enum class SurfacePart : std::uint8_t { fill, selection };
 struct RoleContrastFailure {
   EditorRole role{};
   ContrastPairKind pair{};
   double ratio{};
-  // The role whose colour the text is painted on, when that is not the
-  // role's own fill (a painted pair below).
+  // The role whose colour the text is painted on, for mixed roles or fixed ink.
   std::optional<EditorRole> ground;
   SurfacePart ground_part{SurfacePart::fill};
   bool primary_button{};
+  std::optional<PaintedPurpose> purpose{};
+  bool dimmed{};
   bool operator==(const RoleContrastFailure &) const = default;
 };
 [[nodiscard]] std::optional<RoleContrastFailure>
@@ -121,6 +141,9 @@ struct PaintedTextPair {
   EditorRole text{};
   TextInk ink{TextInk::role_text};
   PaintedSurface ground{};
+  std::optional<FixedInk> fixed{};
+  std::optional<PaintedPurpose> purpose{};
+  bool dimmed{};
   bool operator==(const PaintedTextPair &) const = default;
 };
 // FLTK's own colours under the System theme: each role as an input field
@@ -129,6 +152,7 @@ struct SystemRoleColors {
   std::array<RoleColors, editor_role_count> field{};
   std::array<RoleColors, editor_role_count> control{};
   std::uint32_t verbose{};
+  std::uint32_t foreground{};
   bool operator==(const SystemRoleColors &) const = default;
 };
 // The nominal pairs above (the System edit role measured as a field and as a
@@ -142,6 +166,7 @@ first_role_contrast_failure(const EditorAppearance &appearance, const SystemRole
 // for a painted pair "Labels: Text / Fill contrast is 1.3:1 on the Window
 // fill; at least 4.5:1 is required."
 [[nodiscard]] std::string role_contrast_failure_text(const RoleContrastFailure &failure);
+[[nodiscard]] std::uint32_t fltk_inactive_rgb(std::uint32_t fill, std::uint32_t partner) noexcept;
 
 // The 1 px outline of a flat control filled with `fill`: a third of the way
 // toward white on dark fills and toward black on light ones.

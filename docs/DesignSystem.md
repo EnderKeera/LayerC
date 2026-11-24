@@ -239,9 +239,14 @@ edit; border contrast remains advisory. It checks that merged record again
 before writing. Primary actions must also clear 4.5:1 on the accent and
 their painted hover and pressed fills. This uses each painter's actual ink,
 so a custom accent can be refused without changing the preset token rule.
-Appearance checks open tool windows and both Diagnostics text modes. In
-System, an untouched desktop pair never refuses, but each pair that uses an
-overridden color is checked. The refusal never comes as a surprise:
+Appearance checks open tool windows and both Diagnostics text modes. It also
+checks the fixed ink a control paints on its fill or the fill beneath it:
+empty-list titles and hints (including the dimmed list fill with no profile
+open), disabled-button reasons and Options hints. These inks ignore Text
+overrides; System checks them only when that fill is overridden. The
+positioning caption uses Preview text. In System, an untouched desktop pair
+never refuses, but each pair that uses an overridden color is checked. The
+refusal never comes as a surprise:
 
 - **While picking,** Choose color shows one line under its preview with the
   pair nearest its minimum (the lowest ratio over minimum among the colors

@@ -161,6 +161,13 @@ void linux_editor_page_lists_clear_without_document() {
              editor::EditorAppTestAccess::bindings(app)->size() > 0 &&
              editor::EditorAppTestAccess::panels(app)->size() > 0,
          "the fixture fills the cooldown, binding and panel lists");
+  using Access = editor::EditorAppTestAccess;
+  const auto *cooldown_reason = Access::remove_cooldown_reason(app);
+  const auto *item_reason = Access::item_reason(app);
+  const auto has_tip = [](const Fl_Widget &widget) { return widget.tooltip() && *widget.tooltip(); };
+  expect(cooldown_reason->visible() && item_reason->visible() &&
+             has_tip(*Access::remove_cooldown(app)) && has_tip(*Access::remove_item(app)),
+         "the single cooldown and item expose their remove reason and tooltip");
   app.session.close_document();
   app.refresh();
   expect(!app.session.has_document() &&
@@ -168,6 +175,9 @@ void linux_editor_page_lists_clear_without_document() {
              editor::EditorAppTestAccess::bindings(app)->size() == 0 &&
              editor::EditorAppTestAccess::panels(app)->size() == 0,
          "closing the document clears every page list");
+  expect(!cooldown_reason->visible() && !item_reason->visible() &&
+             !has_tip(*Access::remove_cooldown(app)) && !has_tip(*Access::remove_item(app)),
+         "closing the document hides both reasons and clears the guarded buttons' tooltips");
   editor::EditorAppTestAccess::window(app).hide();
 }
 

@@ -694,6 +694,53 @@ drive_appearance(Fl_Window &root, ModalAction action, bool &delivered) {
   return result;
 }
 
+void appearance_contrast_theme_sets_fixed_ink_aside() {
+  const SettingsFixture fixture;
+  if (!expect(fixture.ready(), "isolate registry and profile store")) return;
+  const ContrastOverride reset;
+  platform::set_native_high_contrast_override(false);
+  editor::EditorApp app;
+  app.build();
+  using Access = editor::EditorAppTestAccess;
+  auto &root = Access::window(app);
+  auto *profiles = Access::profiles(app);
+  auto *preview = Access::preview(app);
+  root.show();
+  Fl::check();
+
+  editor::EditorAppearance draft;
+  constexpr auto role = editor::EditorRole::sidebar;
+  constexpr auto index = static_cast<std::size_t>(role);
+  draft.overrides[index].fill = 0x444444;
+  draft.overrides[index].text = 0xFFFFFF;
+  const auto pairs = editor::painted_text_pairs(root, profiles, preview, true);
+  const auto failure = editor::first_role_contrast_failure(draft, editor::SystemRoleColors{}, pairs);
+  expect(failure && failure->purpose == editor::PaintedPurpose::empty_list_hint &&
+             failure->ground == role,
+         "this would be a Profile list fixed-ink failure without a contrast theme");
+
+  platform::set_native_high_contrast_override(true);
+  std::optional<editor::EditorAppearance> result;
+  const auto delivered = drive_appearance_dialogs([&] {
+    result = editor::edit_editor_appearance(draft, root, profiles, preview);
+  }, {[](Fl_Window &modal) {
+    auto *apply = child(modal, "Apply");
+    std::string_view line;
+    bool warning{};
+    for (int i = 0; i + 1 < modal.children(); ++i)
+      if (auto *mark = dynamic_cast<editor::EditorStatusMark *>(modal.child(i))) {
+        warning = mark->kind() == editor::StatusKind::warning;
+        if (const auto *label = modal.child(i + 1)->label()) line = label;
+      }
+    expect(!warning && line == "A contrast theme is on, so Windows colors are in use.",
+           "the contrast notice replaces the fixed-ink warning");
+    if (expect(apply, "Appearance has an Apply action")) apply->do_callback();
+  }});
+  expect(delivered && result == draft, "the contrast theme sets aside the fixed-ink floor without losing the draft");
+  platform::set_native_high_contrast_override(false);
+  editor::apply_editor_appearance({}, root, profiles, preview);
+}
+
 void appearance_command_retries_after_failed_merge_read() {
   const SettingsFixture fixture;
   if (!expect(fixture.ready(), "isolate registry and profile store")) return;
@@ -1102,6 +1149,7 @@ int main(const int argc, char **argv) {
       LAYERC_TEST_CASE(text_scale_startup_and_keys),
       LAYERC_TEST_CASE(contrast_mapping_and_desktop_listener),
       LAYERC_TEST_CASE(appearance_contrast_theme_sets_floors_aside),
+      LAYERC_TEST_CASE(appearance_contrast_theme_sets_fixed_ink_aside),
       LAYERC_TEST_CASE(appearance_shared_record_floors),
       LAYERC_TEST_CASE(appearance_primary_button_and_system_floors),
       LAYERC_TEST_CASE(caption_decoration_and_pruning),

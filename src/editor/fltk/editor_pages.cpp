@@ -106,12 +106,18 @@ void describe_application(Fl_Input &field, const core::GameMatch &game) {
     accessibility::describe_with_tooltip(field, tip);
 }
 
-class DisabledReason final : public Fl_Box {
+class DisabledReason final : public Fl_Box, public PaintedTextSource {
 public:
   using Fl_Box::Fl_Box;
+  [[nodiscard]] std::span<const PaintedText> painted_text() const noexcept override {
+    // FLTK-dimmed labels belong to the deferred Disabled / Fill class.
+    static constexpr std::array text{PaintedText{FixedInk::subtext, PaintedGround::beneath,
+                                                 PaintedPurpose::disabled_reason, false}};
+    return text;
+  }
 private:
   void draw() override {
-    const auto ink = current_editor_tokens().subtext;
+    const auto ink = fixed_ink(current_editor_tokens(), painted_text().front().ink);
     labelcolor(fl_rgb_color(static_cast<uchar>(ink >> 16U),
                             static_cast<uchar>(ink >> 8U), static_cast<uchar>(ink)));
     Fl_Box::draw();
@@ -395,7 +401,11 @@ void CooldownPage::build(FormBuilder &builder) {
   cooldown_tab_->end();
 }
 
-void CooldownPage::clear_list() { cooldowns_->clear(); }
+void CooldownPage::clear_list() {
+  cooldowns_->clear();
+  remove_reason_->hide();
+  accessibility::describe_with_tooltip(*remove_, "");
+}
 
 void CooldownPage::fill_list(const layerc::core::GameProfile &profile,
                              const std::optional<std::size_t> selected) {
@@ -598,7 +608,10 @@ void PanelPage::build(FormBuilder &builder) {
   panel_tab_->end();
 }
 
-void PanelPage::clear_list() { panels_->clear(); }
+void PanelPage::clear_list() {
+  panels_->clear();
+  items_.clear_reason();
+}
 
 void PanelPage::fill_list(const layerc::core::GameProfile &profile,
                           const std::optional<std::size_t> selected) {

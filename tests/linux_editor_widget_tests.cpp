@@ -57,6 +57,8 @@ void linux_editor_accessibility_popup_focus_events();
 void linux_editor_accessibility_keeps_fltk_file_chooser();
 void linux_editor_review_regressions();
 void linux_editor_empty_state_contracts();
+void linux_editor_inactive_rgb_matches_fltk();
+void linux_editor_preview_caption_uses_preview_ink();
 void linux_editor_shortcuts_columns();
 void linux_editor_diagnostic_text_contracts();
 void linux_editor_command_registry_contracts();
@@ -85,6 +87,8 @@ void linux_editor_calibration_layout_contracts();
 void linux_editor_black_accent_dialog_contracts();
 void linux_editor_appearance_contrast_floor_dialog();
 void linux_editor_appearance_painted_pairs_dialog();
+void linux_editor_fixed_painters_in_real_tree();
+void linux_editor_fixed_ink_appearance_dialog();
 void linux_editor_main_window_text_and_tab_labels();
 void linux_editor_text_views_fit_content();
 void linux_editor_empty_automation_simulator_ready();
@@ -1139,6 +1143,8 @@ int main() {
   LAYERC_TEST_CASE(linux_editor_black_accent_dialog_contracts),
   LAYERC_TEST_CASE(linux_editor_appearance_contrast_floor_dialog),
   LAYERC_TEST_CASE(linux_editor_appearance_painted_pairs_dialog),
+  LAYERC_TEST_CASE(linux_editor_fixed_painters_in_real_tree),
+  LAYERC_TEST_CASE(linux_editor_fixed_ink_appearance_dialog),
   LAYERC_TEST_CASE(linux_editor_main_window_text_and_tab_labels),
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
   LAYERC_TEST_CASE(linux_editor_empty_automation_simulator_ready),
@@ -1160,6 +1166,8 @@ int main() {
   LAYERC_TEST_CASE(linux_editor_design_system_paint_contracts),
   LAYERC_TEST_CASE(linux_editor_design_system_tab_and_glyph_contracts),
   LAYERC_TEST_CASE(linux_editor_empty_state_contracts),
+  LAYERC_TEST_CASE(linux_editor_inactive_rgb_matches_fltk),
+  LAYERC_TEST_CASE(linux_editor_preview_caption_uses_preview_ink),
   LAYERC_TEST_CASE(linux_editor_system_theme_restores_tab_class_colors),
   LAYERC_TEST_CASE(linux_editor_cooldown_group_dialog_transactions),
   LAYERC_TEST_CASE(linux_editor_export_profile_checklist),

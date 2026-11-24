@@ -22,6 +22,7 @@ public:
   // Lays the list out between the row above (`top`) and the parent's `bottom`.
   void build(int top, int bottom);
   void show(const core::GameProfile &profile, std::optional<std::size_t> panel);
+  void clear_reason();
   [[nodiscard]] bool owns(const Fl_Widget *widget) const;
 private:
   friend struct EditorAppTestAccess;

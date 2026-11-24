@@ -656,6 +656,111 @@ void painted_pair_floor_contracts() {
          "System tab text on an overridden window selection refuses");
 }
 
+void fixed_painted_ink_floor_contracts() {
+  using namespace layerc::editor;
+  const auto index = [](EditorRole role) { return static_cast<std::size_t>(role); };
+  const auto pair = [](EditorRole role, FixedInk ink, PaintedPurpose purpose, bool dimmed = false) {
+    return PaintedTextPair{role, TextInk::role_text, {role}, ink, purpose, dimmed};
+  };
+  constexpr std::array presets{EditorTheme::copper, EditorTheme::teal, EditorTheme::plum,
+                               EditorTheme::dark};
+  const std::array window_pairs{
+      pair(EditorRole::window, FixedInk::subtext, PaintedPurpose::disabled_reason),
+      pair(EditorRole::window, FixedInk::subtext, PaintedPurpose::options_hint)};
+  const SystemRoleColors unused_system{};
+  for (const auto theme : presets) {
+    EditorAppearance appearance;
+    appearance.theme = theme;
+    expect(!first_role_contrast_failure(appearance, unused_system, window_pairs),
+           "each preset's fixed reason and Options inks pass on the Window fill");
+    for (const auto role : {EditorRole::list, EditorRole::sidebar})
+      for (const bool dimmed : {false, true}) {
+        const std::array pairs{
+            pair(role, FixedInk::secondary, PaintedPurpose::empty_list_title, dimmed),
+            pair(role, FixedInk::subtext, PaintedPurpose::empty_list_hint, dimmed)};
+        expect(!first_role_contrast_failure(appearance, unused_system, pairs),
+               "each preset's empty-list title and hint pass on active and dimmed fill");
+      }
+  }
+
+  for (const auto role : {EditorRole::list, EditorRole::sidebar}) {
+    EditorAppearance copper;
+    auto &override_ = copper.overrides[index(role)];
+    override_.fill = 0x444444;
+    const std::array pairs{
+        pair(role, FixedInk::secondary, PaintedPurpose::empty_list_title),
+        pair(role, FixedInk::subtext, PaintedPurpose::empty_list_hint)};
+    expect(!first_role_contrast_failure(copper, unused_system, std::span(pairs).first(1)),
+           "the title still passes on an overridden Copper list fill");
+    const double ratio = rgb_contrast_ratio(editor_tokens(copper).subtext, *override_.fill);
+    const auto failure = first_role_contrast_failure(copper, unused_system, pairs);
+    expect(failure == RoleContrastFailure{role, ContrastPairKind::text_fill, ratio, role,
+                                         SurfacePart::fill, false, PaintedPurpose::empty_list_hint} &&
+               role_contrast_failure_text(*failure) == std::string(role_label(role)) +
+                   ": empty-list hint contrast is " + contrast_ratio_label(ratio) +
+                   " on the fill; at least 4.5:1 is required.",
+           "the hint fails on that fill with its own purpose, ground and exact contrast message");
+    override_.text = 0xFFFFFF;
+    expect(failure && first_role_contrast_failure(copper, unused_system, pairs) == failure,
+           "a passing Text override cannot change the fixed-ink failure");
+  }
+
+  SystemRoleColors system;
+  system.control.fill({0x303030, 0x000000, 0xFFFFFF});
+  system.field = system.control;
+  system.foreground = 0x000000;
+  EditorAppearance appearance;
+  appearance.theme = EditorTheme::system;
+  expect(!first_role_contrast_failure(appearance, system, window_pairs),
+         "untouched System fixed pairs never refuse even when their contrast is low");
+  auto &window = appearance.overrides[index(EditorRole::window)];
+  window.text = 0xFFFFFF;
+  expect(!first_role_contrast_failure(appearance, system, window_pairs),
+         "a System Text override alone does not opt the fixed ink into contrast checks");
+  window.fill = 0x000000;
+  for (const auto &painted : window_pairs) {
+    const auto failure = first_role_contrast_failure(appearance, system, std::span(&painted, 1));
+    const auto purpose = *painted.purpose == PaintedPurpose::disabled_reason
+                             ? "disabled-button reason" : "Options hint";
+    expect(failure == RoleContrastFailure{EditorRole::window, ContrastPairKind::text_fill, 1.0,
+                                         EditorRole::window, SurfacePart::fill, false, painted.purpose} &&
+               role_contrast_failure_text(*failure) == std::string("Window: ") + purpose +
+                   " contrast is " + contrast_ratio_label(rgb_contrast_ratio(0x000000, 0x000000)) +
+                   " on the fill; at least 4.5:1 is required.",
+           "System fixed ink refuses on an overridden fill even when the overridden Window text passes");
+  }
+
+  system.control[index(EditorRole::window)].fill = 0x008C00;
+  window.fill = 0x181818;
+  appearance.overrides[index(EditorRole::list)].fill = 0xFF0000;
+  const std::array system_lists{
+      pair(EditorRole::list, FixedInk::subtext, PaintedPurpose::empty_list_hint),
+      pair(EditorRole::list, FixedInk::subtext, PaintedPurpose::empty_list_hint, true)};
+  expect(!first_role_contrast_failure(appearance, system, std::span(system_lists).first(1)),
+         "System black fixed ink passes on the active list's red fill");
+  constexpr auto dimmed = 0x545D00;
+  const double ratio = rgb_contrast_ratio(system.foreground, dimmed);
+  const auto failure = first_role_contrast_failure(appearance, system, system_lists);
+  expect(failure == RoleContrastFailure{EditorRole::list, ContrastPairKind::text_fill, ratio,
+                                       EditorRole::list, SurfacePart::fill, false,
+                                       PaintedPurpose::empty_list_hint, true} &&
+             role_contrast_failure_text(*failure) == "Lists: empty-list hint contrast is " +
+                 contrast_ratio_label(ratio) + " on the dimmed fill; at least 4.5:1 is required.",
+         "System blends with the desktop Window background, not its override, for a dimmed-only refusal");
+}
+
+void calibration_empty_ink_floor_contracts() {
+  using namespace layerc::editor;
+  for (const auto theme : {EditorTheme::copper, EditorTheme::teal, EditorTheme::plum, EditorTheme::dark}) {
+    EditorAppearance appearance;
+    appearance.theme = theme;
+    const auto tokens = editor_tokens(appearance);
+    expect(rgb_contrast_ratio(fixed_ink(tokens, FixedInk::subtext), tokens.input) >=
+               contrast_floor(ContrastPairKind::text_fill),
+           "the calibration no-image line is readable on the non-editable input token");
+  }
+}
+
 // Outcome kinds belong to producers, not to display wording or file paths.
 void typed_status_outcome_contracts() {
   using namespace layerc::editor;
@@ -810,5 +915,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(editor_token_contracts),
     LAYERC_TEST_CASE(appearance_floor_contracts),
     LAYERC_TEST_CASE(painted_pair_floor_contracts),
+    LAYERC_TEST_CASE(fixed_painted_ink_floor_contracts),
+    LAYERC_TEST_CASE(calibration_empty_ink_floor_contracts),
     LAYERC_TEST_CASE(typed_status_outcome_contracts),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

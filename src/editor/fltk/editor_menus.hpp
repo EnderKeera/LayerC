@@ -1,6 +1,7 @@
 #pragma once
 
 #include "a11y/fltk_hooks.hpp"
+#include "editor_appearance.hpp"
 #include "editor_commands.hpp"
 #include "editor_geometry.hpp"
 
@@ -66,10 +67,12 @@ private:
 
 // Hit-testing uses FLTK's actual row geometry, including scroll position;
 // right-clicking empty space never silently targets the previous selection.
-class ContextBrowser final : public Fl_Hold_Browser, public a11y::RowGeometry {
+class ContextBrowser final : public Fl_Hold_Browser, public a11y::RowGeometry,
+                             public PaintedTextSource {
 public:
   ContextBrowser(int x, int y, int width, int height, const char *label,
                  EditorApp &app, EditorMenuContext context);
+  [[nodiscard]] std::span<const PaintedText> painted_text() const noexcept override;
   [[nodiscard]] int row_at(int x, int y);
   // The visible row slice in the browser viewport, not the entire browser.
   [[nodiscard]] std::optional<EditorBounds> row_bounds(int row);

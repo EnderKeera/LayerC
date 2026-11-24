@@ -66,7 +66,7 @@ void CalibrationPreview::draw() {
               std::max(1, static_cast<int>(selection.height * bounds.height)));
     }
   } else {
-    fl_color(token_color(current_editor_tokens().subtext));
+    fl_color(token_color(fixed_ink(current_editor_tokens(), FixedInk::subtext)));
     fl_draw("Acknowledge capture, select a window, then enable Live preview.",
             x() + 12, y() + h() / 2);
   }

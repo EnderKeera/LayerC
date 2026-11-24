@@ -51,12 +51,15 @@ int wrapped_height(const char *text, int width) {
   return height;
 }
 
-class OptionHint final : public Fl_Box {
+class OptionHint final : public Fl_Box, public PaintedTextSource {
 public:
   using Fl_Box::Fl_Box;
+  [[nodiscard]] std::span<const PaintedText> painted_text() const noexcept override {
+    return options_painted_text;
+  }
 private:
   void draw() override {
-    const auto ink = current_editor_tokens().subtext;
+    const auto ink = fixed_ink(current_editor_tokens(), painted_text().front().ink);
     labelcolor(fl_rgb_color(static_cast<uchar>(ink >> 16U),
                             static_cast<uchar>(ink >> 8U), static_cast<uchar>(ink)));
     Fl_Box::draw();

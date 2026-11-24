@@ -121,6 +121,20 @@ std::uint32_t preset_accent(const EditorTheme theme) noexcept {
   }
 }
 
+std::uint32_t fixed_ink(const EditorTokens &tokens, const FixedInk ink) noexcept {
+  return ink == FixedInk::secondary ? tokens.secondary : tokens.subtext;
+}
+
+std::uint32_t fltk_inactive_rgb(const std::uint32_t fill, const std::uint32_t partner) noexcept {
+  constexpr float weight = .33f;
+  const auto channel = [&](const unsigned shift) {
+    const auto a = static_cast<float>((fill >> shift) & 0xFFU);
+    const auto b = static_cast<float>((partner >> shift) & 0xFFU);
+    return static_cast<std::uint32_t>(a * weight + b * (1.0f - weight)) << shift;
+  };
+  return channel(16) | channel(8) | channel(0);
+}
+
 EditorTokens editor_tokens(const EditorAppearance &appearance) noexcept {
   const auto accent = appearance.accent.value_or(preset_accent(appearance.theme));
   auto tokens = neutral_tokens;
@@ -217,7 +231,8 @@ first_role_contrast_failure(const EditorAppearance &appearance,
                             const std::array<RoleColors, editor_role_count> &system_roles) {
   const SystemRoleColors system{
       system_roles, system_roles,
-      system_roles[static_cast<std::size_t>(EditorRole::status)].text};
+      system_roles[static_cast<std::size_t>(EditorRole::status)].text,
+      system_roles[static_cast<std::size_t>(EditorRole::window)].text};
   return first_role_contrast_failure(appearance, system, {});
 }
 
@@ -233,8 +248,32 @@ first_role_contrast_failure(const EditorAppearance &appearance, const SystemRole
     if (system_theme && role == EditorRole::edit)
       if (auto failure = nominal_role_failure(appearance, system, role, false)) return failure;
   }
-  const auto verbose = system_theme ? system.verbose : editor_tokens(appearance).verbose;
+  auto tokens = editor_tokens(appearance);
+  const auto window_index = static_cast<std::size_t>(EditorRole::window);
+  auto partner = system.control[window_index].fill;
+  if (system_theme) {
+    tokens.secondary = tokens.subtext = system.foreground;
+    tokens.verbose = system.verbose;
+  } else {
+    const auto fill = resolved_role_colors(appearance, system, EditorRole::window, false).fill;
+    // Fl::background clamps each endpoint before building the gray ramp.
+    const auto channel = [&](unsigned shift) {
+      return std::clamp((fill >> shift) & 0xFFU, 1U, 254U) << shift;
+    };
+    partner = channel(16) | channel(8) | channel(0);
+  }
   for (const auto &pair : painted) {
+    if (pair.fixed) {
+      const auto role = pair.ground.role;
+      if (system_theme && !appearance.overrides[static_cast<std::size_t>(role)].fill) continue;
+      auto fill = resolved_role_colors(appearance, system, role, pair.ground.input_field).fill;
+      if (pair.dimmed) fill = fltk_inactive_rgb(fill, partner);
+      const double ratio = rgb_contrast_ratio(fixed_ink(tokens, *pair.fixed), fill);
+      if (ratio < contrast_floor(ContrastPairKind::text_fill))
+        return RoleContrastFailure{role, ContrastPairKind::text_fill, ratio, role,
+                                   SurfacePart::fill, false, pair.purpose, pair.dimmed};
+      continue;
+    }
     const auto &text_item = appearance.overrides[static_cast<std::size_t>(pair.text)];
     const auto &ground_item = appearance.overrides[static_cast<std::size_t>(pair.ground.role)];
     const bool selection = pair.ground.part == SurfacePart::selection;
@@ -243,7 +282,7 @@ first_role_contrast_failure(const EditorAppearance &appearance, const SystemRole
     if (system_theme && !overridden) continue;
     // Mono diagnostics keep the verbose ink until their role's text is set.
     const auto ink = pair.ink == TextInk::verbose && !text_item.text
-                         ? verbose
+                         ? tokens.verbose
                          : resolved_role_colors(appearance, system, pair.text,
                                                 pair.text != pair.ground.role ||
                                                     pair.ground.input_field)
@@ -267,6 +306,16 @@ std::string role_contrast_failure_text(const RoleContrastFailure &failure) {
   if (failure.primary_button)
     return contrast_refusal_text(role_label(failure.role), failure.pair, failure.ratio,
                                  primary_button_surface(failure.pair));
+  if (failure.purpose) {
+    constexpr std::array purposes{"empty-list title", "empty-list hint",
+                                  "disabled-button reason", "Options hint"};
+    std::string message{role_label(*failure.ground)};
+    message += ": ";
+    message += purposes[static_cast<std::size_t>(*failure.purpose)];
+    message += " contrast is " + contrast_ratio_label(failure.ratio) + " on the ";
+    message += failure.dimmed ? "dimmed fill" : "fill";
+    return message + "; at least 4.5:1 is required.";
+  }
   std::string surface;
   if (failure.ground) {
     surface = role_label(*failure.ground);

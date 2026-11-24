@@ -183,6 +183,14 @@ EditorEmptyState editor_empty_state(EditorMenuContext context) noexcept {
   return {"No items", "Choose an add action to begin."};
 }
 
+namespace {
+constexpr std::array empty_list_text{
+    PaintedText{FixedInk::secondary, PaintedGround::own_fill, PaintedPurpose::empty_list_title, true},
+    PaintedText{FixedInk::subtext, PaintedGround::own_fill, PaintedPurpose::empty_list_hint, true}};
+} // namespace
+
+std::span<const PaintedText> ContextBrowser::painted_text() const noexcept { return empty_list_text; }
+
 void draw_editor_empty_state(const EditorBounds &bounds, EditorEmptyState copy,
                              Fl_Font face, Fl_Fontsize size) {
   if (bounds.width <= 16 || bounds.height <= 0) return;
@@ -198,10 +206,11 @@ void draw_editor_empty_state(const EditorBounds &bounds, EditorEmptyState copy,
   const int row = fl_height() + 4;
   const int top = bounds.y + std::max(0, (bounds.height - row * 3) / 2);
   fl_push_clip(bounds.x, bounds.y, bounds.width, bounds.height);
-  fl_color(ink(current_editor_tokens().secondary));
+  const auto tokens = current_editor_tokens();
+  fl_color(ink(fixed_ink(tokens, empty_list_text[0].ink)));
   fl_draw(copy.title, bounds.x + 8, top, bounds.width - 16, row,
           FL_ALIGN_CENTER | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-  fl_color(ink(current_editor_tokens().subtext));
+  fl_color(ink(fixed_ink(tokens, empty_list_text[1].ink)));
   fl_draw(copy.hint, bounds.x + 8, top + row, bounds.width - 16, row * 2,
           FL_ALIGN_CENTER | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
   fl_pop_clip();

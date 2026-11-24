@@ -13,6 +13,7 @@
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 #include "linux_editor_test_access.hpp"
+#include "options_window.hpp"
 #include "editor_test_environment.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -36,15 +37,18 @@
 #include <FL/fl_draw.H>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace editor = layerc::editor;
 namespace core = layerc::core;
@@ -633,6 +637,167 @@ void linux_editor_appearance_painted_pairs_dialog() {
              applied->overrides[static_cast<std::size_t>(lists)] == editor::RoleOverride{},
          "Apply succeeds once every painted pair clears its floor");
   editor::apply_editor_appearance({}, window, profiles, preview);
+  window.hide();
+}
+
+void linux_editor_fixed_painters_in_real_tree() {
+  using namespace layerc::editor;
+  PrivateStore store;
+  EditorApp app;
+  app.build();
+  auto &window = EditorAppTestAccess::window(app);
+  auto *profiles = EditorAppTestAccess::profiles(app);
+  auto *cooldowns = EditorAppTestAccess::cooldowns(app);
+  auto *preview = EditorAppTestAccess::preview(app);
+  auto *reason = EditorAppTestAccess::remove_cooldown_reason(app);
+  const auto contract = [](EditorRole role, FixedInk ink, PaintedPurpose purpose, bool dimmed = false) {
+    return PaintedTextPair{role, TextInk::role_text, {role}, ink, purpose, dimmed};
+  };
+  const auto reason_pair =
+      contract(EditorRole::window, FixedInk::subtext, PaintedPurpose::disabled_reason);
+  const auto tree_contract = [&] {
+    const auto pairs = painted_text_pairs(window, profiles, preview, true);
+    std::vector<PaintedTextPair> expected{reason_pair};
+    for (const auto role : {EditorRole::sidebar, EditorRole::list})
+      for (const bool dimmed : {false, true}) {
+        expected.push_back(contract(role, FixedInk::secondary, PaintedPurpose::empty_list_title, dimmed));
+        expected.push_back(contract(role, FixedInk::subtext, PaintedPurpose::empty_list_hint, dimmed));
+      }
+    std::vector<PaintedTextPair> fixed;
+    std::copy_if(pairs.begin(), pairs.end(), std::back_inserter(fixed),
+                 [](const auto &pair) { return pair.fixed.has_value(); });
+    expect(std::is_permutation(fixed.begin(), fixed.end(), expected.begin(), expected.end()),
+           "the real tree collects both named empty inks and both variants, plus the distinct reason");
+    return pairs;
+  };
+  expect(profiles->size() > 0 && cooldowns->size() > 0 && !cooldowns->visible_r() &&
+             reason->label() && *reason->label(),
+         "finding painters does not depend on an empty browser or a visible tab");
+  (void)tree_contract();
+  expect(painted_text_pairs(*reason, nullptr, nullptr, true) == std::vector{reason_pair},
+         "a labelled reason contributes its fixed ink only, not a generic Labels pair");
+  const PaintedTextPair caption{EditorRole::label, TextInk::role_text, {EditorRole::window}};
+  for (Fl_Widget *browser : {static_cast<Fl_Widget *>(profiles), static_cast<Fl_Widget *>(cooldowns)}) {
+    const auto own = painted_text_pairs(*browser, profiles, preview, true);
+    expect(browser->label() && *browser->label() &&
+               std::find(own.begin(), own.end(), caption) != own.end(),
+           "a painting browser keeps its caption's Labels text on the ground beneath it");
+  }
+
+  app.session.close_document();
+  app.refresh();
+  profiles->clear();
+  expect(cooldowns->size() == 0 && profiles->size() == 0, "both browser roles are empty");
+  reason->label("");
+  expect(!reason->visible() &&
+             painted_text_pairs(*reason, nullptr, nullptr, true) == std::vector{reason_pair},
+         "a hidden reason with an empty label still contributes its declaration");
+  EditorAppearance copper;
+  copper.overrides[static_cast<std::size_t>(EditorRole::sidebar)].fill = 0x444444;
+  const auto failure = first_role_contrast_failure(copper, SystemRoleColors{}, tree_contract());
+  expect(failure && failure->purpose == PaintedPurpose::empty_list_hint &&
+             failure->ground == EditorRole::sidebar && !failure->dimmed,
+         "the contrast model finds the sidebar hint refusal from pairs collected in the real tree");
+
+  OptionsWindow options({}, {}, 1000, {}, {}, {});
+  std::vector<PaintedTextPair> pinned;
+  for (const auto &text : options_painted_text) {
+    pinned.push_back(contract(EditorRole::window, text.ink, text.purpose));
+    expect(text.ground == PaintedGround::beneath && !text.dimmed_variant,
+           "Options declares only fixed, active text on the ground beneath it");
+  }
+  auto options_pairs = painted_text_pairs(options, nullptr, nullptr, true);
+  std::erase_if(options_pairs, [](const auto &pair) { return !pair.fixed; });
+  expect(options_pairs == pinned, "the real Options window and its pinned fixed pairs agree");
+  int sources{};
+  visit(options, [&](Fl_Widget &widget) {
+    if (dynamic_cast<PaintedTextSource *>(&widget)) {
+      ++sources;
+      expect(painted_text_pairs(widget, nullptr, nullptr, true) == pinned,
+             "an Options hint contributes no generic Labels pair");
+    }
+  });
+  expect(sources > 0, "Options contains real hint painters");
+}
+
+void linux_editor_fixed_ink_appearance_dialog() {
+  if (editor::platform_contrast_palette()) {
+    std::cout << "Not applicable: a desktop contrast theme sets the overrides aside\n";
+    return;
+  }
+  using namespace layerc::editor;
+  layerc::test::EditorTestEnvironment store("layerc-editor-fixed-ink", layerc::test::EditorTestScope::widget,
+                                            "fixture control namespace is private");
+  EditorApp app;
+  app.build();
+  auto &window = EditorAppTestAccess::window(app);
+  auto *profiles = EditorAppTestAccess::profiles(app);
+  auto *preview = EditorAppTestAccess::preview(app);
+  window.show();
+  Fl::check();
+  const EditorAppearance copper;
+  expect(profiles->size() == 0, "the private Copper Profiles list starts empty");
+  constexpr auto sidebar = static_cast<int>(EditorRole::sidebar);
+  const std::string refusal = "Profile list: empty-list hint contrast is " +
+      contrast_ratio_label(rgb_contrast_ratio(editor_tokens(copper).subtext, 0x444444)) +
+      " on the fill; at least 4.5:1 is required.";
+  ModalAction drive([&](Fl_Window &modal) {
+    auto *role = dynamic_cast<Fl_Choice *>(control(modal, "Role"));
+    auto *fill = dynamic_cast<Fl_Input *>(control(modal, "Role fill"));
+    auto *text = dynamic_cast<Fl_Input *>(control(modal, "Role text"));
+    auto *apply = control(modal, "Apply");
+    Fl_Widget *status{};
+    for (int i = 0; i + 1 < modal.children(); ++i)
+      if (dynamic_cast<EditorStatusMark *>(modal.child(i))) status = modal.child(i + 1);
+    if (!expect(role && fill && text && apply && status, "Appearance owns its fields and warning line")) {
+      modal.hide();
+      return;
+    }
+    expect(status->w() == 472 && status->h() == 50, "the warning line keeps its 472 x 50 row");
+    fl_font(status->labelfont(), FL_NORMAL_SIZE);
+    for (std::size_t i = 0; i < editor_role_count; ++i) {
+      const auto ground = static_cast<EditorRole>(i);
+      for (const auto purpose : {PaintedPurpose::empty_list_title, PaintedPurpose::empty_list_hint,
+                                 PaintedPurpose::disabled_reason, PaintedPurpose::options_hint})
+        for (const bool dimmed : {false, true}) {
+          const auto message = role_contrast_failure_text(
+              {ground, ContrastPairKind::text_fill, 4.499, ground, SurfacePart::fill, false, purpose, dimmed});
+          int width = status->w(), height = 0;
+          fl_measure(message.c_str(), width, height, 0);
+          expect(width <= status->w() && height <= status->h(), "the generated refusal fits: " + message);
+        }
+    }
+
+    role->value(sidebar);
+    role->do_callback();
+    text->value("#FFFFFF");
+    text->do_callback();
+    fill->value("#444444");
+    fill->do_callback();
+    expect(status->label() && refusal == status->label() &&
+               accessibility::accessible_description(*fill) == refusal &&
+               accessibility::accessible_description(*text) == refusal,
+           "the live warning and field descriptions use the exact fixed-ink refusal");
+    role->value(static_cast<int>(EditorRole::window));
+    role->do_callback();
+    apply->do_callback();
+    const bool still_open = modal.shown();
+    expect(still_open && role->value() == sidebar && Fl::focus() == fill &&
+               status->label() && refusal == status->label(),
+           "Apply refuses and focuses Profile list Fill even with an explicit passing Text override");
+    if (!still_open) return;
+    fill->value("#171717");
+    fill->do_callback();
+    expect((!status->label() || !*status->label()) && accessibility::accessible_description(*fill).empty(),
+           "repairing the fill clears the warning and its accessible description");
+    apply->do_callback();
+    if (modal.shown()) modal.hide();
+  });
+  const auto result = edit_editor_appearance(copper, window, profiles, preview);
+  expect(drive.delivered() && result && result->overrides[sidebar].fill == 0x171717 &&
+             result->overrides[sidebar].text == 0xFFFFFF,
+         "repaired Copper draft applies with the Text override intact");
+  apply_editor_appearance(copper, window, profiles, preview);
   window.hide();
 }
 

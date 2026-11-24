@@ -1,20 +1,25 @@
 // Native FLTK painting contracts. All windows belong to this disposable test;
 // no input events or desktop settings are synthesized or changed.
 #include "appearance_window.hpp"
+#include "editor_app.hpp"
 #include "editor_geometry.hpp"
 #include "editor_menus.hpp"
 #include "editor_style.hpp"
 #include "editor_test_environment.hpp"
+#include "layerc/platform/profile_store.hpp"
+#include "linux_editor_test_access.hpp"
+#include "platform/services.hpp"
+#include "profile_edit.hpp"
 
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Group.H>
+#include <FL/Fl_Image_Surface.H>
 #include <FL/Fl_Input.H>
 #include <FL/fl_draw.H>
 #include <FL/platform.H>
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -31,15 +36,14 @@ public:
   void paint() { damage(FL_DAMAGE_ALL); draw(); }
 };
 
-class EmptyStateBox final : public Fl_Box {
+class PreviewEdit final : public editor::OnWindowEdit {
 public:
-  using Fl_Box::Fl_Box;
-protected:
-  void draw() override {
-    Fl_Box::draw();
-    editor::draw_editor_empty_state({x(), y(), w(), h()},
-        editor::editor_empty_state(editor::EditorMenuContext::profiles), FL_HELVETICA, FL_NORMAL_SIZE);
-  }
+  void begin(std::uint64_t, editor::OnWindowEditBegin) override {}
+  void live_profile(std::string) override {}
+  void anchor(std::string, double, double, bool) override {}
+  void direct_drag(bool) override {}
+  void end(bool) override {}
+  std::vector<editor::OnWindowEditEvent> take_events() override { return {}; }
 };
 
 class Offscreen final {
@@ -73,6 +77,24 @@ Pixels capture(PaintWindow &window) {
   expect(pixels != nullptr, "the fixture's pixels can be read");
   const auto bytes = static_cast<std::size_t>(window.w() * window.h() * 3);
   return {window.w(), std::vector<unsigned char>(pixels.get(), pixels.get() + bytes)};
+}
+
+Pixels capture(Fl_Widget &widget) {
+  Fl_Image_Surface surface(widget.w(), widget.h());
+  surface.draw(&widget);
+  const std::unique_ptr<Fl_RGB_Image> image(surface.image());
+  if (!expect(image && image->data_w() == widget.w() && image->data_h() == widget.h() &&
+                  image->d() == 3,
+              "the fixture paints RGB pixels at one sample per layout pixel")) return {};
+  const auto row_bytes = widget.w() * 3;
+  const auto stride = image->ld() ? image->ld() : row_bytes;
+  Pixels pixels{widget.w(), {}};
+  pixels.rgb.reserve(static_cast<std::size_t>(row_bytes) * widget.h());
+  for (int y = 0; y < widget.h(); ++y) {
+    const auto *row = image->array + y * stride;
+    pixels.rgb.insert(pixels.rgb.end(), row, row + row_bytes);
+  }
+  return pixels;
 }
 
 void ring(const Pixels &pixels, const Fl_Widget &widget, std::uint32_t color) {
@@ -198,9 +220,12 @@ void linux_editor_design_system_tab_and_glyph_contracts() {
 void linux_editor_empty_state_contracts() {
   layerc::test::require_fltk_editor_window();
   editor::install_editor_style();
+  layerc::test::EditorTestEnvironment store("layerc-editor-empty-ink-paint", layerc::test::EditorTestScope::widget,
+                                            "fixture control namespace is private");
+  editor::EditorApp app;
   PaintWindow window(300, 200, "LayerE empty-state fixture");
-  EmptyStateBox empty(20, 20, 260, 160);
-  empty.box(FL_FLAT_BOX);
+  editor::ContextBrowser empty(20, 20, 260, 160, nullptr, app, editor::EditorMenuContext::profiles);
+  empty.textsize(FL_NORMAL_SIZE);
   window.end();
   RestoreSystem restore(window);
   editor::EditorAppearance appearance;
@@ -217,10 +242,102 @@ void linux_editor_empty_state_contracts() {
     }
   expect(title && hint,
          "empty lists draw both a secondary title and subtext instruction inside the list");
+  const auto fill = editor::theme_role_colors(appearance, editor::EditorRole::list)->fill;
+  const auto partner = editor::theme_role_colors(appearance, editor::EditorRole::window)->fill;
+  expect(image.at(empty.x() + 12, empty.y() + 12) == fill,
+         "the real list paints the active Lists fill under its ink");
+  empty.deactivate();
+  const auto inactive = capture(window);
+  expect(inactive.at(empty.x() + 12, empty.y() + 12) == editor::fltk_inactive_rgb(fill, partner),
+         "the real inactive list paints the modeled dimmed fill");
   expect(std::string(editor::editor_empty_state(editor::EditorMenuContext::profiles).hint).find("New") != std::string::npos,
          "the profiles hint names its visible New action");
   expect(std::string(editor::editor_empty_state(editor::EditorMenuContext::cooldowns).hint).find("Add cooldown") != std::string::npos &&
          std::string(editor::editor_empty_state(editor::EditorMenuContext::bindings).hint).find("Add key") != std::string::npos &&
          std::string(editor::editor_empty_state(editor::EditorMenuContext::panels).hint).find("Add panel") != std::string::npos,
          "every context names its existing add button");
+}
+
+void linux_editor_inactive_rgb_matches_fltk() {
+  layerc::test::require_fltk_editor_window();
+  Fl_Double_Window window(220, 100, "LayerE inactive blend fixture");
+  window.end();
+  RestoreSystem restore(window);
+  editor::EditorAppearance appearance;
+  const auto index = static_cast<std::size_t>(editor::EditorRole::window);
+  const auto color = [](std::uint32_t rgb) {
+    return fl_rgb_color(static_cast<uchar>(rgb >> 16U),
+                        static_cast<uchar>(rgb >> 8U), static_cast<uchar>(rgb));
+  };
+  for (const auto fill : {0x171717U, 0xFF0000U, 0x0C34EFU}) {
+    appearance.overrides[index].fill = fill == 0x0C34EFU ? 0x001EFFU : 0x008C30U;
+    editor::apply_editor_appearance(appearance, window);
+    const auto partner = fill == 0x0C34EFU ? 0x011EFEU : 0x018C30U;
+    expect(editor::fltk_inactive_rgb(fill, partner) == (Fl::get_color(fl_inactive(color(fill))) >> 8U),
+           "the modeled inactive fill equals FLTK's RGB, including a clamped Window partner");
+  }
+}
+
+void linux_editor_preview_caption_uses_preview_ink() {
+  layerc::test::require_fltk_editor_window();
+  layerc::test::EditorTestEnvironment store("layerc-editor-preview-ink-paint", layerc::test::EditorTestScope::widget,
+                                            "fixture control namespace is private");
+  auto profile = editor::make_new_profile();
+  profile.game.executable_name = "preview-fixture.exe";
+  constexpr auto profile_ink = 0x2860B8U;
+  auto &bar = profile.panels.front().bar;
+  bar.background_color = bar.fill_color = bar.border_color = profile_ink;
+  if (!expect(layerc::platform::write_profile_file(layerc::platform::profile_directory() / "fixture.json",
+                  layerc::core::serialize_profile_json(profile)).ok(), "write a private preview profile")) return;
+
+  constexpr auto preview_role = static_cast<std::size_t>(editor::EditorRole::preview);
+  constexpr auto labels = static_cast<std::size_t>(editor::EditorRole::label);
+  constexpr auto preview_ink = 0xF8F4D0U, next_ink = 0xD0F4F8U, label_ink = 0xF0A0C0U;
+  editor::EditorAppearance appearance;
+  appearance.overrides[preview_role].text = preview_ink;
+  appearance.overrides[labels].text = label_ink;
+  editor::EditorApp app;
+  app.build(editor::AppearanceLoad{appearance, {}});
+  using Access = editor::EditorAppTestAccess;
+  auto &window = Access::window(app);
+  auto &preview = *Access::preview(app);
+  RestoreSystem restore(window);
+  window.show();
+  Fl::check();
+  expect((Fl::get_color(preview.labelcolor()) >> 8U) == preview_ink,
+         "startup sets the Preview label color before Appearance is ever opened");
+  Access::set_on_window_edit(app, std::make_unique<PreviewEdit>());
+  editor::TaskCandidate target;
+  target.window = 1;
+  target.title = "Preview fixture";
+  target.executable_name = profile.game.executable_name;
+  target.width = preview.w() - 10;
+  target.height = preview.h() - 10;
+  Access::position_on(app, target);
+  if (!expect(app.placement_active(), "the private matching target starts positioning")) return;
+  Fl::focus(nullptr);
+  const auto before = capture(preview);
+  appearance.overrides[preview_role].text = next_ink;
+  editor::apply_editor_appearance(appearance, window, Access::profiles(app), &preview);
+  const auto after = capture(preview);
+  if (before.rgb.empty() || after.rgb.empty()) return;
+  const auto frame = editor::placement_frame(5, 5, preview.w() - 10, preview.h() - 10,
+                                             target.width, target.height);
+  bool caption = false, new_caption = false, labels_in_caption = false;
+  for (int y = frame.y + 1; y < frame.y + 17; ++y)
+    for (int x = frame.x + 1; x < frame.x + frame.width - 1; ++x) {
+      caption = caption || before.at(x, y) == preview_ink;
+      new_caption = new_caption || after.at(x, y) == next_ink;
+      labels_in_caption = labels_in_caption || before.at(x, y) == label_ink || after.at(x, y) == label_ink;
+    }
+  expect(caption && new_caption && !labels_in_caption,
+         "the positioning caption paints Preview text (including live changes), not Labels text");
+
+  bool panel = false, unchanged = true;
+  for (int y = frame.y + 20; y < preview.h(); ++y)
+    for (int x = 0; x < preview.w(); ++x) {
+      panel = panel || before.at(x, y) == profile_ink;
+      unchanged = unchanged && before.at(x, y) == after.at(x, y);
+    }
+  expect(panel && unchanged, "changing Preview text leaves the whole profile-painted area unchanged");
 }
