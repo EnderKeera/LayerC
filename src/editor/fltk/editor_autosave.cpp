@@ -23,6 +23,8 @@ EditorApp::EditorApp(const SteadyTimeout::Now now, const SteadyTimeout::Schedule
 }
 
 EditorApp::~EditorApp() {
+  set_steady_timer_fault_handler(nullptr, this);
+  Fl::remove_timeout(announce_steady_timer_fault, this);
   session.set_change_listener({});
   stop_edit_services();
   stop_opener();

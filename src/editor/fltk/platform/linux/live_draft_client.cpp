@@ -4,7 +4,6 @@
 #include "layerc/core/json_reader.hpp"
 
 #include <cstdint>
-#include <stdexcept>
 #include <utility>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -32,11 +31,9 @@ LiveDraftUpdate exchange(const core::LiveDraftRequest &request) {
 
 // Owns the notification descriptor, so a throwing constructor cannot leak it.
 struct EventFd {
-  int fd;
-  EventFd() : fd(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) {
-    if (fd < 0) throw std::runtime_error("cannot create the live draft notification");
-  }
-  ~EventFd() { ::close(fd); }
+  int fd{::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)};
+  EventFd() = default;
+  ~EventFd() { if (fd >= 0) ::close(fd); }
   EventFd(const EventFd &) = delete;
   EventFd &operator=(const EventFd &) = delete;
 };
@@ -59,7 +56,10 @@ struct LiveDraftClient::Impl {
   // Declared last: it joins before the state it guards.
   LeaseWorker worker;
 
-  Impl() { worker.start([this] { run(); }); }
+  Impl() {
+    if (notify.fd < 0) worker.stop();
+    else worker.start([this] { run(); });
+  }
   ~Impl() = default;
   void signal() const noexcept {
     const std::uint64_t one = 1;
@@ -148,6 +148,7 @@ void LiveDraftClient::end() {
   });
 }
 std::optional<LiveDraftUpdate> LiveDraftClient::take_update() {
+  if (impl_->notify.fd < 0) return std::nullopt;
   std::uint64_t count{};
   (void)!::read(impl_->notify.fd, &count, sizeof count); // nonblocking drain
   return impl_->worker.locked([&] { return std::exchange(impl_->update, std::nullopt); });

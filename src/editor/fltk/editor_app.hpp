@@ -157,6 +157,10 @@ private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, capture_exclusion_warning_;
   StatusKind status_kind_{StatusKind::none}, daemon_kind_{StatusKind::none};
   void render_status();
+  static void on_steady_timer_fault(void *data);
+  static void announce_steady_timer_fault(void *data);
+  bool timer_fault_reported_{};
+  unsigned timer_fault_announcements_{}; // spoken timer faults, for tests
   // The last message spoken, so a repeating failure is said once.
   std::string last_announced_;
   int binding_index_{-1};

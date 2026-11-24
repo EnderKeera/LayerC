@@ -135,9 +135,10 @@ private:
   Timer::Clock::time_point now_{};
   Call call_{};
 
-  static void add(double delay, Fl_Timeout_Handler handler, void *data) {
+  static bool add(double delay, Fl_Timeout_Handler handler, void *data) {
     expect(!active_->pending(), "a one-shot must dequeue or cancel before arming again");
     active_->call_ = {delay, handler, data};
+    return true;
   }
   static void remove(Fl_Timeout_Handler handler, void *data) {
     expect(active_->call_.handler == handler && active_->call_.data == data,
@@ -202,7 +203,7 @@ void steady_wake_delivers_on_monotonic_deadline() {
     while (!done() && Timer::Clock::now() < deadline) Fl::wait(0.05);
   };
   const auto started = Timer::Clock::now();
-  editor::steady_wake_add(0.08, handler, &state);
+  expect(editor::steady_wake_add(0.08, handler, &state), "a positive delay is accepted");
   expect(editor::steady_wake_armed(handler, &state), "positive delay armed an OS wake");
   expect(!Fl::has_timeout(handler, &state), "no wall-clock FLTK timeout while waiting");
   wait_until(started + 3s, [&] { return state.calls != 0; });
@@ -212,26 +213,27 @@ void steady_wake_delivers_on_monotonic_deadline() {
   expect(!editor::steady_wake_armed(handler, &state) && !Fl::has_timeout(handler, &state),
          "delivery leaves neither an OS wake nor a posted deferral");
 
-  editor::steady_wake_add(0.08, handler, &state);
+  expect(editor::steady_wake_add(0.08, handler, &state), "a second positive delay is accepted");
   editor::steady_wake_remove(handler, &state);
   wait_until(Timer::Clock::now() + 250ms, [] { return false; });
   expect(state.calls == 1 && !editor::steady_wake_armed(handler, &state) &&
              !Fl::has_timeout(handler, &state), "remove cancels a waiting OS wake");
 
-  editor::steady_wake_add(0.15, handler, &state);
-  editor::steady_wake_add(0.05, handler, &state);
+  expect(editor::steady_wake_add(0.15, handler, &state) &&
+             editor::steady_wake_add(0.05, handler, &state),
+         "a replacing positive delay is accepted");
   expect(editor::steady_wake_armed(handler, &state) && !Fl::has_timeout(handler, &state),
          "replacement waits outside the wall-clock queue");
   wait_until(Timer::Clock::now() + 250ms, [] { return false; });
   expect(state.calls == 2 && !editor::steady_wake_armed(handler, &state) &&
              !Fl::has_timeout(handler, &state), "only the replacement wakes the handler");
 
-  editor::steady_wake_add(0.0, handler, &state);
+  expect(editor::steady_wake_add(0.0, handler, &state), "a zero delay is accepted");
   expect(!editor::steady_wake_armed(handler, &state) && Fl::has_timeout(handler, &state) &&
              state.calls == 2, "zero delay posts to FLTK without an OS wait");
   Fl::wait(0.05);
   expect(state.calls == 3 && !Fl::has_timeout(handler, &state), "zero delay runs on the next FLTK wait");
-  editor::steady_wake_add(0.0, handler, &state);
+  expect(editor::steady_wake_add(0.0, handler, &state), "a zero delay is accepted again");
   editor::steady_wake_remove(handler, &state);
   Fl::wait(0.05);
   expect(state.calls == 3 && !Fl::has_timeout(handler, &state), "remove cancels a posted deferral");

@@ -1,4 +1,5 @@
 #include "platform/services.hpp"
+#include "fltk_fd.hpp"
 
 #include <FL/Fl.H>
 
@@ -9,12 +10,21 @@ namespace {
 
 class LinuxStandaloneLiveDrafts final : public StandaloneLiveDrafts {
 public:
-  explicit LinuxStandaloneLiveDrafts(std::function<void()> ready)
-      : ready_(std::move(ready)), fd_(client_.notify_fd()) {
-    Fl::add_fd(fd_, FL_READ, readable, this);
+  explicit LinuxStandaloneLiveDrafts(std::function<void()> ready) : ready_(std::move(ready)) {}
+
+  ~LinuxStandaloneLiveDrafts() override {
+    if (fd_ >= 0) Fl::remove_fd(fd_);
   }
 
-  ~LinuxStandaloneLiveDrafts() override { Fl::remove_fd(fd_); }
+  [[nodiscard]] std::optional<StandaloneLiveDraftsUnavailable> watch() {
+    const int fd = client_.notify_fd();
+    if (fd < 0) return StandaloneLiveDraftsUnavailable{"the live draft notification could not be created"};
+    if (!fltk_fd_watchable(fd))
+      return StandaloneLiveDraftsUnavailable{"the live draft notification is outside the range LayerE can watch"};
+    fd_ = fd;
+    Fl::add_fd(fd_, FL_READ, readable, this);
+    return std::nullopt;
+  }
 
   [[nodiscard]] std::uint64_t publish(std::string profile_id,
                                       std::string profile_json) override {
@@ -33,7 +43,7 @@ private:
 
   LiveDraftClient client_;
   std::function<void()> ready_;
-  int fd_;
+  int fd_{-1};
 };
 
 } // namespace
@@ -42,9 +52,9 @@ bool standalone_live_drafts() noexcept { return true; }
 
 StandaloneLiveDraftsResult
 make_standalone_live_drafts(std::function<void()> ready) {
-  std::unique_ptr<StandaloneLiveDrafts> service =
-      std::make_unique<LinuxStandaloneLiveDrafts>(std::move(ready));
-  return service;
+  auto service = std::make_unique<LinuxStandaloneLiveDrafts>(std::move(ready));
+  if (auto unavailable = service->watch()) return std::move(*unavailable);
+  return std::unique_ptr<StandaloneLiveDrafts>(std::move(service));
 }
 
 } // namespace layerc::editor

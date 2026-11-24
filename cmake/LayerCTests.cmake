@@ -104,6 +104,7 @@ if(WIN32 AND TARGET layerc_editor_fltk)
     layerc_add_test(layerc_windows_fltk_widget_tests WIN32
         SOURCES tests/linux_editor_widget_tests.cpp
             tests/linux_editor_items_tests.cpp tests/linux_editor_dialog_tests.cpp
+            tests/editor_steady_timer_fault_tests.cpp
             tests/linux_editor_visual_contract_tests.cpp tests/linux_editor_diagnostics_tests.cpp
             tests/linux_editor_review_tests.cpp tests/linux_editor_command_registry_tests.cpp
             tests/linux_editor_design_system_paint_tests.cpp tests/windows_fltk_widget_exclusions.cpp
@@ -491,6 +492,7 @@ if(NOT WIN32)
             SOURCES tests/linux_editor_widget_tests.cpp
                 tests/linux_editor_items_tests.cpp
                 tests/linux_editor_dialog_tests.cpp
+                tests/editor_steady_timer_fault_tests.cpp
                 tests/linux_editor_accessibility_tests.cpp
                 tests/linux_editor_visual_contract_tests.cpp
                 tests/linux_editor_binding_capture_tests.cpp

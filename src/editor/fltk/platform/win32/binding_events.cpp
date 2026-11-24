@@ -73,7 +73,7 @@ struct FocusedBindingEvents::Impl {
   }
 
   void arm() {
-    if (focused() && !poll_timer.pending() && !Fl::has_timeout(poll, this))
+    if (focused() && !poll_timer.owed() && !Fl::has_timeout(poll, this))
       Fl::add_timeout(0.0, poll, this);
   }
 

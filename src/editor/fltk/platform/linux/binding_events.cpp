@@ -1,4 +1,5 @@
 #include "platform/services.hpp"
+#include "fltk_fd.hpp"
 #include "x11_error.hpp"
 #include "x11_input.hpp"
 
@@ -113,6 +114,11 @@ std::string KeyboardMapListener::start() {
   display_ = XOpenDisplay(DisplayString(shared));
   if (display_ == nullptr)
     return "Keyboard: the physical-map connection is unavailable; mouse/gamepad capture is unchanged.";
+  const int fd = ConnectionNumber(display_);
+  if (!fltk_fd_watchable(fd)) {
+    stop();
+    return "Keyboard: the physical-map connection is outside the range LayerE can watch; mouse/gamepad capture is unchanged.";
+  }
   int opcode{}, error{};
   int major = XkbMajorVersion, minor = XkbMinorVersion;
   bool subscribed{};
@@ -132,7 +138,7 @@ std::string KeyboardMapListener::start() {
     return "Keyboard: XKB map notifications are unavailable; no keyboard token will be guessed.";
   }
   (void)keymap_.refresh(display_);
-  Fl::add_fd(ConnectionNumber(display_), FL_READ, &KeyboardMapListener::readable, this);
+  Fl::add_fd(fd, FL_READ, &KeyboardMapListener::readable, this);
   watching_ = true;
   drain(); // Xlib synchronous queries can buffer notices without fd readiness.
   return keymap_.available() ? std::string{} :

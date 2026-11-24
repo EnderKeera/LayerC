@@ -106,6 +106,8 @@ void EditorApp::build(std::optional<AppearanceLoad> startup_appearance) {
   accessibility->set_status_handler([this](const AccessibilityStatus &status) {
     status_pane_->set_accessibility(accessibility_status_line(status));
   });
+  set_steady_timer_fault_handler(on_steady_timer_fault, this);
+  on_steady_timer_fault(this);
   load_appearance(std::move(startup_appearance));
   if (!session.profiles().profiles.empty()) {
     if (const auto error = session.open(0)) report(StatusKind::failure, *error);

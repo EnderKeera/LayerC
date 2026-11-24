@@ -1,4 +1,5 @@
 #include "a11y/atspi/loop_bus.hpp"
+#include "platform/linux/fltk_fd.hpp"
 
 #include <systemd/sd-bus.h>
 
@@ -42,6 +43,10 @@ bool LoopBus::watch_fd() {
   const int fd = sd_bus_get_fd(bus_);
   if (fd < 0) {
     fail("the bus connection has no file descriptor");
+    return false;
+  }
+  if (!fltk_fd_watchable(fd)) {
+    fail("the accessibility bus socket is outside the range LayerE can watch");
     return false;
   }
   if (fd != fd_) {

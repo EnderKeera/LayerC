@@ -460,7 +460,7 @@ void Adaptor::Impl::on_check(void *data) {
   if (now < impl->next_refresh) {
     // Checks run once per loop iteration, so a change made inside the window
     // waits for unrelated input unless the remaining interval is armed.
-    if (!impl->refresh_timer.pending()) impl->refresh_timer.start(impl->next_refresh - now);
+    if (!impl->refresh_timer.owed()) impl->refresh_timer.start(impl->next_refresh - now);
     return;
   }
   impl->next_refresh = now + kRefreshInterval;

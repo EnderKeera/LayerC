@@ -93,6 +93,13 @@ void steady_wake_delivers_on_monotonic_deadline();
 void steady_timeout_default_uses_monotonic_wake();
 void linux_editor_autosave_steady_deadline();
 void linux_editor_playback_steady_deadline();
+void steady_wake_refuses_without_wall_clock_fallback();
+void linux_fd_range_refuses_unwatchable_descriptors();
+void steady_timeout_retries_refused_wakes();
+void steady_timer_retry_keeps_loop_idle();
+void editor_reports_refused_timers_once();
+void editor_drops_queued_timer_reports_on_teardown();
+void steady_timers_wait_out_native_modal_loops();
 void linux_editor_empty_template_apply_is_not_an_edit();
 void linux_editor_typed_item_controls();
 void linux_editor_item_preview_and_active_duration();
@@ -1140,6 +1147,13 @@ int main() {
   LAYERC_TEST_CASE(steady_timeout_default_uses_monotonic_wake),
   LAYERC_TEST_CASE(linux_editor_autosave_steady_deadline),
   LAYERC_TEST_CASE(linux_editor_playback_steady_deadline),
+  LAYERC_TEST_CASE(steady_wake_refuses_without_wall_clock_fallback),
+  LAYERC_TEST_CASE(linux_fd_range_refuses_unwatchable_descriptors),
+  LAYERC_TEST_CASE(steady_timeout_retries_refused_wakes),
+  LAYERC_TEST_CASE(steady_timer_retry_keeps_loop_idle),
+  LAYERC_TEST_CASE(editor_reports_refused_timers_once),
+  LAYERC_TEST_CASE(editor_drops_queued_timer_reports_on_teardown),
+  LAYERC_TEST_CASE(steady_timers_wait_out_native_modal_loops),
   LAYERC_TEST_CASE(linux_editor_empty_template_apply_is_not_an_edit),
   LAYERC_TEST_CASE(linux_editor_typed_item_controls),
   LAYERC_TEST_CASE(linux_editor_item_preview_and_active_duration),

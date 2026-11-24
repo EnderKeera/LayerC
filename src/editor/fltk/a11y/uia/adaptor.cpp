@@ -161,7 +161,7 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
     if (!stale && now < next_refresh) {
       // Checks run once per loop iteration, so a change made inside the window
       // waits for unrelated input unless the remaining interval is armed.
-      if (!refresh_timer.pending()) refresh_timer.start(next_refresh - now);
+      if (!refresh_timer.owed()) refresh_timer.start(next_refresh - now);
       return;
     }
     (void)refresh();

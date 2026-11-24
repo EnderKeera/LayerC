@@ -24,6 +24,11 @@
 
 namespace layerc::editor {
 namespace core = layerc::core;
+namespace {
+
+constexpr auto timer_warning = "System timers are unavailable. Autosave and refreshes are retried when LayerE next handles events.";
+
+} // namespace
 
 std::optional<std::size_t> EditorApp::cooldown_index() const {
   if (!session.has_document()) return std::nullopt;
@@ -78,14 +83,33 @@ void EditorApp::set_capture_exclusion_warning(const std::string_view warning) {
     accessibility->announce(nullptr, capture_exclusion_warning_);
 }
 
+void EditorApp::on_steady_timer_fault(void *data) {
+  auto &app = *static_cast<EditorApp *>(data);
+  const bool failing = steady_timers_failing();
+  if (app.timer_fault_reported_ == failing) return;
+  app.timer_fault_reported_ = failing;
+  app.render_status();
+  if (failing) Fl::add_timeout(0.0, announce_steady_timer_fault, &app);
+  else Fl::remove_timeout(announce_steady_timer_fault, &app);
+}
+
+void EditorApp::announce_steady_timer_fault(void *data) {
+  auto &app = *static_cast<EditorApp *>(data);
+  if (!steady_timers_failing()) return;
+  ++app.timer_fault_announcements_;
+  app.accessibility->announce(&app.window, timer_warning);
+}
+
 void EditorApp::render_status() {
-  if (capture_exclusion_warning_.empty()) {
-    status_pane_->set_status(status_kind_, status_text_);
-    return;
+  std::string warnings;
+  if (!capture_exclusion_warning_.empty()) warnings = capture_exclusion_warning_ + '\n';
+  if (steady_timers_failing()) {
+    warnings += timer_warning;
+    warnings += '\n';
   }
-  // Keep the privacy fault visible without discarding unrelated action outcomes.
-  const auto kind = status_kind_ == StatusKind::failure ? status_kind_ : StatusKind::warning;
-  status_pane_->set_status(kind, capture_exclusion_warning_ + "\n" + status_text_);
+  const auto kind = !warnings.empty() && status_kind_ != StatusKind::failure
+      ? StatusKind::warning : status_kind_;
+  status_pane_->set_status(kind, warnings + status_text_);
 }
 
 void EditorApp::query_status() {

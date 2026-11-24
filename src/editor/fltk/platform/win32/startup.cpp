@@ -150,7 +150,13 @@ int run_windows_editor(const HINSTANCE instance, const std::wstring_view command
     app.report(StatusKind::warning, "Could not read the editor capture-exclusion setting.");
 
   SteadyTimeout smoke_close([window] { window->do_callback(); });
-  if (smoke) smoke_close.start(std::chrono::milliseconds(200));
+  if (smoke) {
+    smoke_close.start(std::chrono::milliseconds(200));
+    if (!smoke_close.pending()) {
+      std::fputs("The LayerE smoke close timer could not be scheduled.\n", stderr);
+      return 1;
+    }
+  }
   return Fl::run();
 }
 

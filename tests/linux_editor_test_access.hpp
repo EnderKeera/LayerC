@@ -23,6 +23,14 @@ namespace layerc::editor {
 
 struct EditorAppTestAccess {
   static Fl_Timeout_Handler steady_timeout_handler() { return &SteadyTimeout::handle; }
+  // The FLTK check that re-arms timeouts whose OS wake was refused.
+  static Fl_Timeout_Handler steady_retry_handler() { return &SteadyTimeout::retry; }
+  static Fl_Timeout_Handler timer_fault_announcer() {
+    return &EditorApp::announce_steady_timer_fault;
+  }
+  static unsigned timer_fault_announcements(const EditorApp &app) {
+    return app.timer_fault_announcements_;
+  }
 
   // Autosave timing seam.
   static EditorApp with_timer_scheduler(SteadyTimeout::Now now,
@@ -32,6 +40,7 @@ struct EditorAppTestAccess {
   static bool autosave_pending(const EditorApp &app) {
     return app.autosave_timer_.pending();
   }
+  static bool autosave_owed(const EditorApp &app) { return app.autosave_timer_.owed(); }
   static std::uint64_t live_sequence(const EditorApp &app) {
     return app.live_draft_sequence_;
   }

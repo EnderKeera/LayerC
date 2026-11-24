@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <map>
 
 namespace layerc::editor {
@@ -16,6 +15,7 @@ struct Wake {
 };
 
 std::map<UINT_PTR, Wake> wakes;
+SteadyWakeFault fault_for_test{};
 
 auto find_wake(Fl_Timeout_Handler handler, void *data) {
   return std::find_if(wakes.begin(), wakes.end(), [=](const auto &entry) {
@@ -35,22 +35,26 @@ void CALLBACK on_timer(HWND, UINT, const UINT_PTR id, DWORD) {
 
 } // namespace
 
-void steady_wake_add(const double seconds, Fl_Timeout_Handler handler, void *data) {
+void steady_wake_fault_for_test(const SteadyWakeFault fault) noexcept {
+  fault_for_test = fault;
+}
+
+bool steady_wake_add(const double seconds, Fl_Timeout_Handler handler, void *data) {
   steady_wake_remove(handler, data);
   if (!(seconds > 0.0)) {
     Fl::add_timeout(0.0, handler, data);
-    return;
+    return true;
   }
   const auto ms = static_cast<UINT>(std::clamp(std::ceil(seconds * 1000.0),
       static_cast<double>(USER_TIMER_MINIMUM), static_cast<double>(USER_TIMER_MAXIMUM)));
   const auto id = SetTimer(nullptr, 0, ms, on_timer);
-  if (id != 0) {
-    wakes.emplace(id, Wake{handler, data});
-    return;
+  if (id == 0) return false;
+  if (fault_for_test != SteadyWakeFault::none) { // SetTimer is both stages here
+    KillTimer(nullptr, id);
+    return false;
   }
-  static const auto warned = std::fputs("LayerE: thread timer unavailable; using the FLTK timer.\n", stderr);
-  (void)warned;
-  Fl::add_timeout(seconds, handler, data);
+  wakes.emplace(id, Wake{handler, data});
+  return true;
 }
 
 void steady_wake_remove(Fl_Timeout_Handler handler, void *data) {
