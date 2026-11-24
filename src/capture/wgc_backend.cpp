@@ -139,56 +139,13 @@ public:
       stop();
       return false;
     }
-
-    ComPtr<IDXGIDevice> dxgi_device;
-    auto result = d3d_.device->QueryInterface(IID_PPV_ARGS(&dxgi_device));
-    ComPtr<IInspectable> inspectable_device;
-    if (SUCCEEDED(result))
-      result = runtime_->create_d3d_device(dxgi_device.Get(),
-                                           inspectable_device.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result))
-      result = inspectable_device->QueryInterface(wgc_abi::iid_direct3d_device,
-                                                  &direct3d_device_);
-    if (FAILED(result))
-      return fail("D3D11 WinRT interop failed", result);
-
-    ComPtr<wgc_abi::CaptureItemInterop> item_factory;
-    result = runtime_->get_factory(
-        L"Windows.Graphics.Capture.GraphicsCaptureItem",
-        wgc_abi::iid_capture_item_interop, item_factory);
-    if (SUCCEEDED(result))
-      result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
-                                             &item_);
-    if (FAILED(result))
-      return fail("WGC window item creation failed", result);
-
-    wgc_abi::SizeInt32 size{};
-    result = item_->get_Size(&size);
-    if (FAILED(result) || size.width <= 0 || size.height <= 0)
-      return fail("WGC target size is unavailable", result);
-
-    ComPtr<wgc_abi::CaptureFramePoolStatics2> pool_factory;
-    result = runtime_->get_factory(
-        L"Windows.Graphics.Capture.Direct3D11CaptureFramePool",
-        wgc_abi::iid_capture_frame_pool_statics2, pool_factory);
-    if (SUCCEEDED(result))
-      // LayerC consumes only the newest frame at 5-15 Hz. One pool buffer is
-      // sufficient for that drop-old-frames contract and avoids retaining a
-      // second full-size game texture in the daemon's capture session.
-      result = pool_factory->CreateFreeThreaded(
-          direct3d_device_.Get(), wgc_abi::pixel_format_bgra8_unorm, 1, size,
-          pool_.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result))
-      result = pool_->CreateCaptureSession(item_.Get(), session_.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result)) {
-      limit_session_updates();
-      result = session_->StartCapture();
-    }
-    if (FAILED(result))
-      return fail("WGC session start failed", result);
+    // A refusal returns only after open_session() has released its WinRT
+    // temporaries: fail() uninitializes the runtime, and the last
+    // RoUninitialize can unload GraphicsCapture.dll under a held factory.
+    if (const auto opened = open_session(); opened.failure != nullptr)
+      return fail(opened.failure, opened.result);
     pin_graphics_capture_runtime();
 
-    pool_size_ = size;
     slot_.set_started(true);
     slot_.clear_error();
     return true;
@@ -298,6 +255,65 @@ public:
   }
 
 private:
+  struct OpenResult {
+    const char *failure{};
+    HRESULT result{S_OK};
+  };
+
+  // Creates the item, frame pool and session. Every WinRT temporary is
+  // local here, so each is released before the caller can tear down the
+  // runtime; only the members that stop() releases outlive this call.
+  OpenResult open_session() {
+    ComPtr<IDXGIDevice> dxgi_device;
+    auto result = d3d_.device->QueryInterface(IID_PPV_ARGS(&dxgi_device));
+    ComPtr<IInspectable> inspectable_device;
+    if (SUCCEEDED(result))
+      result = runtime_->create_d3d_device(dxgi_device.Get(),
+                                           inspectable_device.ReleaseAndGetAddressOf());
+    if (SUCCEEDED(result))
+      result = inspectable_device->QueryInterface(wgc_abi::iid_direct3d_device,
+                                                  &direct3d_device_);
+    if (FAILED(result))
+      return {"D3D11 WinRT interop failed", result};
+
+    ComPtr<wgc_abi::CaptureItemInterop> item_factory;
+    result = runtime_->get_factory(
+        L"Windows.Graphics.Capture.GraphicsCaptureItem",
+        wgc_abi::iid_capture_item_interop, item_factory);
+    if (SUCCEEDED(result))
+      result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
+                                             &item_);
+    if (FAILED(result))
+      return {"WGC window item creation failed", result};
+
+    wgc_abi::SizeInt32 size{};
+    result = item_->get_Size(&size);
+    if (FAILED(result) || size.width <= 0 || size.height <= 0)
+      return {"WGC target size is unavailable", result};
+
+    ComPtr<wgc_abi::CaptureFramePoolStatics2> pool_factory;
+    result = runtime_->get_factory(
+        L"Windows.Graphics.Capture.Direct3D11CaptureFramePool",
+        wgc_abi::iid_capture_frame_pool_statics2, pool_factory);
+    if (SUCCEEDED(result))
+      // LayerC consumes only the newest frame at 5-15 Hz. One pool buffer is
+      // sufficient for that drop-old-frames contract and avoids retaining a
+      // second full-size game texture in the daemon's capture session.
+      result = pool_factory->CreateFreeThreaded(
+          direct3d_device_.Get(), wgc_abi::pixel_format_bgra8_unorm, 1, size,
+          pool_.ReleaseAndGetAddressOf());
+    if (SUCCEEDED(result))
+      result = pool_->CreateCaptureSession(item_.Get(), session_.ReleaseAndGetAddressOf());
+    if (SUCCEEDED(result)) {
+      limit_session_updates();
+      result = session_->StartCapture();
+    }
+    if (FAILED(result))
+      return {"WGC session start failed", result};
+    pool_size_ = size;
+    return {};
+  }
+
   // Optional session settings; older Windows builds lack the interfaces and
   // keep their defaults. The cursor is not part of what rules match, and the
   // worker samples at most 15 Hz, so copying every game frame is wasted work.

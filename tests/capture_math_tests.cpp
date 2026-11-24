@@ -317,7 +317,41 @@ void capture_math_contracts() {
 
 }
 
+#if defined(_WIN32)
+// WGC refuses a message-only window after its item factory exists. The
+// refusal must release every WinRT object before the backend uninitializes
+// the runtime: the last RoUninitialize can unload GraphicsCapture.dll, and
+// releasing a factory afterwards crashed LayerC Calibration with an access
+// violation on a desktop where WGC refuses the target window.
+void wgc_refusal_releases_before_runtime_teardown() {
+  using layerc::test::expect;
+  const HWND window =
+      CreateWindowExW(0, L"STATIC", L"LayerC WGC refusal target", 0, 0, 0, 0, 0,
+                      HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+  expect(window != nullptr, "the message-only target window must be created");
+  // Repeated sessions each initialize and uninitialize the WinRT runtime.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    layerc::capture::WindowCaptureSession session(
+        window, {.allow_desktop_duplication = false});
+    expect(!session.start(), "WGC must refuse a message-only window");
+    const auto polled = session.poll(layerc::core::MonotonicClock::now(), true);
+    expect(polled.result.availability ==
+                   layerc::core::CaptureAvailability::unavailable &&
+               polled.result.frame == nullptr && !polled.result.diagnostic.empty(),
+           "a refused WGC start reports a diagnosed unavailable poll");
+    if (attempt == 0)
+      std::cout << "WGC refusal: " << polled.result.diagnostic << '\n';
+  }
+  DestroyWindow(window);
+}
+#endif
+
 int main() {
-  return layerc::test::run(
-      {{"capture_math_contracts", capture_math_contracts}});
+  return layerc::test::run({
+      {"capture_math_contracts", capture_math_contracts},
+#if defined(_WIN32)
+      {"wgc_refusal_releases_before_runtime_teardown",
+       wgc_refusal_releases_before_runtime_teardown},
+#endif
+  });
 }
