@@ -29,10 +29,8 @@ constexpr auto updates_label = "Install &updates when LayerC starts";
 constexpr auto visual_hint = "Watches configured screen regions only while a profile needs visual matching.";
 constexpr auto overlays_hint = "Screenshots, screen sharing and Magnifier cannot see a hidden window.";
 constexpr auto capture_hint =
-    "This setting hides the editor's own windows. The editor asks before opening the Windows file dialog "
-    "or calibration. "
-    "Screen capture can show the Windows file dialog, calibration, File Explorer (Open profiles folder), "
-    "and input-method candidate windows.";
+    "Hides the editor's own windows, but not the Windows file dialog, calibration, File Explorer "
+    "or input-method candidate windows.";
 constexpr auto text_size_hint = "Adds to the Windows text size setting.";
 constexpr auto updates_hint = "The launcher checks GitHub for a signed release before it starts LayerD.";
 

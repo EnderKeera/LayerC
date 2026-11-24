@@ -23,6 +23,10 @@
 
 namespace layerc::daemon {
 
+struct OverlayWindowTestAccess {
+  static HWND hwnd(const OverlayWindow &overlay) { return overlay.window_; }
+};
+
 // Reaches the private presentation-timer owner with a caller-supplied
 // message-only window; no transport, package resource or input is involved.
 struct CompanionHostTestAccess {
@@ -381,7 +385,7 @@ void live_owner_confirms_direct_drag_off() {
               "the editor authenticates"))
     return;
 
-  // The smallest valid profile: one cooldown, its key and its bar. The bars
+  // One bound cooldown and two bars to check every overlay. The bars
   // live only in this test process and close when the session ends.
   LiveMessage begin;
   begin.type = Type::begin_edit;
@@ -398,6 +402,9 @@ void live_owner_confirms_direct_drag_off() {
   profile.panels.push_back({.id = "spell-bar", .name = "Spell",
                             .style = layerc::core::PanelStyle::bar,
                             .cooldown_ids = {"spell"}});
+  profile.panels.push_back({.id = "spell-bar-2", .name = "Spell again",
+                            .style = layerc::core::PanelStyle::bar,
+                            .cooldown_ids = {"spell"}});
   profile.bindings.push_back(
       {.cooldown_id = "spell",
        .chord = {{{layerc::core::InputDevice::keyboard, 0x1E, 0}}}});
@@ -408,9 +415,22 @@ void live_owner_confirms_direct_drag_off() {
               "LayerD starts the edit session"))
     return;
 
+  const auto overlays_are_click_through = [&](bool transparent) {
+    const auto *session = fixture.live.edit_session();
+    return session && session->overlays.window_count() == profile.panels.size() &&
+           std::ranges::all_of(profile.panels, [&](const auto &panel) {
+             const auto *overlay = session->overlays.find(panel.id);
+             const auto window = overlay ? OverlayWindowTestAccess::hwnd(*overlay) : nullptr;
+             return window && IsWindow(window) &&
+                    ((GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0) == transparent;
+           });
+  };
   expect(drag(3, true) && pump(direct_drag_on), "Direct drag turns on");
+  expect(overlays_are_click_through(false), "each session overlay loses WS_EX_TRANSPARENT for Direct drag");
   expect(drag(4, false) && pump([&] { return replies(Type::acknowledgement, 4, id) == 1; }),
          "LayerD answers the off request");
+  expect(overlays_are_click_through(true),
+         "every session overlay has WS_EX_TRANSPARENT when the off acknowledgement arrives");
   const auto answer = std::ranges::find_if(received, [](const LiveMessage &message) {
     return message.type == Type::acknowledgement && message.revision == 4;
   });

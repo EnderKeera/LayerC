@@ -84,6 +84,24 @@ bool affinity(HWND window, DWORD expected) {
 
 std::string_view text(const char *value) { return value ? value : ""; }
 
+int send_key(Fl_Window &window, int event, int key, int modifiers, char character) {
+  const auto prior_key = Fl::e_keysym;
+  const auto prior_state = Fl::e_state;
+  auto *const prior_text = Fl::e_text;
+  const auto prior_length = Fl::e_length;
+  char input[]{character, '\0'};
+  Fl::e_keysym = key;
+  Fl::e_state = modifiers;
+  Fl::e_text = input;
+  Fl::e_length = 1;
+  const int handled = event == FL_SHORTCUT ? window.handle(event) : Fl::handle(event, &window);
+  Fl::e_keysym = prior_key;
+  Fl::e_state = prior_state;
+  Fl::e_text = prior_text;
+  Fl::e_length = prior_length;
+  return handled;
+}
+
 std::string utf8(const std::filesystem::path &path) {
   return platform::path_to_utf8(path).value_or("");
 }
@@ -161,7 +179,10 @@ void file_prompt_verifies_before_paint_and_dispatch(editor::EditorApp &app) {
                view.primary.x() < view.alternative.x() && view.alternative.x() < view.cancel.x() &&
                editor::accessibility::accessible_description(view.input) == text(view.message.label()),
            "only the request action is primary, and the warning describes the input");
-    view.cancel.do_callback();
+    expect(send_key(view.window, FL_KEYBOARD, 'd', 0, 'd') && view.window.shown() &&
+               text(view.input.value()) == "d" && native == 0,
+           "with verified affinity, bare d types into File path without consenting");
+    if (view.window.shown()) view.cancel.do_callback();
   });
   expect(!editor::choose_editor_file(request(app, Mode::save)) && observed == 1 && native == 0,
          "Cancel returns no path and never calls the presenter");
@@ -201,7 +222,15 @@ void file_prompt_refuses_unverified_typing(editor::EditorApp &app) {
              "the refusal describes the disabled input and primary and is the primary tooltip");
       expect(std::string_view(status->value()).starts_with(editor::capture_exclusion_incomplete),
              "a prompt refusal is visible on the verified main window");
-      view.alternative.do_callback();
+      for (const char letter : {'d', 'D'}) {
+        const int modifiers = letter == 'D' ? FL_SHIFT : 0;
+        (void)send_key(view.window, FL_SHORTCUT, 'd', modifiers, letter);
+        if (!expect(view.window.shown() && native == 0,
+                    "bare d or D cannot consent to opening the Windows file dialog")) return;
+      }
+      const int handled = send_key(view.window, FL_SHORTCUT, 'd', FL_ALT, 'd');
+      expect(handled && !view.window.shown(), "Alt+D explicitly consents and closes the prompt");
+      if (view.window.shown()) view.cancel.do_callback();
     });
     expect(editor::choose_editor_file(request(app, Mode::save)) == destination && shown == 1 && native == 1,
            "only Open file dialog explicitly consents once, even after a wrong affinity readback");
@@ -296,8 +325,8 @@ void file_prompt_typed_paths_and_inline_replacement(editor::EditorApp &app) {
                "replace is inline under the same verified HWND, with no path text outside the input");
         if (replace) view.primary.do_callback();
         else {
-          view.alternative.do_callback();
-          expect(view.window.shown() && view.input.active() && Fl::focus() == &view.input &&
+          const int handled = send_key(view.window, FL_SHORTCUT, 'b', FL_SHIFT, 'B');
+          expect(handled && view.window.shown() && view.input.active() && Fl::focus() == &view.input &&
                      text(view.input.value()) == utf8(existing) && text(view.reason.label()).empty() &&
                      text(view.alternative.label()) == "Open file &dialog...",
                  "Back restores the path, focus and edit actions without closing");

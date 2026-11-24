@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <new>
 #include <optional>
@@ -46,7 +47,7 @@ using Clock = Timer::Clock;
 using Access = editor::EditorAppTestAccess;
 using editor::SteadyWakeFault;
 
-constexpr std::string_view timer_warning = "System timers are unavailable.";
+constexpr std::string_view timer_warning = "System timers unavailable — autosave and refreshes retry when LayerE next handles events.";
 
 // A toolkit queue of one-shots that refuses positive delays the way a failed
 // OS wake does. Zero delays are always accepted, as the real scheduler posts
@@ -251,6 +252,8 @@ void linux_fd_range_refuses_unwatchable_descriptors() {
   expect(std::holds_alternative<std::unique_ptr<editor::StandaloneLiveDrafts>>(drafts),
          "live drafts watch an ordinary notification descriptor");
   restore_healthy_timers();
+#else
+  std::cout << "Not applicable on Windows: the FLTK descriptor range is tested on Linux.\n";
 #endif
 }
 
@@ -529,5 +532,7 @@ void steady_timers_wait_out_native_modal_loops() {
              retried_at >= start + 50ms && !first.owed() && !second.owed(),
          "back in FLTK both owners run once at or after their deadline");
   restore_healthy_timers();
+#else
+  std::cout << "Not applicable on Linux: this case exercises the Win32 native modal message loop.\n";
 #endif
 }

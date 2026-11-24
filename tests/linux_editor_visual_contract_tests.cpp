@@ -18,6 +18,10 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
+#ifdef _WIN32
+#include "layerc/platform/native_theme.hpp"
+#endif
+
 
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
@@ -721,10 +725,17 @@ void linux_editor_fixed_painters_in_real_tree() {
 }
 
 void linux_editor_fixed_ink_appearance_dialog() {
+#ifdef _WIN32
+  const struct ContrastOverride {
+    ~ContrastOverride() { layerc::platform::set_native_high_contrast_override(std::nullopt); }
+  } reset;
+  layerc::platform::set_native_high_contrast_override(false);
+#else
   if (editor::platform_contrast_palette()) {
     std::cout << "Not applicable: a desktop contrast theme sets the overrides aside\n";
     return;
   }
+#endif
   using namespace layerc::editor;
   layerc::test::EditorTestEnvironment store("layerc-editor-fixed-ink", layerc::test::EditorTestScope::widget,
                                             "fixture control namespace is private");

@@ -785,7 +785,7 @@ void calibration_confirms_separate_window_only_when_exclusion_requested() {
     editor::set_editor_capture_exclusion(true);
     Answer cancel("Cancel", [&] {
       auto *modal = Fl::modal();
-      expect(modal && find_button(*modal, "Open calibration") &&
+      expect(modal && find_button(*modal, "Open calibration...") &&
                  find_control(*modal, "Calibration opens in a separate window that screen capture can show."),
              "calibration names the separate capturable window before proceeding");
     });

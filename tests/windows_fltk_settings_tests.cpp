@@ -79,10 +79,8 @@ private:
 };
 
 constexpr auto expected_capture_hint =
-    "This setting hides the editor's own windows. The editor asks before opening the Windows file dialog "
-    "or calibration. "
-    "Screen capture can show the Windows file dialog, calibration, File Explorer (Open profiles folder), "
-    "and input-method candidate windows.";
+    "Hides the editor's own windows, but not the Windows file dialog, calibration, File Explorer "
+    "or input-method candidate windows.";
 
 void appearance_mapping() {
   for (const auto theme : {editor::EditorTheme::copper, editor::EditorTheme::teal,

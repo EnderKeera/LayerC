@@ -206,7 +206,7 @@ struct LinuxVisualEditor::Impl {
     if (editor_capture_exclusion_requested()) {
       fl_message_title("Open calibration");
       if (fl_choice("Calibration opens in a separate window that screen capture can show.",
-                    "Cancel", "Open calibration", nullptr) != 1) return;
+                    "Cancel", "Open calibration...", nullptr) != 1) return;
     }
 #endif
     const auto chooser = [&] {

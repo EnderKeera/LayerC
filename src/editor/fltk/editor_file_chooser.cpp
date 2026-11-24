@@ -242,6 +242,7 @@ public:
     }, this);
     x += primary_width + gap;
     alternative_ = new Fl_Button(x, y, alternative_width, editor_button_height, open_dialog);
+    alternative_->shortcut(FL_ALT | 'd');
     alternative_->callback([](Fl_Widget *, void *self) {
       static_cast<FilePathDialog *>(self)->alternate();
     }, this);
@@ -346,6 +347,7 @@ private:
     input_->deactivate();
     primary_->copy_label("&Replace");
     alternative_->copy_label("&Back");
+    alternative_->shortcut(0);
     reason(replace_question, StatusKind::warning);
     if (accessibility_) accessibility_->announce(reason_, replace_question);
     primary_->take_focus();
@@ -357,6 +359,7 @@ private:
       replacement_.reset();
       primary_->copy_label(action_label_.c_str());
       alternative_->copy_label("Open file &dialog...");
+      alternative_->shortcut(FL_ALT | 'd');
       reason(nullptr, StatusKind::none);
       input_->activate();
       input_->take_focus();

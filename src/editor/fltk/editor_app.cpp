@@ -26,7 +26,7 @@ namespace layerc::editor {
 namespace core = layerc::core;
 namespace {
 
-constexpr auto timer_warning = "System timers are unavailable. Autosave and refreshes are retried when LayerE next handles events.";
+constexpr auto timer_warning = "System timers unavailable — autosave and refreshes retry when LayerE next handles events.";
 
 } // namespace
 
