@@ -78,7 +78,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
       live_handles[wait_handle_count++] = visual_capture_runtime_.snapshot_event();
     std::optional<layerc::core::Milliseconds> interval;
     if (live_edit_host_.edit_session() != nullptr)
-      interval = layerc::core::Milliseconds{250};
+      interval = layerc::core::live_edit_lease_check;
     else if (visual_capture_runtime_.needs_maintenance())
       interval = layerc::core::Milliseconds{500};
     else if (wait_handle_count == 0)

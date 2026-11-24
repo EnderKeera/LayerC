@@ -133,9 +133,10 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
 }
 
 bool NamedPipeEditorDaemonChannel::authenticate_peer() {
-  const auto verified = verify_peer();
-  if (const auto *peer_pid = std::get_if<DWORD>(&verified)) {
-    peer_process_id_ = *peer_pid;
+  auto verified = verify_peer();
+  if (auto *peer = std::get_if<VerifiedPeer>(&verified)) {
+    peer_process_id_ = peer->process_id;
+    peer_process_ = std::move(peer->process);
     return true;
   }
   const bool server = peer_is_server(role_);
@@ -165,7 +166,8 @@ bool NamedPipeEditorDaemonChannel::authenticate_peer() {
   return false;
 }
 
-std::variant<DWORD, NamedPipeEditorDaemonChannel::PeerFault>
+std::variant<NamedPipeEditorDaemonChannel::VerifiedPeer,
+             NamedPipeEditorDaemonChannel::PeerFault>
 NamedPipeEditorDaemonChannel::verify_peer() const {
   const bool server = peer_is_server(role_);
   ULONG peer_pid{};
@@ -178,8 +180,8 @@ NamedPipeEditorDaemonChannel::verify_peer() const {
     return PeerFault::unexpected;
   if (!same_session_as_current_process(peer_pid))
     return PeerFault::session;
-  const OwnedHandle peer_process(
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, peer_pid));
+  OwnedHandle peer_process(OpenProcess(
+      PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, peer_pid));
   if (!peer_process.valid())
     return PeerFault::authenticate;
   const bool trusted_user = same_user_as_current_process(peer_process.get());
@@ -189,7 +191,8 @@ NamedPipeEditorDaemonChannel::verify_peer() const {
               : is_sibling_editor_process(peer_pid));
   if (!trusted_user || !trusted_image)
     return PeerFault::untrusted;
-  return DWORD{peer_pid};
+  return VerifiedPeer{
+      peer_pid, std::shared_ptr<void>(peer_process.release(), CloseHandle)};
 }
 
 void NamedPipeEditorDaemonChannel::complete_connection() {
@@ -209,13 +212,17 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   const bool was_connected = connected_;
   connected_ = false;
   peer_process_id_ = 0;
+  peer_process_.reset();
   decoder_.clear();
   pending_messages_.clear();
   // This object lives for LayerD's entire lifetime. clear() would keep the
   // largest profile frame and deque storage committed after LayerE closes.
   std::vector<std::byte>().swap(active_write_);
   std::deque<std::vector<std::byte>>().swap(write_queue_);
-  if (was_connected) connection_changed_ = true;
+  if (was_connected) {
+    ++connection_epoch_;
+    connection_changed_ = true;
+  }
   if (error != ERROR_SUCCESS && error != ERROR_BROKEN_PIPE &&
       error != ERROR_PIPE_NOT_CONNECTED && error != ERROR_OPERATION_ABORTED)
     set_error(error);
@@ -244,6 +251,10 @@ void NamedPipeEditorDaemonChannel::close_handles() noexcept {
 
 bool NamedPipeEditorDaemonChannel::send(
     const layerc::core::LiveMessage &message) {
+  if (!connected_) {
+    last_error_ = L"The live channel is not connected.";
+    return false;
+  }
   auto encoded = layerc::core::encode_live_frame(message);
   const auto *frame = std::get_if<std::vector<std::byte>>(&encoded);
   if (frame == nullptr) {
@@ -258,7 +269,7 @@ bool NamedPipeEditorDaemonChannel::send(
     return false;
   }
   write_queue_.push_back(std::move(*frame));
-  if (connected_) continue_write();
+  continue_write();
   return true;
 }
 
@@ -388,6 +399,7 @@ bool NamedPipeEditorDaemonChannel::service_read(
 
 std::vector<layerc::core::LiveMessageResult>
 NamedPipeEditorDaemonChannel::poll() {
+  const auto epoch = connection_epoch_;
   std::vector<layerc::core::LiveMessageResult> messages;
   drain_messages(messages);
   const auto relisten_server = [&] {
@@ -407,7 +419,10 @@ NamedPipeEditorDaemonChannel::poll() {
     if (!connected_) return messages;
   }
 
-  if (!service_write() || !service_read(messages)) relisten_server();
+  if (!service_write() || !service_read(messages)) {
+    if (connection_epoch_ != epoch) messages.clear();
+    relisten_server();
+  }
   return messages;
 }
 
@@ -419,6 +434,17 @@ bool NamedPipeEditorDaemonChannel::take_connection_changed() noexcept {
 
 void NamedPipeEditorDaemonChannel::disconnect_peer() noexcept {
   disconnect(ERROR_REVISION_MISMATCH);
+}
+
+void NamedPipeEditorDaemonChannel::reset_connection() noexcept {
+  disconnect(ERROR_SUCCESS);
+}
+
+std::function<bool()> NamedPipeEditorDaemonChannel::peer_exit_probe() const {
+  if (!peer_process_) return {};
+  return [process = peer_process_] {
+    return WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
+  };
 }
 
 std::size_t NamedPipeEditorDaemonChannel::wait_handles(

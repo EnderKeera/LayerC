@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <variant>
@@ -49,6 +51,8 @@ public:
   [[nodiscard]] std::vector<layerc::core::LiveMessageResult> poll();
   [[nodiscard]] bool take_connection_changed() noexcept;
   void disconnect_peer() noexcept;
+  void reset_connection() noexcept;
+  [[nodiscard]] std::function<bool()> peer_exit_probe() const;
   [[nodiscard]] std::size_t
   wait_handles(std::span<HANDLE> output) const noexcept;
   [[nodiscard]] DWORD peer_process_id() const noexcept {
@@ -61,7 +65,8 @@ public:
     return static_cast<std::uint32_t>(pipe_ != INVALID_HANDLE_VALUE) +
            static_cast<std::uint32_t>(connect_event_ != nullptr) +
            static_cast<std::uint32_t>(read_event_ != nullptr) +
-           static_cast<std::uint32_t>(write_event_ != nullptr);
+           static_cast<std::uint32_t>(write_event_ != nullptr) +
+           static_cast<std::uint32_t>(peer_process_ != nullptr);
   }
 
 private:
@@ -80,8 +85,12 @@ private:
   // Authenticates the opposite end of pipe_, recording the accepted peer id or
   // the refusal reason in last_error_.
   bool authenticate_peer();
-  // The authenticated peer process id, or why it was refused.
-  [[nodiscard]] std::variant<DWORD, PeerFault> verify_peer() const;
+  struct VerifiedPeer {
+    DWORD process_id;
+    std::shared_ptr<void> process;
+  };
+  // The authenticated peer process, or why it was refused.
+  [[nodiscard]] std::variant<VerifiedPeer, PeerFault> verify_peer() const;
   void complete_connection();
   void start_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void continue_write();
@@ -106,6 +115,7 @@ private:
   std::wstring pipe_name_;
   DWORD expected_peer_process_id_{};
   DWORD peer_process_id_{};
+  std::shared_ptr<void> peer_process_;
   HANDLE pipe_{INVALID_HANDLE_VALUE};
   HANDLE connect_event_{};
   HANDLE read_event_{};
@@ -122,6 +132,7 @@ private:
   bool write_pending_{};
   bool connected_{};
   bool connection_changed_{};
+  std::uint64_t connection_epoch_{};
   ULONGLONG next_client_attempt_{};
   std::wstring last_error_;
 };

@@ -27,6 +27,11 @@ package_identity(const std::string_view component) {
 }
 // LayerD ends an edit session after this long without a message in it.
 inline constexpr std::chrono::milliseconds live_edit_lease{1000};
+inline constexpr std::chrono::milliseconds live_edit_lease_check{250};
+inline constexpr std::string_view live_edit_session_inactive =
+    "edit session is not active";
+inline constexpr std::string_view live_release_proof_capability =
+    "release-proof-v1";
 // When a silent session has surely ended: the lease, plus LayerD's 250 ms
 // check cadence, rounded up. Editors wait this long before treating Direct
 // drag as off after they stop a session they could not confirm.

@@ -156,9 +156,15 @@ public:
     return work_event_ != nullptr && SetEvent(work_event_) != FALSE;
   }
 
-  [[nodiscard]] bool wait_for_disconnect(const std::chrono::milliseconds timeout) {
+  [[nodiscard]] bool wait_for_disconnect(const std::chrono::milliseconds timeout,
+                                         const std::size_t count = 1) {
     std::unique_lock lock(mutex_);
-    return request_cv_.wait_for(lock, timeout, [this] { return disconnected_; });
+    return request_cv_.wait_for(lock, timeout, [&] { return disconnects_ >= count; });
+  }
+
+  [[nodiscard]] std::size_t disconnects() {
+    std::lock_guard lock(mutex_);
+    return disconnects_;
   }
 
   [[nodiscard]] bool disconnect_client() {
@@ -335,7 +341,7 @@ private:
       if (was_connected && !channel->connected()) {
         {
           std::lock_guard lock(mutex_);
-          disconnected_ = true;
+          ++disconnects_;
         }
         request_cv_.notify_all();
       }
@@ -369,7 +375,7 @@ private:
   std::size_t trace_subscribe_count_{};
   std::size_t trace_unsubscribe_count_{};
   bool disconnect_requested_{};
-  bool disconnected_{};
+  std::size_t disconnects_{};
   std::deque<std::string> pending_trace_packets_;
   std::vector<EditPacket> edit_packets_;
   std::string diagnostics_json_;
@@ -1041,10 +1047,12 @@ void hub_edit_disconnect_and_shutdown() {
   events = wait_for_edit_event(hub, next, Event::Kind::anchor);
   if (!expect(!events.empty() && events.back().kind == Event::Kind::anchor,
               "a new edit begins on a fresh connection")) return;
+  const auto before = server.disconnects();
   hub.shutdown();
-  expect(server.wait_for_edit_packets(core::LiveMessageType::end_edit, 1, 1s) &&
-             process_thread_count() == threads,
-         "shutdown tells the private daemon to end and joins the worker");
+  // The end_edit is best-effort: a frame read in the poll that sees the close
+  // is discarded with its connection, and LayerD ends the session on the close.
+  expect(server.wait_for_disconnect(1s, before + 1) && process_thread_count() == threads,
+         "shutdown closes the private daemon's connection and joins the worker");
 }
 
 void editor_image_allowlist_is_exact() {

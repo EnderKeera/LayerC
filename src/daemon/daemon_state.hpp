@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -111,6 +112,7 @@ public:
   }
 
 private:
+  friend struct LiveEditHostTestAccess;
   void handle_message(const layerc::core::LiveMessage &message);
   void handle_committed_profile(const layerc::core::LiveMessage &message);
   void handle_begin_edit(const layerc::core::LiveMessage &message);
@@ -136,6 +138,7 @@ private:
   DWORD expected_editor_process_id_{};
   std::unique_ptr<layerc::platform::NamedPipeEditorDaemonChannel> channel_;
   std::unique_ptr<EditSession> session_;
+  std::function<void(const layerc::core::LiveMessage &)> reply_observer_;
   bool authenticated_{};
   bool stopped_{true};
 };

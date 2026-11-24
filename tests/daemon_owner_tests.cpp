@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +26,18 @@ namespace layerc::daemon {
 
 struct OverlayWindowTestAccess {
   static HWND hwnd(const OverlayWindow &overlay) { return overlay.window_; }
+};
+
+struct LiveEditHostTestAccess {
+  static void observe(LiveEditHost &host,
+                      std::function<void(const layerc::core::LiveMessage &)> observer) {
+    host.reply_observer_ = std::move(observer);
+  }
+  static void expire_lease(LiveEditHost &host) {
+    host.session_->last_heartbeat = layerc::core::MonotonicClock::now() -
+        layerc::core::live_edit_lease - layerc::core::Milliseconds{1};
+  }
+  static auto &channel(LiveEditHost &host) { return *host.channel_; }
 };
 
 // Reaches the private presentation-timer owner with a caller-supplied
@@ -332,6 +345,9 @@ void live_owner_confirms_direct_drag_off() {
   using Type = layerc::core::LiveMessageType;
   using layerc::platform::NamedPipeEditorDaemonChannel;
   constexpr layerc::core::EditSessionId id = 7;
+  std::vector<HWND> watched;
+  std::optional<LiveMessage> ended;
+  bool released_at_reply{};
   const auto pipe = disposable_pipe_name();
   // Both ends trust this test process instead of the LayerD/LayerE images.
   OwnerFixture fixture(pipe, GetCurrentProcessId());
@@ -362,13 +378,10 @@ void live_owner_confirms_direct_drag_off() {
              message.edit_session == session;
     });
   };
-  const auto drag = [&](const layerc::core::ProfileRevision revision, const bool enabled) {
-    LiveMessage message;
-    message.type = Type::set_direct_drag;
-    message.revision = revision;
-    message.edit_session = id;
-    message.direct_drag = enabled;
-    return client.send(message);
+  const auto drag = [](const layerc::core::EditSessionId session,
+                       const layerc::core::ProfileRevision revision, const bool enabled) {
+    return LiveMessage{.type = Type::set_direct_drag, .revision = revision,
+                       .edit_session = session, .direct_drag = enabled};
   };
   const auto direct_drag_on = [&] {
     return fixture.live.edit_session() != nullptr && fixture.live.edit_session()->direct_drag;
@@ -384,6 +397,12 @@ void live_owner_confirms_direct_drag_off() {
                   fixture.live.authenticated(),
               "the editor authenticates"))
     return;
+  const auto handshake_ack = std::ranges::find_if(received, [](const LiveMessage &message) {
+    return message.type == Type::acknowledgement && message.revision == 1;
+  });
+  expect(handshake_ack != received.end() && handshake_ack->text.ends_with(
+             "," + std::string(layerc::core::live_release_proof_capability)),
+         "the LayerD handshake advertises the release-proof capability");
 
   // One bound cooldown and two bars to check every overlay. The bars
   // live only in this test process and close when the session ends.
@@ -425,9 +444,9 @@ void live_owner_confirms_direct_drag_off() {
                     ((GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0) == transparent;
            });
   };
-  expect(drag(3, true) && pump(direct_drag_on), "Direct drag turns on");
+  expect(client.send(drag(id, 3, true)) && pump(direct_drag_on), "Direct drag turns on");
   expect(overlays_are_click_through(false), "each session overlay loses WS_EX_TRANSPARENT for Direct drag");
-  expect(drag(4, false) && pump([&] { return replies(Type::acknowledgement, 4, id) == 1; }),
+  expect(client.send(drag(id, 4, false)) && pump([&] { return replies(Type::acknowledgement, 4, id) == 1; }),
          "LayerD answers the off request");
   expect(overlays_are_click_through(true),
          "every session overlay has WS_EX_TRANSPARENT when the off acknowledgement arrives");
@@ -439,16 +458,108 @@ void live_owner_confirms_direct_drag_off() {
              replies(Type::acknowledgement, 3, id) == 0,
          "the answer names the applied off; the on request had none");
 
-  expect(drag(3, false) && pump([&] { return replies(Type::error, 3, id) == 1; }) &&
+  expect(client.send(drag(id, 3, false)) && pump([&] { return replies(Type::error, 3, id) == 1; }) &&
              replies(Type::acknowledgement, 3, id) == 0,
          "a stale off is refused, never confirmed");
 
-  LiveMessage end;
-  end.type = Type::end_edit;
-  end.revision = 5;
-  end.edit_session = id;
-  expect(client.send(end) && pump([&] { return fixture.live.edit_session() == nullptr; }),
-         "the editor ends the session");
+  LiveEditHostTestAccess::observe(fixture.live, [&](const LiveMessage &reply) {
+    if (reply.type != Type::end_edit) return;
+    ended = reply;
+    released_at_reply = fixture.live.edit_session() == nullptr &&
+        std::ranges::none_of(watched, [](HWND window) {
+          return IsWindow(window) && IsWindowVisible(window);
+        });
+  });
+  const auto watch_armed_overlays = [&] {
+    watched.clear();
+    if (!overlays_are_click_through(false)) return false;
+    for (const auto &panel : profile.panels) {
+      const auto *overlay = fixture.live.edit_session()->overlays.find(panel.id);
+      const auto window = OverlayWindowTestAccess::hwnd(*overlay);
+      if (!IsWindowVisible(window)) return false;
+      watched.push_back(window);
+    }
+    return true;
+  };
+  if (!expect(client.send(drag(id, 5, true)) && pump(direct_drag_on) &&
+                  watch_armed_overlays(),
+              "the editor-end case starts with two visible mouse-taking overlays")) return;
+  expect(client.send({.type = Type::end_edit, .revision = 6, .edit_session = id}) &&
+             pump([&] { return replies(Type::end_edit, 5, id) == 1; }) &&
+             ended && ended->revision == 5 && ended->edit_session == id &&
+             ended->profile_key == begin.profile_key && ended->text == "editor ended session" &&
+             released_at_reply,
+         "at the editor end_edit reply every session overlay is already released");
+
+  expect(client.send(drag(id, 7, true)) &&
+             pump([&] { return replies(Type::error, 7, id) == 1; }),
+         "a drag request for the ended session is rejected");
+  const auto inactive = std::ranges::find_if(received, [](const LiveMessage &message) {
+    return message.type == Type::error && message.revision == 7;
+  });
+  expect(inactive != received.end() && inactive->text == layerc::core::live_edit_session_inactive,
+         "the ended-session error uses the shared not-active text");
+
+  const auto start_armed = [&](const layerc::core::EditSessionId session) {
+    begin.edit_session = session;
+    begin.revision = 8;
+    return client.send(begin) &&
+           pump([&] { return replies(Type::acknowledgement, 8, session) == 1; }) &&
+           client.send(drag(session, 9, true)) && pump(direct_drag_on) &&
+           watch_armed_overlays();
+  };
+  if (!expect(start_armed(8), "the lease case starts with two visible mouse-taking overlays")) return;
+  ended.reset();
+  released_at_reply = false;
+  LiveEditHostTestAccess::expire_lease(fixture.live);
+  expect(pump([&] { return replies(Type::end_edit, 9, 8) == 1; }) &&
+             ended && ended->revision == 9 && ended->edit_session == 8 &&
+             ended->profile_key == begin.profile_key && ended->text == "edit lease expired" &&
+             released_at_reply,
+         "at the lease expiry end_edit reply every session overlay is already released");
+
+  if (!expect(start_armed(9) &&
+                  client.send({.type = Type::automation_trace_subscribe, .revision = 10}) &&
+                  pump([&] { return replies(Type::acknowledgement, 10, 0) == 1; }) &&
+                  fixture.automation.trace_subscribed(),
+              "the old connection owns visible overlays and a trace subscription")) return;
+  ended.reset();
+  begin.edit_session = 10;
+  begin.revision = 11;
+  std::array<HANDLE, 3> events{};
+  if (!expect(fixture.live.wait_handles(events) == 1 &&
+                  client.send(handshake) && client.send(begin) &&
+                  client.send(drag(10, 12, true)) &&
+                  WaitForSingleObject(events.front(), 2000) == WAIT_OBJECT_0,
+              "the old client leaves a completed read and buffered frame traffic")) return;
+  client.reset_connection();
+
+  auto &server = LiveEditHostTestAccess::channel(fixture.live);
+  expect(server.poll().empty(), "the old connection's buffered frames are discarded");
+  auto next = std::make_unique<NamedPipeEditorDaemonChannel>(
+      NamedPipeEditorDaemonChannel::Role::client, pipe, GetCurrentProcessId());
+  (void)next->poll();
+  const auto reconnect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!server.connected() && std::chrono::steady_clock::now() < reconnect_deadline) {
+    (void)server.poll();
+    Sleep(1);
+  }
+  if (!expect(server.connected() && next->connected() && direct_drag_on() &&
+                  fixture.automation.trace_subscribed(),
+              "the new transport connects before the owner sees the change")) return;
+  fixture.live.poll();
+  expect(fixture.live.connected() && !fixture.live.authenticated() && !ended &&
+             fixture.live.edit_session() == nullptr && !fixture.automation.trace_subscribed() &&
+             std::ranges::none_of(watched, [](HWND window) { return IsWindow(window); }),
+         "a coalesced reconnect destroys the old session without replying to the new peer");
+  if (!expect(next->send(handshake), "the fresh client can send its own handshake")) return;
+  const auto authentication_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!fixture.live.authenticated() && std::chrono::steady_clock::now() < authentication_deadline) {
+    fixture.live.poll();
+    Sleep(1);
+  }
+  expect(fixture.live.authenticated() && fixture.live.edit_session() == nullptr,
+         "the new handshake cannot start or arm a session from the old frames");
 }
 
 void companion_owner_timer_lifecycle() {

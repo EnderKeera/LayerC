@@ -63,11 +63,13 @@ void LiveEditHost::set_capture_exclusion(const bool enabled) {
 void LiveEditHost::send_reply(const layerc::core::LiveMessageType type,
                                 const layerc::core::LiveMessage &request,
                                 std::string text) {
-  (void)channel_->send({.type = type,
-                            .revision = request.revision,
-                            .edit_session = request.edit_session,
-                            .profile_key = request.profile_key,
-                            .text = std::move(text)});
+  const layerc::core::LiveMessage reply{.type = type,
+                                        .revision = request.revision,
+                                        .edit_session = request.edit_session,
+                                        .profile_key = request.profile_key,
+                                        .text = std::move(text)};
+  if (reply_observer_) reply_observer_(reply);
+  (void)channel_->send(reply);
 }
 
 void LiveEditHost::poll() {
@@ -77,10 +79,8 @@ void LiveEditHost::poll() {
   const bool connection_changed = channel_->take_connection_changed();
   if (connection_changed) {
     authenticated_ = false;
-    if (!channel_->connected()) {
-      automation_.set_trace_subscribed(false);
-      end_session("editor disconnected");
-    }
+    automation_.set_trace_subscribed(false);
+    end_session("editor disconnected");
   }
 
   for (auto &result : results) {
@@ -112,10 +112,12 @@ void LiveEditHost::handle_message(const layerc::core::LiveMessage &message) {
       return;
     }
     authenticated_ = true;
+    auto capabilities = layerc::core::package_identity("LayerD") +
+        ";live-profile,mirrored-drag,direct-drag,lease-v1,"
+        "visual-status-v1,diagnostics-v1,automation-trace-v1,";
+    capabilities.append(layerc::core::live_release_proof_capability);
     send_reply(LiveMessageType::acknowledgement, message,
-                    layerc::core::package_identity("LayerD") +
-                        ";live-profile,mirrored-drag,direct-drag,lease-v1,"
-                        "visual-status-v1,diagnostics-v1,automation-trace-v1");
+               std::move(capabilities));
     (void)channel_->send({
         .type = LiveMessageType::runtime_status,
         .text = layerc::platform::wide_to_utf8(captures_.status()),
@@ -169,7 +171,7 @@ void LiveEditHost::handle_message(const layerc::core::LiveMessage &message) {
 
   if (session_ == nullptr || message.edit_session != session_->id) {
     send_reply(LiveMessageType::error, message,
-                    "edit session is not active");
+               std::string(layerc::core::live_edit_session_inactive));
     return;
   }
   session_->last_heartbeat = layerc::core::MonotonicClock::now();
@@ -412,18 +414,18 @@ void LiveEditHost::on_direct_drag_lost() {
 void LiveEditHost::end_session(const std::string_view reason) {
   if (session_ == nullptr)
     return;
-  if (!reason.empty() && channel_->connected() &&
-      authenticated_) {
-    const layerc::core::LiveMessage ended{
-        .revision = session_->revision,
-        .edit_session = session_->id,
-        .profile_key = session_->source_key,
-    };
-    send_reply(layerc::core::LiveMessageType::end_edit, ended,
-                    std::string(reason));
+  const bool reply = !reason.empty() && authenticated_ && channel_->connected();
+  layerc::core::LiveMessage ended;
+  if (reply) {
+    ended.revision = session_->revision;
+    ended.edit_session = session_->id;
+    ended.profile_key = std::move(session_->source_key);
   }
   session_->overlays.hide();
   session_.reset();
+  if (reply)
+    send_reply(layerc::core::LiveMessageType::end_edit, ended,
+               std::string(reason));
   if (stopped_)
     return;
   notifications_.sync_foreground_state();

@@ -14,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -375,6 +376,124 @@ void named_pipe_cancel_drain() {
            "destruction must return only after cancelled connect completion");
 }
 
+void named_pipe_discards_retired_frames() {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  using Type = layerc::core::LiveMessageType;
+  const auto pid = GetCurrentProcessId();
+  const auto pipe = L"\\\\.\\pipe\\LayerC.GenerationTest." + std::to_wstring(pid);
+  auto server = std::make_unique<Channel>(Channel::Role::server, pipe, pid);
+  auto first = std::make_unique<Channel>(Channel::Role::client, pipe, pid);
+  if (!expect(connect_test_peers(*server, *first) &&
+                  server->take_connection_changed(),
+              "client A connects and the server takes the initial change")) return;
+  std::array<HANDLE, 3> handles{};
+  if (!expect(server->wait_handles(handles) == 1 &&
+                  first->send({.type = Type::handshake, .revision = 1}) &&
+                  first->send({.type = Type::heartbeat, .revision = 2}) &&
+                  WaitForSingleObject(handles.front(), 2000) == WAIT_OBJECT_0,
+              "client A completes a server read before it closes")) return;
+  first.reset();
+
+  const auto retired = server->poll();
+  auto second = std::make_unique<Channel>(Channel::Role::client, pipe, pid);
+  (void)second->poll();
+  if (!expect(second->connected() && server->take_connection_changed(),
+              "client B attaches to the listener before the next server poll")) return;
+  expect(retired.empty(), "the poll that retires A must not return A's frames");
+  if (!expect(second->send({.type = Type::handshake, .revision = 3}),
+              "client B writes its fresh frame")) return;
+  const auto fresh = server->poll();
+  const auto *message = fresh.size() == 1
+      ? std::get_if<layerc::core::LiveMessage>(&fresh.front()) : nullptr;
+  expect(server->connected() && server->take_connection_changed() &&
+             message && message->revision == 3,
+         "the new connection returns only B's fresh frame");
+}
+
+void named_pipe_refuses_disconnected_send_and_resets() {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  using Type = layerc::core::LiveMessageType;
+  const auto pid = GetCurrentProcessId();
+  const auto pipe = L"\\\\.\\pipe\\LayerC.ResetTest." + std::to_wstring(pid);
+  auto server = std::make_unique<Channel>(Channel::Role::server, pipe, pid);
+  expect(!server->send({.type = Type::acknowledgement, .revision = 1}) &&
+             server->last_error() == L"The live channel is not connected.",
+         "a disconnected send is refused with its own error");
+  auto client = std::make_unique<Channel>(Channel::Role::client, pipe, pid);
+  if (!expect(connect_test_peers(*server, *client),
+              "a client connects after the refused send")) return;
+  expect(server->take_connection_changed() && client->poll().empty(),
+         "the next client receives no queued disconnected send");
+  const auto probe = server->peer_exit_probe();
+  expect(probe && !probe() && server->resource_handle_count() == 5,
+         "the connected server owns the verified peer process handle");
+  server->reset_connection();
+  expect(!server->connected() && server->take_connection_changed() &&
+             !server->take_connection_changed() && server->peer_process_id() == 0 &&
+             !server->peer_exit_probe() && server->resource_handle_count() == 3,
+         "reset drops the pipe and its peer and notifies exactly once");
+  expect(probe && !probe(), "a retained probe is independent of channel reset");
+  (void)server->poll();
+  auto next = std::make_unique<Channel>(Channel::Role::client, pipe, pid);
+  expect(connect_test_peers(*server, *next) && server->take_connection_changed(),
+         "a reset server accepts a fresh connection");
+}
+
+int wait_for_probe_peer_release(const std::wstring &pipe, const DWORD server_pid) {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  auto client = std::make_unique<Channel>(Channel::Role::client, pipe, server_pid);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline) {
+    for (const auto &result : client->poll()) {
+      const auto *message = std::get_if<layerc::core::LiveMessage>(&result);
+      if (message && message->type == layerc::core::LiveMessageType::acknowledgement)
+        return 0;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return 1;
+}
+
+void named_pipe_peer_exit_probe() {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  using Type = layerc::core::LiveMessageType;
+  const auto pipe = L"\\\\.\\pipe\\LayerC.PeerExitTest." +
+                    std::to_wstring(GetCurrentProcessId());
+  std::vector<wchar_t> path(32'768);
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(),
+                                          static_cast<DWORD>(path.size()));
+  if (!expect(length != 0 && length < path.size(), "find the peer test image")) return;
+  const std::filesystem::path image(path.data());
+  std::unique_ptr<Channel> server;
+  layerc::platform::HelperLaunchOptions options;
+  options.validate_suspended = [&](HANDLE, DWORD pid) {
+    server = std::make_unique<Channel>(Channel::Role::server, pipe, pid);
+    return server->last_error().empty();
+  };
+  const auto launched = layerc::platform::launch_bounded_helper(
+      image, layerc::platform::quote_command_argument(image.wstring()) +
+                 L" --probe-peer " + layerc::platform::quote_command_argument(pipe) +
+                 L" " + std::to_wstring(GetCurrentProcessId()), options);
+  const auto *child = std::get_if<layerc::platform::BoundedHelper>(&launched);
+  if (!expect(child != nullptr, "launch the PID-pinned, Job-owned test peer")) return;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!server->connected() && std::chrono::steady_clock::now() < deadline) {
+    (void)server->poll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const auto probe = server->peer_exit_probe();
+  if (!expect(probe && !probe() && server->peer_process_id() == child->process_id,
+              "the verified peer-exit probe is false while the child runs")) return;
+  DWORD exit_code{};
+  if (!expect(server->send({.type = Type::acknowledgement, .revision = 1}) &&
+                  WaitForSingleObject(child->process.get(), 2000) == WAIT_OBJECT_0 &&
+                  GetExitCodeProcess(child->process.get(), &exit_code) && exit_code == 0,
+              "the authenticated child receives its release and exits normally")) return;
+  server->reset_connection();
+  expect(!server->peer_exit_probe() && probe(),
+         "the retained probe reports that exact child exited after reset");
+}
+
 void hid_sampling() {
   layerc::platform::HidRawDevice system_keyboard{};
   system_keyboard.handle = reinterpret_cast<HANDLE>(0x1234);
@@ -709,6 +828,11 @@ void options_settings_commit() {
 } // namespace
 
 int main(const int argc, char *argv[]) {
+  if (argc == 4 && std::string_view(argv[1]) == "--probe-peer") {
+    const std::string pipe(argv[2]);
+    return wait_for_probe_peer_release(std::wstring(pipe.begin(), pipe.end()),
+                                       std::strtoul(argv[3], nullptr, 10));
+  }
   if (argc == 3 && (std::string_view(argv[1]) == "--auth-server" ||
                     std::string_view(argv[1]) == "--auth-client")) {
     const std::string pipe_utf8(argv[2]);
@@ -745,5 +869,8 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(pipe_server_spoof),
       LAYERC_TEST_CASE(named_pipe_round_trip),
       LAYERC_TEST_CASE(named_pipe_cancel_drain),
+      LAYERC_TEST_CASE(named_pipe_discards_retired_frames),
+      LAYERC_TEST_CASE(named_pipe_refuses_disconnected_send_and_resets),
+      LAYERC_TEST_CASE(named_pipe_peer_exit_probe),
   });
 }
