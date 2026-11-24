@@ -25,12 +25,12 @@
 #include <variant>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -149,10 +149,25 @@ int loop_passes(const Clock::duration span) {
   int passes{};
   const auto end = Clock::now() + span;
   for (auto now = Clock::now(); now < end; now = Clock::now()) {
-    Fl::wait(std::chrono::duration<double>(end - now).count());
+    // FLTK rounds a Windows wait to whole milliseconds, so a tail under half a
+    // millisecond would not block. A due FLTK timeout still returns at once.
+    Fl::wait(std::max(std::chrono::duration<double>(end - now).count(), 0.001));
     ++passes;
   }
   return passes;
+}
+
+// The fewest loop passes in any of three 100 ms windows. A burst of unrelated
+// desktop messages lands in one window; a spin, or a retry that re-arms a
+// short timer (Windows fires one at most every 10 ms), shows in all three.
+int idle_passes() {
+  int fewest = loop_passes(100ms);
+  for (int window = 1; window < 3; ++window) fewest = std::min(fewest, loop_passes(100ms));
+  return fewest;
+}
+
+std::string passes_text(const std::string_view claim, const int passes) {
+  return std::string(claim) + " (" + std::to_string(passes) + " loop passes)";
 }
 
 #ifndef _WIN32
@@ -347,13 +362,15 @@ void steady_timer_retry_keeps_loop_idle() {
   expect(timer.owed() && !timer.pending() && retry_listed() &&
              !editor::steady_wake_armed(handler, &timer) && !Fl::has_timeout(handler, &timer),
          "a refused default timeout is owed without any FLTK timeout");
-  const auto owed_passes = loop_passes(300ms);
-  expect(owed_passes <= 10 && fired == 0,
-         "the retry check runs only when the loop wakes, so an idle loop still blocks");
+  const auto owed_passes = idle_passes();
+  expect(owed_passes <= 3 && fired == 0,
+         passes_text("the retry check runs only when the loop wakes, so an idle loop still blocks",
+                     owed_passes));
   timer.cancel();
   expect(!timer.owed() && !retry_listed(), "cancel withdraws the retry check");
-  const auto cancelled_passes = loop_passes(300ms);
-  expect(cancelled_passes <= 10 && fired == 0, "after cancel the loop blocks");
+  const auto cancelled_passes = idle_passes();
+  expect(cancelled_passes <= 3 && fired == 0,
+         passes_text("after cancel the loop blocks", cancelled_passes));
 
   timer.start(5s);
   editor::steady_wake_fault_for_test(SteadyWakeFault::none);
@@ -361,8 +378,9 @@ void steady_timer_retry_keeps_loop_idle() {
   expect(timer.pending() && editor::steady_wake_armed(handler, &timer) && !retry_listed() &&
              !editor::steady_timers_failing(),
          "recovery arms the OS wake and withdraws the check");
-  const auto recovered_passes = loop_passes(300ms);
-  expect(recovered_passes <= 10 && fired == 0, "after recovery the loop blocks until the deadline");
+  const auto recovered_passes = idle_passes();
+  expect(recovered_passes <= 3 && fired == 0,
+         passes_text("after recovery the loop blocks until the deadline", recovered_passes));
   timer.cancel();
   restore_healthy_timers();
 }

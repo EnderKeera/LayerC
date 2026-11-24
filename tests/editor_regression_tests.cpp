@@ -202,8 +202,10 @@ private:
           // windows. No input synthesis, hooks, or production data are used.
           const int preferred = active_->cancel_ ? IDC_PROMPT_BUTTON3
                                                 : IDC_PROMPT_BUTTON2;
-          const int id = IsWindowVisible(GetDlgItem(window, preferred))
-                             ? preferred : IDC_PROMPT_BUTTON1;
+          // The button's own style: a modal dialog shows itself only once its
+          // queue is empty, so a timer that fires first sees no visible parent.
+          const auto style = GetWindowLongPtrW(GetDlgItem(window, preferred), GWL_STYLE);
+          const int id = (style & WS_VISIBLE) != 0 ? preferred : IDC_PROMPT_BUTTON1;
           SendMessageW(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0);
           return FALSE;
         },
